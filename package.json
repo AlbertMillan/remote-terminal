@@ -1,0 +1,53 @@
+{
+  "name": "claude-remote",
+  "version": "1.0.0",
+  "description": "Secure remote terminal access system for Claude Code sessions over Tailscale",
+  "type": "module",
+  "main": "dist/server/index.js",
+  "scripts": {
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "esbuild src/server/index.ts --bundle --platform=node --target=node20 --outdir=dist/server --format=esm --packages=external",
+    "build:client": "esbuild src/client/terminal.ts src/client/session-manager.ts --bundle --outdir=dist/client --format=esm && cp src/client/index.html src/client/styles.css dist/client/",
+    "dev": "tsx watch src/server/index.ts",
+    "start": "node dist/server/index.js",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "test": "vitest"
+  },
+  "keywords": [
+    "terminal",
+    "remote",
+    "claude",
+    "tailscale",
+    "pty"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/static": "^7.0.4",
+    "@fastify/websocket": "^10.0.1",
+    "better-sqlite3": "^11.7.0",
+    "fastify": "^4.29.0",
+    "node-pty": "^1.0.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.12.0",
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.19.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0",
+    "xterm-addon-web-links": "^0.9.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
