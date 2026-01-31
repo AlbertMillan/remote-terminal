@@ -155,6 +155,15 @@ body {
   opacity: 0.6;
 }
 
+.session-item.not-attachable {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.session-item.not-attachable:hover {
+  background: transparent;
+}
+
 .session-delete-btn {
   background: transparent;
   border: none;

@@ -4,13 +4,13 @@ declare const Terminal: any;
 declare const FitAddon: any;
 declare const WebLinksAddon: any;
 
-interface TerminalOptions {
+export interface TerminalOptions {
   container: HTMLElement;
   onData: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
 }
 
-class TerminalManager {
+export class TerminalManager {
   private terminal: any = null;
   private fitAddon: any = null;
   private container: HTMLElement | null = null;
@@ -152,6 +152,3 @@ class TerminalManager {
 
 // Export singleton instance
 export const terminalManager = new TerminalManager();
-
-// Make available globally for session-manager.ts
-(window as any).terminalManager = terminalManager;

@@ -1,10 +1,14 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { createLogger } from '../utils/logger.js';
 import { getConfig } from '../config.js';
 import { isWindows } from '../utils/platform.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+// Regex to validate IP addresses (IPv4 and IPv6)
+const IP_REGEX = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4}$|^::1$|^(?:[a-fA-F0-9]{1,4}:)*:[a-fA-F0-9]{1,4}$|^[a-fA-F0-9]{1,4}(?::[a-fA-F0-9]{1,4})*::$/;
 const logger = createLogger('tailscale-auth');
 
 export interface TailscaleIdentity {
@@ -42,8 +46,15 @@ export async function getTailscaleStatus(): Promise<{ running: boolean; hostname
 }
 
 export async function whois(ipAddress: string): Promise<TailscaleIdentity | null> {
+  // Validate IP address format to prevent command injection
+  if (!IP_REGEX.test(ipAddress)) {
+    logger.warn({ ipAddress }, 'Invalid IP address format');
+    return null;
+  }
+
   try {
-    const { stdout } = await execAsync(`tailscale whois --json ${ipAddress}`);
+    // Use execFile with argument array to prevent shell injection
+    const { stdout } = await execFileAsync('tailscale', ['whois', '--json', ipAddress]);
     const data = JSON.parse(stdout);
 
     const identity: TailscaleIdentity = {
@@ -126,8 +137,16 @@ export async function getTailscaleCertPaths(): Promise<{ certPath: string; keyPa
   const hostname = `${status.hostname}.${status.tailnet}`;
 
   // Request certificate from Tailscale
+  // Validate hostname format to prevent command injection
+  const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$/;
+  if (!hostnameRegex.test(hostname)) {
+    logger.warn({ hostname }, 'Invalid hostname format for certificate request');
+    return null;
+  }
+
   try {
-    await execAsync(`tailscale cert ${hostname}`);
+    // Use execFile with argument array to prevent shell injection
+    await execFileAsync('tailscale', ['cert', hostname]);
 
     // Tailscale places certs in different locations based on platform
     const certPath = isWindows()

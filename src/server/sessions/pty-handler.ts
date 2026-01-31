@@ -74,37 +74,48 @@ export function killPty(ptyProcess: IPty): void {
 export class ScrollbackBuffer {
   private buffer: string[] = [];
   private maxLines: number;
+  private partialLine: string = '';
 
   constructor(maxLines?: number) {
     this.maxLines = maxLines || getConfig().persistence.scrollbackLines;
   }
 
   push(data: string): void {
-    // Split by newlines and add to buffer
-    const lines = data.split(/\r?\n/);
+    // Combine with any partial line from previous push
+    const combined = this.partialLine + data;
+    const lines = combined.split(/\r?\n/);
+
+    // Last element might be a partial line (no trailing newline)
+    this.partialLine = lines.pop() || '';
+
+    // Add complete lines to buffer
     for (const line of lines) {
-      if (line.length > 0) {
-        this.buffer.push(line);
-        if (this.buffer.length > this.maxLines) {
-          this.buffer.shift();
-        }
+      this.buffer.push(line);
+      if (this.buffer.length > this.maxLines) {
+        this.buffer.shift();
       }
     }
   }
 
   getAll(): string[] {
+    // Include partial line if present
+    if (this.partialLine) {
+      return [...this.buffer, this.partialLine];
+    }
     return [...this.buffer];
   }
 
   getRecent(count: number): string[] {
-    return this.buffer.slice(-count);
+    const all = this.getAll();
+    return all.slice(-count);
   }
 
   clear(): void {
     this.buffer = [];
+    this.partialLine = '';
   }
 
   get length(): number {
-    return this.buffer.length;
+    return this.buffer.length + (this.partialLine ? 1 : 0);
   }
 }

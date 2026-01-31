@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { clearStatementCache } from './queries.js';
 
 const logger = createLogger('database');
 
@@ -31,6 +32,7 @@ export function initDatabase(): Database.Database {
 
 export function closeDatabase(): void {
   if (db) {
+    clearStatementCache();
     db.close();
     db = null;
     logger.info('Database closed');

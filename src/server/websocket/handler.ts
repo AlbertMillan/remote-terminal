@@ -1,8 +1,11 @@
 import type { WebSocket } from 'ws';
+import WebSocketModule from 'ws';
+const WS_OPEN = WebSocketModule.OPEN;
 import type { FastifyRequest } from 'fastify';
 import { randomUUID } from 'crypto';
 import { sessionManager } from '../sessions/manager.js';
 import { createLogger } from '../utils/logger.js';
+import { RateLimiter } from '../utils/rate-limiter.js';
 import {
   parseMessage,
   createMessage,
@@ -23,6 +26,16 @@ import {
 } from '../auth/tailscale.js';
 
 const logger = createLogger('websocket');
+
+// Rate limiter: 100 messages per second with token bucket
+const rateLimiter = new RateLimiter(100, 10);
+
+// Validation constants
+const MAX_SESSION_NAME_LENGTH = 100;
+const MAX_CWD_LENGTH = 500;
+const VALID_SHELL_PATTERN = /^[a-zA-Z0-9/_.-]+$/;
+const MIN_TERMINAL_DIMENSION = 1;
+const MAX_TERMINAL_DIMENSION = 500;
 
 interface ClientConnection {
   id: string;
@@ -71,8 +84,13 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
     })
   );
 
-  // Set up message handler
+  // Set up message handler with rate limiting
   ws.on('message', (data: Buffer | string) => {
+    if (!rateLimiter.tryAcquire(clientId)) {
+      ws.send(createMessage('error', { message: 'Rate limit exceeded' }));
+      logger.warn({ clientId }, 'Client rate limited');
+      return;
+    }
     handleMessage(connection, data.toString());
   });
 
@@ -151,16 +169,84 @@ function handleSessionList(connection: ClientConnection, message: ClientMessage)
   connection.ws.send(createMessage('session.list', { sessions }, message.id));
 }
 
+function validateSessionOptions(payload: SessionCreatePayload | undefined): {
+  name?: string;
+  shell?: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+} {
+  const validated: {
+    name?: string;
+    shell?: string;
+    cwd?: string;
+    cols?: number;
+    rows?: number;
+  } = {};
+
+  // Validate and sanitize name
+  if (payload?.name) {
+    if (typeof payload.name !== 'string') {
+      throw new Error('Session name must be a string');
+    }
+    validated.name = payload.name.slice(0, MAX_SESSION_NAME_LENGTH).trim();
+  }
+
+  // Validate shell path
+  if (payload?.shell) {
+    if (typeof payload.shell !== 'string') {
+      throw new Error('Shell must be a string');
+    }
+    if (!VALID_SHELL_PATTERN.test(payload.shell)) {
+      throw new Error('Invalid shell path');
+    }
+    validated.shell = payload.shell;
+  }
+
+  // Validate working directory
+  if (payload?.cwd) {
+    if (typeof payload.cwd !== 'string') {
+      throw new Error('Working directory must be a string');
+    }
+    if (payload.cwd.length > MAX_CWD_LENGTH) {
+      throw new Error('Working directory path too long');
+    }
+    // Basic path traversal check
+    if (payload.cwd.includes('..')) {
+      throw new Error('Invalid working directory path');
+    }
+    validated.cwd = payload.cwd;
+  }
+
+  // Validate terminal dimensions
+  if (payload?.cols !== undefined) {
+    const cols = Number(payload.cols);
+    if (isNaN(cols) || cols < MIN_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION) {
+      throw new Error('Invalid terminal columns');
+    }
+    validated.cols = cols;
+  }
+
+  if (payload?.rows !== undefined) {
+    const rows = Number(payload.rows);
+    if (isNaN(rows) || rows < MIN_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION) {
+      throw new Error('Invalid terminal rows');
+    }
+    validated.rows = rows;
+  }
+
+  return validated;
+}
+
 async function handleSessionCreate(connection: ClientConnection, message: ClientMessage): Promise<void> {
   const payload = message.payload as SessionCreatePayload | undefined;
 
   try {
+    // Validate input before creating session
+    const validatedOptions = validateSessionOptions(payload);
+
     const session = await sessionManager.createSession({
-      name: payload?.name,
-      shell: payload?.shell,
-      cwd: payload?.cwd,
-      cols: payload?.cols,
-      rows: payload?.rows,
+      ...validatedOptions,
       ownerId: connection.identity?.userId,
     });
 
@@ -324,7 +410,7 @@ function attachToSession(connection: ClientConnection, sessionId: string): void 
 
   // Subscribe to terminal data
   connection.dataUnsubscribe = sessionManager.onData(sessionId, (data) => {
-    if (connection.ws.readyState === 1) {
+    if (connection.ws.readyState === WS_OPEN) {
       // OPEN
       connection.ws.send(createMessage('terminal.data', { sessionId, data }));
     }
@@ -332,7 +418,7 @@ function attachToSession(connection: ClientConnection, sessionId: string): void 
 
   // Subscribe to exit events
   connection.exitUnsubscribe = sessionManager.onExit(sessionId, (exitCode) => {
-    if (connection.ws.readyState === 1) {
+    if (connection.ws.readyState === WS_OPEN) {
       connection.ws.send(createMessage('terminal.exit', { sessionId, exitCode }));
     }
   });
@@ -367,6 +453,9 @@ function handleDisconnect(connection: ClientConnection): void {
     detachFromSession(connection);
   }
 
+  // Clean up rate limiter
+  rateLimiter.removeClient(connection.id);
+
   // Remove from connections map
   connections.delete(connection.id);
 }
@@ -375,13 +464,13 @@ function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'delete
   const messageType = event === 'terminated' ? 'session.terminated' : 'session.deleted';
 
   for (const conn of connections.values()) {
-    if (conn.ws.readyState === 1) {
+    if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage(messageType, { sessionId }));
     }
   }
 }
 
-function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number }): SessionInfo {
+function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -392,6 +481,7 @@ function sessionToInfo(session: { id: string; name: string; shell: string; cwd: 
     status: session.status,
     cols: session.cols,
     rows: session.rows,
+    attachable: session.attachable ?? true, // Default to true for active sessions
   };
 }
 

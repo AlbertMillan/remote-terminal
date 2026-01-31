@@ -1,4 +1,5 @@
 // Session and WebSocket management
+import { terminalManager, TerminalManager } from './terminal.js';
 
 interface SessionInfo {
   id: string;
@@ -10,13 +11,74 @@ interface SessionInfo {
   status: string;
   cols: number;
   rows: number;
+  attachable: boolean;
 }
 
-interface ServerMessage {
-  type: string;
-  id?: string;
-  payload?: any;
+// Type-safe server message definitions (issue #14)
+interface AuthSuccessPayload {
+  userId: string;
+  loginName: string;
+  displayName: string;
 }
+
+interface AuthFailurePayload {
+  message: string;
+}
+
+interface SessionListPayload {
+  sessions: SessionInfo[];
+}
+
+interface SessionCreatedPayload {
+  session: SessionInfo;
+}
+
+interface SessionAttachedPayload {
+  session: SessionInfo;
+  scrollback: string;
+}
+
+interface SessionTerminatedPayload {
+  sessionId: string;
+}
+
+interface SessionDeletedPayload {
+  sessionId: string;
+}
+
+interface SessionRenamedPayload {
+  sessionId: string;
+  name: string;
+}
+
+interface TerminalDataPayload {
+  sessionId: string;
+  data: string;
+}
+
+interface TerminalExitPayload {
+  sessionId: string;
+  exitCode: number;
+}
+
+interface ErrorPayload {
+  message: string;
+}
+
+type ServerMessage =
+  | { type: 'auth.success'; id?: string; payload: AuthSuccessPayload }
+  | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
+  | { type: 'session.list'; id?: string; payload: SessionListPayload }
+  | { type: 'session.created'; id?: string; payload: SessionCreatedPayload }
+  | { type: 'session.attached'; id?: string; payload: SessionAttachedPayload }
+  | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
+  | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
+  | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
+  | { type: 'session.error'; id?: string; payload: ErrorPayload }
+  | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
+  | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
+  | { type: 'error'; id?: string; payload: ErrorPayload }
+  | { type: 'pong'; id?: string; payload?: undefined };
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -24,15 +86,16 @@ class SessionManager {
   private ws: WebSocket | null = null;
   private sessions: Map<string, SessionInfo> = new Map();
   private currentSessionId: string | null = null;
+  private previousSessionId: string | null = null; // For reconnection (issue #7)
   private messageId = 0;
-  private pendingRequests: Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }> = new Map();
+  private pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
-  private terminalManager: any;
+  private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
 
-  constructor() {
-    this.terminalManager = (window as any).terminalManager;
+  constructor(terminal: TerminalManager = terminalManager) {
+    this.terminalMgr = terminal;
     this.setupEventListeners();
     this.connect();
   }
@@ -101,11 +164,28 @@ class SessionManager {
       this.reconnectAttempts = 0;
       this.updateConnectionStatus('connected');
       this.listSessions();
+
+      // Re-attach to previous session on reconnect (issue #7)
+      if (this.previousSessionId) {
+        const sessionToReattach = this.previousSessionId;
+        this.previousSessionId = null;
+        // Delay slightly to allow session list to load first
+        setTimeout(() => {
+          if (this.sessions.has(sessionToReattach)) {
+            console.log('Re-attaching to previous session:', sessionToReattach);
+            this.attachToSession(sessionToReattach);
+          }
+        }, 100);
+      }
     };
 
     this.ws.onclose = () => {
       console.log('WebSocket disconnected');
       this.updateConnectionStatus('disconnected');
+      // Save current session for re-attachment on reconnect (issue #7)
+      if (this.currentSessionId) {
+        this.previousSessionId = this.currentSessionId;
+      }
       this.attemptReconnect();
     };
 
@@ -166,10 +246,18 @@ class SessionManager {
       return;
     }
 
-    // Handle pending request responses
+    // Handle pending request responses (issue #4 - reject on error)
     if (message.id && this.pendingRequests.has(message.id)) {
-      const { resolve } = this.pendingRequests.get(message.id)!;
+      const { resolve, reject } = this.pendingRequests.get(message.id)!;
       this.pendingRequests.delete(message.id);
+
+      // Reject if this is an error response
+      if (message.type === 'error' || message.type === 'session.error') {
+        const errorPayload = message.payload as ErrorPayload;
+        reject(new Error(errorPayload?.message || 'Request failed'));
+        return;
+      }
+
       resolve(message.payload);
     }
 
@@ -205,10 +293,19 @@ class SessionManager {
       case 'terminal.exit':
         this.handleTerminalExit(message.payload);
         break;
+      case 'session.error':
+        this.handleSessionError(message.payload);
+        break;
       case 'error':
         console.error('Server error:', message.payload);
         break;
     }
+  }
+
+  private handleSessionError(payload: ErrorPayload): void {
+    console.error('Session error:', payload.message);
+    // Show error to user - for now use alert, could be improved with toast notification
+    alert('Session error: ' + payload.message);
   }
 
   private handleAuthSuccess(payload: any): void {
@@ -245,11 +342,11 @@ class SessionManager {
 
     // Initialize terminal
     const container = document.getElementById('terminal-container');
-    if (container && this.terminalManager) {
+    if (container && this.terminalMgr) {
       // Clear previous terminal if any
       container.innerHTML = '';
 
-      this.terminalManager.initialize({
+      this.terminalMgr.initialize({
         container,
         onData: (data: string) => this.sendTerminalData(data),
         onResize: (cols: number, rows: number) => this.sendTerminalResize(cols, rows),
@@ -257,11 +354,11 @@ class SessionManager {
 
       // Write scrollback
       if (payload.scrollback) {
-        this.terminalManager.write(payload.scrollback);
+        this.terminalMgr.write(payload.scrollback);
       }
 
       // Send initial resize
-      const dims = this.terminalManager.getDimensions();
+      const dims = this.terminalMgr.getDimensions();
       this.sendTerminalResize(dims.cols, dims.rows);
     }
   }
@@ -303,14 +400,14 @@ class SessionManager {
   }
 
   private handleTerminalData(payload: { sessionId: string; data: string }): void {
-    if (payload.sessionId === this.currentSessionId && this.terminalManager) {
-      this.terminalManager.write(payload.data);
+    if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
+      this.terminalMgr.write(payload.data);
     }
   }
 
   private handleTerminalExit(payload: { sessionId: string; exitCode: number }): void {
-    if (payload.sessionId === this.currentSessionId && this.terminalManager) {
-      this.terminalManager.writeln(`\r\n[Process exited with code ${payload.exitCode}]`);
+    if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
+      this.terminalMgr.writeln(`\r\n[Process exited with code ${payload.exitCode}]`);
     }
   }
 
@@ -340,8 +437,10 @@ class SessionManager {
       li.className = 'session-item';
       if (session.id === this.currentSessionId) li.classList.add('active');
       if (session.status === 'terminated') li.classList.add('terminated');
+      if (!session.attachable) li.classList.add('not-attachable');
 
-      const isTerminated = session.status === 'terminated';
+      // Show delete button for non-attachable sessions (terminated or stale)
+      const showDeleteBtn = !session.attachable;
 
       li.innerHTML = `
         <span class="session-icon">
@@ -352,9 +451,9 @@ class SessionManager {
         </span>
         <div class="session-info">
           <div class="session-name">${this.escapeHtml(session.name)}</div>
-          <div class="session-status">${session.status}</div>
+          <div class="session-status">${session.status}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
         </div>
-        ${isTerminated ? `
+        ${showDeleteBtn ? `
           <button class="session-delete-btn" title="Remove session" data-session-id="${session.id}">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -364,12 +463,12 @@ class SessionManager {
         ` : ''}
       `;
 
-      // Add click handler for session selection (non-terminated only)
+      // Add click handler for session selection (attachable only)
       li.addEventListener('click', (e) => {
         // Don't trigger if clicking delete button
         if ((e.target as HTMLElement).closest('.session-delete-btn')) return;
 
-        if (!isTerminated) {
+        if (session.attachable) {
           this.attachToSession(session.id);
           // Close mobile sidebar
           document.getElementById('sidebar')?.classList.remove('open');
@@ -406,8 +505,8 @@ class SessionManager {
 
   private showWelcomeScreen(): void {
     this.currentSessionId = null;
-    if (this.terminalManager) {
-      this.terminalManager.dispose();
+    if (this.terminalMgr) {
+      this.terminalMgr.dispose();
     }
 
     document.getElementById('terminal-container')?.classList.add('hidden');
@@ -433,8 +532,8 @@ class SessionManager {
     // Detach from current session
     if (this.currentSessionId) {
       this.send('session.detach', { sessionId: this.currentSessionId });
-      if (this.terminalManager) {
-        this.terminalManager.dispose();
+      if (this.terminalMgr) {
+        this.terminalMgr.dispose();
       }
     }
 

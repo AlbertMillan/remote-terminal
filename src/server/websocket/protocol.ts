@@ -97,6 +97,7 @@ export interface SessionInfo {
   status: string;
   cols: number;
   rows: number;
+  attachable: boolean;
 }
 
 export interface SessionCreatedPayload {

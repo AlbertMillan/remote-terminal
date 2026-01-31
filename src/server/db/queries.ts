@@ -1,9 +1,24 @@
+import type Database from 'better-sqlite3';
 import { getDatabase } from './schema.js';
 import type { SessionMetadata, SessionStatus } from '../sessions/types.js';
 
+// Prepared statement cache for performance
+const stmtCache = new Map<string, Database.Statement>();
+
+function getStatement(key: string, sql: string): Database.Statement {
+  if (!stmtCache.has(key)) {
+    stmtCache.set(key, getDatabase().prepare(sql));
+  }
+  return stmtCache.get(key)!;
+}
+
+// Clear cache when database is closed (call from schema.ts closeDatabase)
+export function clearStatementCache(): void {
+  stmtCache.clear();
+}
+
 export function insertSession(session: SessionMetadata): void {
-  const db = getDatabase();
-  const stmt = db.prepare(`
+  const stmt = getStatement('insertSession', `
     INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -26,7 +41,6 @@ export function updateSession(
   id: string,
   updates: Partial<Pick<SessionMetadata, 'name' | 'lastAccessedAt' | 'status' | 'cols' | 'rows'>>
 ): void {
-  const db = getDatabase();
   const fields: string[] = [];
   const values: unknown[] = [];
 
@@ -54,13 +68,13 @@ export function updateSession(
   if (fields.length === 0) return;
 
   values.push(id);
-  const stmt = db.prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`);
+  // Dynamic queries can't be cached, but updateSession is debounced so this is acceptable
+  const stmt = getDatabase().prepare(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`);
   stmt.run(...values);
 }
 
 export function getSession(id: string): SessionMetadata | null {
-  const db = getDatabase();
-  const stmt = db.prepare(`
+  const stmt = getStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
     FROM sessions WHERE id = ?
@@ -70,10 +84,8 @@ export function getSession(id: string): SessionMetadata | null {
 }
 
 export function getAllSessions(ownerId?: string): SessionMetadata[] {
-  const db = getDatabase();
-  let stmt;
   if (ownerId) {
-    stmt = db.prepare(`
+    const stmt = getStatement('getAllSessionsByOwner', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
              owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
       FROM sessions WHERE owner_id = ? OR owner_id IS NULL
@@ -81,7 +93,7 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
     `);
     return stmt.all(ownerId) as SessionMetadata[];
   } else {
-    stmt = db.prepare(`
+    const stmt = getStatement('getAllSessions', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
              owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
       FROM sessions
@@ -92,8 +104,7 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
 }
 
 export function getActiveSessions(): SessionMetadata[] {
-  const db = getDatabase();
-  const stmt = db.prepare(`
+  const stmt = getStatement('getActiveSessions', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
     FROM sessions WHERE status != 'terminated'
@@ -103,37 +114,30 @@ export function getActiveSessions(): SessionMetadata[] {
 }
 
 export function deleteSession(id: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare('DELETE FROM sessions WHERE id = ?');
+  const stmt = getStatement('deleteSession', 'DELETE FROM sessions WHERE id = ?');
   stmt.run(id);
 }
 
 export function saveScrollback(sessionId: string, content: string): void {
-  const db = getDatabase();
-  // Delete old scrollback and insert new
-  db.prepare('DELETE FROM scrollback WHERE session_id = ?').run(sessionId);
-  db.prepare('INSERT INTO scrollback (session_id, content) VALUES (?, ?)').run(
-    sessionId,
-    content
-  );
+  const deleteStmt = getStatement('deleteScrollback', 'DELETE FROM scrollback WHERE session_id = ?');
+  const insertStmt = getStatement('insertScrollback', 'INSERT INTO scrollback (session_id, content) VALUES (?, ?)');
+  deleteStmt.run(sessionId);
+  insertStmt.run(sessionId, content);
 }
 
 export function getScrollback(sessionId: string): string | null {
-  const db = getDatabase();
-  const stmt = db.prepare('SELECT content FROM scrollback WHERE session_id = ? ORDER BY id DESC LIMIT 1');
+  const stmt = getStatement('getScrollback', 'SELECT content FROM scrollback WHERE session_id = ? ORDER BY id DESC LIMIT 1');
   const row = stmt.get(sessionId) as { content: string } | undefined;
   return row?.content || null;
 }
 
 export function logSessionEvent(sessionId: string, eventType: string, details?: string): void {
-  const db = getDatabase();
-  const stmt = db.prepare('INSERT INTO session_logs (session_id, event_type, details) VALUES (?, ?, ?)');
+  const stmt = getStatement('logSessionEvent', 'INSERT INTO session_logs (session_id, event_type, details) VALUES (?, ?, ?)');
   stmt.run(sessionId, eventType, details || null);
 }
 
 export function getSessionLogs(sessionId: string, limit = 100): { eventType: string; details: string | null; createdAt: string }[] {
-  const db = getDatabase();
-  const stmt = db.prepare(`
+  const stmt = getStatement('getSessionLogs', `
     SELECT event_type as eventType, details, created_at as createdAt
     FROM session_logs WHERE session_id = ?
     ORDER BY created_at DESC LIMIT ?
@@ -142,8 +146,7 @@ export function getSessionLogs(sessionId: string, limit = 100): { eventType: str
 }
 
 export function countActiveSessions(): number {
-  const db = getDatabase();
-  const stmt = db.prepare("SELECT COUNT(*) as count FROM sessions WHERE status != 'terminated'");
+  const stmt = getStatement('countActiveSessions', "SELECT COUNT(*) as count FROM sessions WHERE status != 'terminated'");
   const row = stmt.get() as { count: number };
   return row.count;
 }

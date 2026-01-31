@@ -29,6 +29,33 @@ class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
   private dataListeners: Map<string, Set<(data: string) => void>> = new Map();
   private exitListeners: Map<string, Set<(code: number) => void>> = new Map();
+  private scrollbackBuffers: Map<string, ScrollbackBuffer> = new Map();
+  private touchDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private idleCheckInterval: NodeJS.Timeout | null = null;
+
+  constructor() {
+    this.startIdleChecker();
+  }
+
+  private startIdleChecker(): void {
+    const config = getConfig();
+    const timeoutMs = config.sessions.idleTimeoutMinutes * 60 * 1000;
+    if (timeoutMs <= 0) return;
+
+    this.idleCheckInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [id, session] of this.activeSessions) {
+        if (session.connectedClients.size === 0) {
+          const idleTime = now - session.lastAccessedAt.getTime();
+          if (idleTime > timeoutMs) {
+            logger.info({ id, name: session.name, idleMinutes: Math.round(idleTime / 60000) },
+              'Terminating idle session');
+            this.terminateSession(id);
+          }
+        }
+      }
+    }, 60000); // Check every minute
+  }
 
   async createSession(options: SessionCreateOptions = {}): Promise<ActiveSession> {
     const config = getConfig();
@@ -65,6 +92,8 @@ class SessionManager {
       const created = await createTmuxSession(tmuxName, shell, cwd);
       if (created) {
         tmuxSession = tmuxName;
+      } else {
+        logger.warn({ id, name }, 'Tmux session creation failed, session will not persist across server restarts');
       }
     }
 
@@ -81,17 +110,17 @@ class SessionManager {
       rows,
       pty,
       tmuxSession,
-      scrollback: [],
+      scrollback: [], // Will be populated from buffer when needed
       connectedClients: new Set(),
     };
 
-    // Initialize scrollback buffer
+    // Initialize scrollback buffer and store reference
     const scrollbackBuffer = new ScrollbackBuffer();
+    this.scrollbackBuffers.set(id, scrollbackBuffer);
 
-    // Set up data listener
+    // Set up data listener - no longer copies buffer on every event
     pty.onData((data: string) => {
       scrollbackBuffer.push(data);
-      session.scrollback = scrollbackBuffer.getAll();
 
       const listeners = this.dataListeners.get(id);
       if (listeners) {
@@ -140,8 +169,13 @@ class SessionManager {
     return Array.from(this.activeSessions.values());
   }
 
-  getSessionList(): SessionMetadata[] {
-    return getAllSessionsFromDb();
+  getSessionList(): (SessionMetadata & { attachable: boolean })[] {
+    const dbSessions = getAllSessionsFromDb();
+    // Mark sessions as attachable only if they have an active PTY in memory
+    return dbSessions.map(session => ({
+      ...session,
+      attachable: this.activeSessions.has(session.id),
+    }));
   }
 
   async terminateSession(id: string): Promise<boolean> {
@@ -154,8 +188,9 @@ class SessionManager {
     logger.info({ id, name: session.name }, 'Terminating session');
 
     // Persist scrollback before terminating (Windows)
-    if (isWindows() && session.scrollback.length > 0) {
-      persistScrollback(id, session.scrollback);
+    const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
+    if (isWindows() && scrollback.length > 0) {
+      persistScrollback(id, scrollback);
     }
 
     // Kill tmux session if exists
@@ -166,9 +201,17 @@ class SessionManager {
     // Kill PTY
     killPty(session.pty);
 
-    // Clean up listeners
+    // Clean up listeners and buffers
     this.dataListeners.delete(id);
     this.exitListeners.delete(id);
+    this.scrollbackBuffers.delete(id);
+
+    // Clean up debounce timer
+    const debounceTimer = this.touchDebounceTimers.get(id);
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      this.touchDebounceTimers.delete(id);
+    }
 
     // Update database
     updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
@@ -280,9 +323,10 @@ class SessionManager {
   }
 
   getScrollback(id: string): string[] {
-    const session = this.activeSessions.get(id);
-    if (session) {
-      return session.scrollback;
+    // Get from in-memory buffer first
+    const buffer = this.scrollbackBuffers.get(id);
+    if (buffer) {
+      return buffer.getAll();
     }
     // Try to restore from database (Windows)
     return restoreScrollback(id);
@@ -290,13 +334,23 @@ class SessionManager {
 
   private touchSession(id: string): void {
     const session = this.activeSessions.get(id);
-    if (session) {
-      session.lastAccessedAt = new Date();
-      session.status = 'active';
-      updateSession(id, {
-        lastAccessedAt: session.lastAccessedAt.toISOString(),
-        status: 'active',
-      });
+    if (!session) return;
+
+    session.lastAccessedAt = new Date();
+    session.status = 'active';
+
+    // Debounce database update to at most once per 5 seconds
+    if (!this.touchDebounceTimers.has(id)) {
+      this.touchDebounceTimers.set(id, setTimeout(() => {
+        this.touchDebounceTimers.delete(id);
+        const currentSession = this.activeSessions.get(id);
+        if (currentSession) {
+          updateSession(id, {
+            lastAccessedAt: currentSession.lastAccessedAt.toISOString(),
+            status: 'active',
+          });
+        }
+      }, 5000));
     }
   }
 
@@ -316,8 +370,9 @@ class SessionManager {
       logSessionEvent(id, 'exited', String(exitCode));
 
       // Persist scrollback on Windows
-      if (isWindows() && session.scrollback.length > 0) {
-        persistScrollback(id, session.scrollback);
+      const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
+      if (isWindows() && scrollback.length > 0) {
+        persistScrollback(id, scrollback);
       }
     }
   }
@@ -325,10 +380,23 @@ class SessionManager {
   async shutdown(): Promise<void> {
     logger.info('Shutting down session manager');
 
+    // Stop idle checker
+    if (this.idleCheckInterval) {
+      clearInterval(this.idleCheckInterval);
+      this.idleCheckInterval = null;
+    }
+
+    // Clear all debounce timers
+    for (const timer of this.touchDebounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.touchDebounceTimers.clear();
+
     for (const [id, session] of this.activeSessions) {
       // Persist scrollback
-      if (session.scrollback.length > 0) {
-        persistScrollback(id, session.scrollback);
+      const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
+      if (scrollback.length > 0) {
+        persistScrollback(id, scrollback);
       }
 
       // Mark as idle (not terminated, so we can reconnect on restart)
@@ -343,6 +411,7 @@ class SessionManager {
     this.activeSessions.clear();
     this.dataListeners.clear();
     this.exitListeners.clear();
+    this.scrollbackBuffers.clear();
   }
 }
 
