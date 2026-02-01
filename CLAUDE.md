@@ -33,7 +33,7 @@ npm run format        # Format with prettier
 - `src/client/terminal.ts` - xterm.js wrapper with FitAddon
 - `src/client/session-manager.ts` - WebSocket client and session UI
 
-**Data Storage**: `~/.claude-remote/` (sessions.db, config.json)
+**Data Storage**: `~/.claude-remote/` (sessions.db, config.json, logs/)
 
 ## Key Technical Details
 
@@ -66,3 +66,14 @@ wscript.exe "C:\Users\Albert\NodeProjects\claude-remote\start-server-hidden.vbs"
 
 **Remove auto-start:**
 Delete `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-remote-server.vbs`
+
+## Logging & Debugging
+
+Logs are written to `~/.claude-remote/logs/server.log` (JSON format, rotates every 3 days).
+
+**View recent logs:**
+```bash
+cat ~/.claude-remote/logs/server.log | npx pino-pretty | tail -50
+```
+
+**Error handling:** The server has handlers for `uncaughtException` and `unhandledRejection` that log fatal errors before exiting. Check the log file to diagnose unexpected crashes.

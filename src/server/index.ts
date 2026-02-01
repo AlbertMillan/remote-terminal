@@ -1,12 +1,27 @@
 import { createApp } from './app.js';
 import { getConfig } from './config.js';
-import { createLogger } from './utils/logger.js';
+import { createLogger, getLogDirectory } from './utils/logger.js';
 import { getPlatform } from './utils/platform.js';
 
 const logger = createLogger('server');
 
+// Handle uncaught exceptions - log and exit
+process.on('uncaughtException', (error: Error) => {
+  logger.fatal({ error: error.message, stack: error.stack }, 'Uncaught exception - shutting down');
+  // Give logger time to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
+});
+
+// Handle unhandled promise rejections - log and exit
+process.on('unhandledRejection', (reason: unknown) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  logger.fatal({ error: error.message, stack: error.stack }, 'Unhandled promise rejection - shutting down');
+  // Give logger time to flush before exiting
+  setTimeout(() => process.exit(1), 1000);
+});
+
 async function main() {
-  logger.info({ platform: getPlatform() }, 'Starting Claude Remote Terminal Server');
+  logger.info({ platform: getPlatform(), logDir: getLogDirectory() }, 'Starting Claude Remote Terminal Server');
 
   try {
     const app = await createApp();
