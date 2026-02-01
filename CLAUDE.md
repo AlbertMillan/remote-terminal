@@ -53,19 +53,21 @@ Server messages: `session.created`, `session.attached`, `terminal.data`, `termin
 
 ## Windows Auto-Start
 
-The server is configured to start automatically on Windows login:
+Scripts for running the server on Windows:
 
 - `start-server.bat` - Batch file that runs `node dist/server/index.js`
 - `start-server-hidden.vbs` - VBS wrapper to run without a visible console window
-- Startup location: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-remote-server.vbs`
+
+**Enable auto-start on login:**
+Copy `start-server-hidden.vbs` to `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
 
 **Manual start (hidden):**
 ```bash
-wscript.exe "C:\Users\Albert\NodeProjects\claude-remote\start-server-hidden.vbs"
+wscript.exe start-server-hidden.vbs
 ```
 
 **Remove auto-start:**
-Delete `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-remote-server.vbs`
+Delete the VBS file from `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
 
 ## Logging & Debugging
 

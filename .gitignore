@@ -7,9 +7,11 @@ dist/
 # Data directory
 .claude-remote/
 
-# IDE
+# IDE and tools
 .vscode/
 .idea/
+.claude/
+.playwright-mcp/
 
 # OS files
 .DS_Store
