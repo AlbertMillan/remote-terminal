@@ -664,6 +664,31 @@ class SessionManager {
       }
     });
 
+    // Allow dropping on category header (for empty categories)
+    header.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      header.classList.add('drop-target');
+    });
+
+    header.addEventListener('dragleave', (e) => {
+      if (!header.contains(e.relatedTarget as Node)) {
+        header.classList.remove('drop-target');
+      }
+    });
+
+    header.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      header.classList.remove('drop-target');
+
+      if (this.draggedSessionId) {
+        const session = this.sessions.get(this.draggedSessionId);
+        if (session && session.categoryId !== category.id) {
+          this.moveSession(this.draggedSessionId, category.id);
+        }
+      }
+    });
+
     section.appendChild(header);
 
     const sessionList = document.createElement('ul');
@@ -691,6 +716,31 @@ class SessionManager {
       <span class="category-name">Uncategorized</span>
       <span class="category-count">(${sessions.length})</span>
     `;
+
+    // Allow dropping on uncategorized header
+    header.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      header.classList.add('drop-target');
+    });
+
+    header.addEventListener('dragleave', (e) => {
+      if (!header.contains(e.relatedTarget as Node)) {
+        header.classList.remove('drop-target');
+      }
+    });
+
+    header.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      header.classList.remove('drop-target');
+
+      if (this.draggedSessionId) {
+        const session = this.sessions.get(this.draggedSessionId);
+        if (session && session.categoryId !== null) {
+          this.moveSession(this.draggedSessionId, null);
+        }
+      }
+    });
 
     section.appendChild(header);
 
@@ -752,6 +802,32 @@ class SessionManager {
     li.addEventListener('dragend', () => {
       this.draggedSessionId = null;
       li.classList.remove('dragging');
+      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+    });
+
+    // Allow drops on session items (for dropping into their parent category)
+    li.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const categorySection = li.closest('.category-section');
+      const sessionList = categorySection?.querySelector('.category-sessions');
+      sessionList?.classList.add('drop-target');
+    });
+
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const categorySection = li.closest('.category-section');
+      const categoryIdAttr = categorySection?.dataset.categoryId;
+      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
+
+      if (this.draggedSessionId) {
+        const draggedSession = this.sessions.get(this.draggedSessionId);
+        if (draggedSession && draggedSession.categoryId !== targetCategoryId) {
+          this.moveSession(this.draggedSessionId, targetCategoryId);
+        }
+      }
+
       document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
     });
 
