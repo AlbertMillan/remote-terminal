@@ -8,9 +8,16 @@ export type ClientMessageType =
   | 'session.terminate'
   | 'session.delete'
   | 'session.rename'
+  | 'session.move'
   | 'session.list'
   | 'terminal.data'
   | 'terminal.resize'
+  | 'category.create'
+  | 'category.rename'
+  | 'category.delete'
+  | 'category.reorder'
+  | 'category.toggle'
+  | 'category.list'
   | 'ping';
 
 export type ServerMessageType =
@@ -22,10 +29,17 @@ export type ServerMessageType =
   | 'session.terminated'
   | 'session.deleted'
   | 'session.renamed'
+  | 'session.moved'
   | 'session.list'
   | 'session.error'
   | 'terminal.data'
   | 'terminal.exit'
+  | 'category.created'
+  | 'category.renamed'
+  | 'category.deleted'
+  | 'category.reordered'
+  | 'category.toggled'
+  | 'category.list'
   | 'error'
   | 'pong';
 
@@ -75,6 +89,11 @@ export interface SessionRenamePayload {
   name: string;
 }
 
+export interface SessionMovePayload {
+  sessionId: string;
+  categoryId: string | null;
+}
+
 export interface TerminalDataPayload {
   sessionId: string;
   data: string;
@@ -84,6 +103,29 @@ export interface TerminalResizePayload {
   sessionId: string;
   cols: number;
   rows: number;
+}
+
+// Category payloads
+export interface CategoryCreatePayload {
+  name: string;
+}
+
+export interface CategoryRenamePayload {
+  categoryId: string;
+  name: string;
+}
+
+export interface CategoryDeletePayload {
+  categoryId: string;
+}
+
+export interface CategoryReorderPayload {
+  categories: { id: string; sortOrder: number }[];
+}
+
+export interface CategoryTogglePayload {
+  categoryId: string;
+  collapsed: boolean;
 }
 
 // Server message payloads
@@ -98,6 +140,14 @@ export interface SessionInfo {
   cols: number;
   rows: number;
   attachable: boolean;
+  categoryId: string | null;
+}
+
+export interface CategoryInfo {
+  id: string;
+  name: string;
+  sortOrder: number;
+  collapsed: boolean;
 }
 
 export interface SessionCreatedPayload {
@@ -127,6 +177,38 @@ export interface TerminalExitPayload {
 export interface ErrorPayload {
   message: string;
   code?: string;
+}
+
+// Category server payloads
+export interface CategoryCreatedPayload {
+  category: CategoryInfo;
+}
+
+export interface CategoryRenamedPayload {
+  categoryId: string;
+  name: string;
+}
+
+export interface CategoryDeletedPayload {
+  categoryId: string;
+}
+
+export interface CategoryReorderedPayload {
+  categories: { id: string; sortOrder: number }[];
+}
+
+export interface CategoryToggledPayload {
+  categoryId: string;
+  collapsed: boolean;
+}
+
+export interface CategoryListPayload {
+  categories: CategoryInfo[];
+}
+
+export interface SessionMovedPayload {
+  sessionId: string;
+  categoryId: string | null;
 }
 
 // Helper functions

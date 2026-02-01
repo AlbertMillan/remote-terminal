@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getDatabase } from './schema.js';
-import type { SessionMetadata, SessionStatus } from '../sessions/types.js';
+import type { SessionMetadata, SessionStatus, CategoryMetadata } from '../sessions/types.js';
 
 // Prepared statement cache for performance
 const stmtCache = new Map<string, Database.Statement>();
@@ -19,8 +19,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   const stmt = getStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     session.id,
@@ -33,7 +33,8 @@ export function insertSession(session: SessionMetadata): void {
     session.status,
     session.cols,
     session.rows,
-    session.tmuxSession
+    session.tmuxSession,
+    session.categoryId
   );
 }
 
@@ -76,7 +77,7 @@ export function updateSession(
 export function getSession(id: string): SessionMetadata | null {
   const stmt = getStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
+           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
     FROM sessions WHERE id = ?
   `);
   const row = stmt.get(id) as SessionMetadata | undefined;
@@ -87,7 +88,7 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
   if (ownerId) {
     const stmt = getStatement('getAllSessionsByOwner', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
+             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
       FROM sessions WHERE owner_id = ? OR owner_id IS NULL
       ORDER BY last_accessed_at DESC
     `);
@@ -95,7 +96,7 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
   } else {
     const stmt = getStatement('getAllSessions', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
+             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
       FROM sessions
       ORDER BY last_accessed_at DESC
     `);
@@ -106,7 +107,7 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
 export function getActiveSessions(): SessionMetadata[] {
   const stmt = getStatement('getActiveSessions', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession
+           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
     FROM sessions WHERE status != 'terminated'
     ORDER BY last_accessed_at DESC
   `);
@@ -149,4 +150,99 @@ export function countActiveSessions(): number {
   const stmt = getStatement('countActiveSessions', "SELECT COUNT(*) as count FROM sessions WHERE status != 'terminated'");
   const row = stmt.get() as { count: number };
   return row.count;
+}
+
+// Category CRUD functions
+
+export function insertCategory(category: CategoryMetadata): void {
+  const stmt = getStatement('insertCategory', `
+    INSERT INTO categories (id, name, sort_order, collapsed, owner_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    category.id,
+    category.name,
+    category.sortOrder,
+    category.collapsed ? 1 : 0,
+    category.ownerId,
+    category.createdAt
+  );
+}
+
+export function updateCategory(
+  id: string,
+  updates: Partial<Pick<CategoryMetadata, 'name' | 'sortOrder' | 'collapsed'>>
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.name !== undefined) {
+    fields.push('name = ?');
+    values.push(updates.name);
+  }
+  if (updates.sortOrder !== undefined) {
+    fields.push('sort_order = ?');
+    values.push(updates.sortOrder);
+  }
+  if (updates.collapsed !== undefined) {
+    fields.push('collapsed = ?');
+    values.push(updates.collapsed ? 1 : 0);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  const stmt = getDatabase().prepare(`UPDATE categories SET ${fields.join(', ')} WHERE id = ?`);
+  stmt.run(...values);
+}
+
+export function deleteCategory(id: string): void {
+  const stmt = getStatement('deleteCategory', 'DELETE FROM categories WHERE id = ?');
+  stmt.run(id);
+}
+
+export function getCategory(id: string): CategoryMetadata | null {
+  const stmt = getStatement('getCategory', `
+    SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
+    FROM categories WHERE id = ?
+  `);
+  const row = stmt.get(id) as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string } | undefined;
+  if (!row) return null;
+  return { ...row, collapsed: row.collapsed === 1 };
+}
+
+export function getAllCategories(ownerId?: string): CategoryMetadata[] {
+  if (ownerId) {
+    const stmt = getStatement('getAllCategoriesByOwner', `
+      SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
+      FROM categories WHERE owner_id = ? OR owner_id IS NULL
+      ORDER BY sort_order ASC
+    `);
+    const rows = stmt.all(ownerId) as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string }[];
+    return rows.map(row => ({ ...row, collapsed: row.collapsed === 1 }));
+  } else {
+    const stmt = getStatement('getAllCategories', `
+      SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
+      FROM categories
+      ORDER BY sort_order ASC
+    `);
+    const rows = stmt.all() as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string }[];
+    return rows.map(row => ({ ...row, collapsed: row.collapsed === 1 }));
+  }
+}
+
+export function updateSessionCategory(sessionId: string, categoryId: string | null): void {
+  const stmt = getStatement('updateSessionCategory', 'UPDATE sessions SET category_id = ? WHERE id = ?');
+  stmt.run(categoryId, sessionId);
+}
+
+export function reorderCategories(categories: { id: string; sortOrder: number }[]): void {
+  const stmt = getStatement('reorderCategory', 'UPDATE categories SET sort_order = ? WHERE id = ?');
+  const db = getDatabase();
+  const transaction = db.transaction(() => {
+    for (const cat of categories) {
+      stmt.run(cat.sortOrder, cat.id);
+    }
+  });
+  transaction();
 }

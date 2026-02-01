@@ -15,10 +15,26 @@ import {
   type SessionTerminatePayload,
   type SessionDeletePayload,
   type SessionRenamePayload,
+  type SessionMovePayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
   type SessionInfo,
+  type CategoryCreatePayload,
+  type CategoryRenamePayload,
+  type CategoryDeletePayload,
+  type CategoryReorderPayload,
+  type CategoryTogglePayload,
+  type CategoryInfo,
 } from './protocol.js';
+import {
+  insertCategory,
+  updateCategory,
+  deleteCategory as deleteCategoryFromDb,
+  getAllCategories,
+  updateSessionCategory,
+  reorderCategories,
+  getCategory,
+} from '../db/queries.js';
 import {
   verifyTailscaleConnection,
   extractIpFromRequest,
@@ -147,6 +163,34 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
     case 'session.rename':
       handleSessionRename(connection, message);
+      break;
+
+    case 'session.move':
+      handleSessionMove(connection, message);
+      break;
+
+    case 'category.create':
+      handleCategoryCreate(connection, message);
+      break;
+
+    case 'category.rename':
+      handleCategoryRename(connection, message);
+      break;
+
+    case 'category.delete':
+      handleCategoryDelete(connection, message);
+      break;
+
+    case 'category.reorder':
+      handleCategoryReorder(connection, message);
+      break;
+
+    case 'category.toggle':
+      handleCategoryToggle(connection, message);
+      break;
+
+    case 'category.list':
+      handleCategoryList(connection, message);
       break;
 
     case 'terminal.data':
@@ -470,7 +514,7 @@ function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'delete
   }
 }
 
-function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean }): SessionInfo {
+function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -482,7 +526,180 @@ function sessionToInfo(session: { id: string; name: string; shell: string; cwd: 
     cols: session.cols,
     rows: session.rows,
     attachable: session.attachable ?? true, // Default to true for active sessions
+    categoryId: session.categoryId ?? null,
   };
+}
+
+// Category handlers
+
+function handleCategoryList(connection: ClientConnection, message: ClientMessage): void {
+  const categories = getAllCategories(connection.identity?.userId).map(categoryToInfo);
+  connection.ws.send(createMessage('category.list', { categories }, message.id));
+}
+
+function handleCategoryCreate(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as CategoryCreatePayload;
+
+  if (!payload?.name || typeof payload.name !== 'string') {
+    connection.ws.send(createMessage('error', { message: 'Category name required' }, message.id));
+    return;
+  }
+
+  const name = payload.name.trim().slice(0, 100);
+  if (!name) {
+    connection.ws.send(createMessage('error', { message: 'Category name cannot be empty' }, message.id));
+    return;
+  }
+
+  const existingCategories = getAllCategories(connection.identity?.userId);
+  const maxSortOrder = existingCategories.reduce((max, cat) => Math.max(max, cat.sortOrder), -1);
+
+  const category = {
+    id: randomUUID(),
+    name,
+    sortOrder: maxSortOrder + 1,
+    collapsed: false,
+    ownerId: connection.identity?.userId || null,
+    createdAt: new Date().toISOString(),
+  };
+
+  insertCategory(category);
+
+  connection.ws.send(createMessage('category.created', { category: categoryToInfo(category) }, message.id));
+  broadcastCategoryUpdate('created', { category: categoryToInfo(category) }, connection.id);
+}
+
+function handleCategoryRename(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as CategoryRenamePayload;
+
+  if (!payload?.categoryId || !payload?.name || typeof payload.name !== 'string') {
+    connection.ws.send(createMessage('error', { message: 'Category ID and name required' }, message.id));
+    return;
+  }
+
+  const name = payload.name.trim().slice(0, 100);
+  if (!name) {
+    connection.ws.send(createMessage('error', { message: 'Category name cannot be empty' }, message.id));
+    return;
+  }
+
+  const existing = getCategory(payload.categoryId);
+  if (!existing) {
+    connection.ws.send(createMessage('error', { message: 'Category not found' }, message.id));
+    return;
+  }
+
+  updateCategory(payload.categoryId, { name });
+
+  connection.ws.send(createMessage('category.renamed', { categoryId: payload.categoryId, name }, message.id));
+  broadcastCategoryUpdate('renamed', { categoryId: payload.categoryId, name }, connection.id);
+}
+
+function handleCategoryDelete(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as CategoryDeletePayload;
+
+  if (!payload?.categoryId) {
+    connection.ws.send(createMessage('error', { message: 'Category ID required' }, message.id));
+    return;
+  }
+
+  const existing = getCategory(payload.categoryId);
+  if (!existing) {
+    connection.ws.send(createMessage('error', { message: 'Category not found' }, message.id));
+    return;
+  }
+
+  deleteCategoryFromDb(payload.categoryId);
+
+  connection.ws.send(createMessage('category.deleted', { categoryId: payload.categoryId }, message.id));
+  broadcastCategoryUpdate('deleted', { categoryId: payload.categoryId }, connection.id);
+}
+
+function handleCategoryReorder(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as CategoryReorderPayload;
+
+  if (!payload?.categories || !Array.isArray(payload.categories)) {
+    connection.ws.send(createMessage('error', { message: 'Categories array required' }, message.id));
+    return;
+  }
+
+  reorderCategories(payload.categories);
+
+  connection.ws.send(createMessage('category.reordered', { categories: payload.categories }, message.id));
+  broadcastCategoryUpdate('reordered', { categories: payload.categories }, connection.id);
+}
+
+function handleCategoryToggle(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as CategoryTogglePayload;
+
+  if (!payload?.categoryId || typeof payload.collapsed !== 'boolean') {
+    connection.ws.send(createMessage('error', { message: 'Category ID and collapsed state required' }, message.id));
+    return;
+  }
+
+  const existing = getCategory(payload.categoryId);
+  if (!existing) {
+    connection.ws.send(createMessage('error', { message: 'Category not found' }, message.id));
+    return;
+  }
+
+  updateCategory(payload.categoryId, { collapsed: payload.collapsed });
+
+  connection.ws.send(createMessage('category.toggled', { categoryId: payload.categoryId, collapsed: payload.collapsed }, message.id));
+  broadcastCategoryUpdate('toggled', { categoryId: payload.categoryId, collapsed: payload.collapsed }, connection.id);
+}
+
+function handleSessionMove(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as SessionMovePayload;
+
+  if (!payload?.sessionId) {
+    connection.ws.send(createMessage('error', { message: 'Session ID required' }, message.id));
+    return;
+  }
+
+  // categoryId can be null (uncategorized)
+  const categoryId = payload.categoryId || null;
+
+  // If categoryId is provided, verify it exists
+  if (categoryId) {
+    const existing = getCategory(categoryId);
+    if (!existing) {
+      connection.ws.send(createMessage('error', { message: 'Category not found' }, message.id));
+      return;
+    }
+  }
+
+  updateSessionCategory(payload.sessionId, categoryId);
+
+  connection.ws.send(createMessage('session.moved', { sessionId: payload.sessionId, categoryId }, message.id));
+  broadcastSessionMoved(payload.sessionId, categoryId, connection.id);
+}
+
+function categoryToInfo(category: { id: string; name: string; sortOrder: number; collapsed: boolean }): CategoryInfo {
+  return {
+    id: category.id,
+    name: category.name,
+    sortOrder: category.sortOrder,
+    collapsed: category.collapsed,
+  };
+}
+
+function broadcastCategoryUpdate(event: 'created' | 'renamed' | 'deleted' | 'reordered' | 'toggled', payload: unknown, excludeClientId?: string): void {
+  const messageType = `category.${event}` as const;
+
+  for (const conn of connections.values()) {
+    if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage(messageType, payload));
+    }
+  }
+}
+
+function broadcastSessionMoved(sessionId: string, categoryId: string | null, excludeClientId?: string): void {
+  for (const conn of connections.values()) {
+    if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.moved', { sessionId, categoryId }));
+    }
+  }
 }
 
 export function getActiveConnections(): number {

@@ -97,6 +97,22 @@ function runMigrations(database: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_session_logs_session ON session_logs(session_id);
       `,
     },
+    {
+      name: '004_create_categories',
+      sql: `
+        CREATE TABLE IF NOT EXISTS categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          collapsed INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_categories_owner ON categories(owner_id);
+        ALTER TABLE sessions ADD COLUMN category_id TEXT REFERENCES categories(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category_id);
+      `,
+    },
   ];
 
   const appliedMigrations = database

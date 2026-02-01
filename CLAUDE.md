@@ -50,3 +50,19 @@ Endpoint: `/ws`
 Client messages: `session.create`, `session.attach`, `session.terminate`, `session.list`, `terminal.data`, `terminal.resize`, `ping`
 
 Server messages: `session.created`, `session.attached`, `terminal.data`, `terminal.exit`, `pong`
+
+## Windows Auto-Start
+
+The server is configured to start automatically on Windows login:
+
+- `start-server.bat` - Batch file that runs `node dist/server/index.js`
+- `start-server-hidden.vbs` - VBS wrapper to run without a visible console window
+- Startup location: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-remote-server.vbs`
+
+**Manual start (hidden):**
+```bash
+wscript.exe "C:\Users\Albert\NodeProjects\claude-remote\start-server-hidden.vbs"
+```
+
+**Remove auto-start:**
+Delete `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\claude-remote-server.vbs`

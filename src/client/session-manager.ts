@@ -12,6 +12,14 @@ interface SessionInfo {
   cols: number;
   rows: number;
   attachable: boolean;
+  categoryId: string | null;
+}
+
+interface CategoryInfo {
+  id: string;
+  name: string;
+  sortOrder: number;
+  collapsed: boolean;
 }
 
 // Type-safe server message definitions (issue #14)
@@ -51,6 +59,37 @@ interface SessionRenamedPayload {
   name: string;
 }
 
+interface SessionMovedPayload {
+  sessionId: string;
+  categoryId: string | null;
+}
+
+interface CategoryCreatedPayload {
+  category: CategoryInfo;
+}
+
+interface CategoryRenamedPayload {
+  categoryId: string;
+  name: string;
+}
+
+interface CategoryDeletedPayload {
+  categoryId: string;
+}
+
+interface CategoryReorderedPayload {
+  categories: { id: string; sortOrder: number }[];
+}
+
+interface CategoryToggledPayload {
+  categoryId: string;
+  collapsed: boolean;
+}
+
+interface CategoryListPayload {
+  categories: CategoryInfo[];
+}
+
 interface TerminalDataPayload {
   sessionId: string;
   data: string;
@@ -74,9 +113,16 @@ type ServerMessage =
   | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
+  | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
   | { type: 'session.error'; id?: string; payload: ErrorPayload }
   | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
   | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
+  | { type: 'category.created'; id?: string; payload: CategoryCreatedPayload }
+  | { type: 'category.renamed'; id?: string; payload: CategoryRenamedPayload }
+  | { type: 'category.deleted'; id?: string; payload: CategoryDeletedPayload }
+  | { type: 'category.reordered'; id?: string; payload: CategoryReorderedPayload }
+  | { type: 'category.toggled'; id?: string; payload: CategoryToggledPayload }
+  | { type: 'category.list'; id?: string; payload: CategoryListPayload }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };
 
@@ -85,6 +131,7 @@ type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 class SessionManager {
   private ws: WebSocket | null = null;
   private sessions: Map<string, SessionInfo> = new Map();
+  private categories: Map<string, CategoryInfo> = new Map();
   private currentSessionId: string | null = null;
   private previousSessionId: string | null = null; // For reconnection (issue #7)
   private messageId = 0;
@@ -93,6 +140,7 @@ class SessionManager {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
+  private draggedSessionId: string | null = null;
 
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
@@ -130,6 +178,10 @@ class SessionManager {
     document.getElementById('rename-cancel')?.addEventListener('click', () => this.hideRenameModal());
     document.getElementById('rename-confirm')?.addEventListener('click', () => this.confirmRename());
 
+    // Category modal
+    document.getElementById('category-cancel')?.addEventListener('click', () => this.hideCategoryModal());
+    document.getElementById('category-confirm')?.addEventListener('click', () => this.confirmCategoryAction());
+
     // Terminal header controls
     document.getElementById('rename-session-btn')?.addEventListener('click', () => this.showRenameModal());
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
@@ -139,6 +191,7 @@ class SessionManager {
       if (e.key === 'Escape') {
         this.hideNewSessionModal();
         this.hideRenameModal();
+        this.hideCategoryModal();
       }
     });
 
@@ -148,6 +201,9 @@ class SessionManager {
     });
     document.getElementById('rename-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideRenameModal();
+    });
+    document.getElementById('category-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.hideCategoryModal();
     });
   }
 
@@ -164,6 +220,7 @@ class SessionManager {
       this.reconnectAttempts = 0;
       this.updateConnectionStatus('connected');
       this.listSessions();
+      this.listCategories();
 
       // Re-attach to previous session on reconnect (issue #7)
       if (this.previousSessionId) {
@@ -287,6 +344,27 @@ class SessionManager {
       case 'session.renamed':
         this.handleSessionRenamed(message.payload);
         break;
+      case 'session.moved':
+        this.handleSessionMoved(message.payload);
+        break;
+      case 'category.list':
+        this.handleCategoryList(message.payload);
+        break;
+      case 'category.created':
+        this.handleCategoryCreated(message.payload);
+        break;
+      case 'category.renamed':
+        this.handleCategoryRenamed(message.payload);
+        break;
+      case 'category.deleted':
+        this.handleCategoryDeleted(message.payload);
+        break;
+      case 'category.reordered':
+        this.handleCategoryReordered(message.payload);
+        break;
+      case 'category.toggled':
+        this.handleCategoryToggled(message.payload);
+        break;
       case 'terminal.data':
         this.handleTerminalData(message.payload);
         break;
@@ -399,6 +477,61 @@ class SessionManager {
     }
   }
 
+  private handleSessionMoved(payload: SessionMovedPayload): void {
+    const session = this.sessions.get(payload.sessionId);
+    if (session) {
+      session.categoryId = payload.categoryId;
+      this.sessions.set(payload.sessionId, session);
+    }
+    this.renderSessionList();
+  }
+
+  private handleCategoryList(payload: CategoryListPayload): void {
+    this.categories.clear();
+    for (const category of payload.categories) {
+      this.categories.set(category.id, category);
+    }
+    this.renderSessionList();
+  }
+
+  private handleCategoryCreated(payload: CategoryCreatedPayload): void {
+    this.categories.set(payload.category.id, payload.category);
+    this.renderSessionList();
+  }
+
+  private handleCategoryRenamed(payload: CategoryRenamedPayload): void {
+    const category = this.categories.get(payload.categoryId);
+    if (category) {
+      category.name = payload.name;
+      this.categories.set(payload.categoryId, category);
+    }
+    this.renderSessionList();
+  }
+
+  private handleCategoryDeleted(payload: CategoryDeletedPayload): void {
+    this.categories.delete(payload.categoryId);
+    this.renderSessionList();
+  }
+
+  private handleCategoryReordered(payload: CategoryReorderedPayload): void {
+    for (const cat of payload.categories) {
+      const category = this.categories.get(cat.id);
+      if (category) {
+        category.sortOrder = cat.sortOrder;
+      }
+    }
+    this.renderSessionList();
+  }
+
+  private handleCategoryToggled(payload: CategoryToggledPayload): void {
+    const category = this.categories.get(payload.categoryId);
+    if (category) {
+      category.collapsed = payload.collapsed;
+      this.categories.set(payload.categoryId, category);
+    }
+    this.renderSessionList();
+  }
+
   private handleTerminalData(payload: { sessionId: string; data: string }): void {
     if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
       this.terminalMgr.write(payload.data);
@@ -428,64 +561,246 @@ class SessionManager {
 
     listEl.innerHTML = '';
 
+    // Sort sessions by lastAccessedAt
     const sortedSessions = Array.from(this.sessions.values()).sort(
       (a, b) => new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
     );
 
-    for (const session of sortedSessions) {
-      const li = document.createElement('li');
-      li.className = 'session-item';
-      if (session.id === this.currentSessionId) li.classList.add('active');
-      if (session.status === 'terminated') li.classList.add('terminated');
-      if (!session.attachable) li.classList.add('not-attachable');
+    // Sort categories by sortOrder
+    const sortedCategories = Array.from(this.categories.values()).sort(
+      (a, b) => a.sortOrder - b.sortOrder
+    );
 
-      // Show delete button for non-attachable sessions (terminated or stale)
-      const showDeleteBtn = !session.attachable;
-
-      li.innerHTML = `
-        <span class="session-icon">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="4 17 10 11 4 5"></polyline>
-            <line x1="12" y1="19" x2="20" y2="19"></line>
-          </svg>
-        </span>
-        <div class="session-info">
-          <div class="session-name">${this.escapeHtml(session.name)}</div>
-          <div class="session-status">${session.status}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
-        </div>
-        ${showDeleteBtn ? `
-          <button class="session-delete-btn" title="Remove session" data-session-id="${session.id}">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
-        ` : ''}
-      `;
-
-      // Add click handler for session selection (attachable only)
-      li.addEventListener('click', (e) => {
-        // Don't trigger if clicking delete button
-        if ((e.target as HTMLElement).closest('.session-delete-btn')) return;
-
-        if (session.attachable) {
-          this.attachToSession(session.id);
-          // Close mobile sidebar
-          document.getElementById('sidebar')?.classList.remove('open');
-          document.getElementById('sidebar-overlay')?.classList.remove('open');
-          document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
-        }
-      });
-
-      // Add click handler for delete button
-      const deleteBtn = li.querySelector('.session-delete-btn');
-      deleteBtn?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.deleteSession(session.id);
-      });
-
-      listEl.appendChild(li);
+    // Group sessions by category
+    const uncategorizedSessions = sortedSessions.filter(s => !s.categoryId);
+    const sessionsByCategory = new Map<string, SessionInfo[]>();
+    for (const cat of sortedCategories) {
+      sessionsByCategory.set(cat.id, []);
     }
+    for (const session of sortedSessions) {
+      if (session.categoryId && sessionsByCategory.has(session.categoryId)) {
+        sessionsByCategory.get(session.categoryId)!.push(session);
+      }
+    }
+
+    // Add "Add Category" button at top
+    const addCategoryBtn = document.createElement('button');
+    addCategoryBtn.className = 'add-category-btn';
+    addCategoryBtn.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+      Add Category
+    `;
+    addCategoryBtn.addEventListener('click', () => this.showCategoryModal('create'));
+    listEl.appendChild(addCategoryBtn);
+
+    // Render categories with their sessions
+    for (const category of sortedCategories) {
+      const sessions = sessionsByCategory.get(category.id) || [];
+      this.renderCategory(listEl, category, sessions);
+    }
+
+    // Render uncategorized sessions at the bottom
+    if (uncategorizedSessions.length > 0 || sortedCategories.length > 0) {
+      this.renderUncategorizedSection(listEl, uncategorizedSessions);
+    } else {
+      // No categories, just render sessions directly
+      for (const session of sortedSessions) {
+        this.renderSessionItem(listEl, session);
+      }
+    }
+  }
+
+  private renderCategory(container: HTMLElement, category: CategoryInfo, sessions: SessionInfo[]): void {
+    const section = document.createElement('div');
+    section.className = 'category-section';
+    if (category.collapsed) section.classList.add('collapsed');
+    section.dataset.categoryId = category.id;
+
+    const header = document.createElement('div');
+    header.className = 'category-header';
+    header.innerHTML = `
+      <button class="category-toggle" title="${category.collapsed ? 'Expand' : 'Collapse'}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+      <span class="category-name">${this.escapeHtml(category.name)}</span>
+      <span class="category-count">(${sessions.length})</span>
+      <div class="category-actions">
+        <button class="category-rename-btn" title="Rename">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+          </svg>
+        </button>
+        <button class="category-delete-btn" title="Delete">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    `;
+
+    // Category toggle
+    header.querySelector('.category-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleCategory(category.id, !category.collapsed);
+    });
+
+    // Category rename
+    header.querySelector('.category-rename-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.showCategoryModal('rename', category);
+    });
+
+    // Category delete
+    header.querySelector('.category-delete-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm(`Delete category "${category.name}"? Sessions will become uncategorized.`)) {
+        this.deleteCategory(category.id);
+      }
+    });
+
+    section.appendChild(header);
+
+    const sessionList = document.createElement('ul');
+    sessionList.className = 'category-sessions';
+
+    // Drop zone handling
+    this.setupDropZone(sessionList, category.id);
+
+    for (const session of sessions) {
+      this.renderSessionItem(sessionList, session);
+    }
+
+    section.appendChild(sessionList);
+    container.appendChild(section);
+  }
+
+  private renderUncategorizedSection(container: HTMLElement, sessions: SessionInfo[]): void {
+    const section = document.createElement('div');
+    section.className = 'category-section uncategorized';
+    section.dataset.categoryId = '';
+
+    const header = document.createElement('div');
+    header.className = 'category-header';
+    header.innerHTML = `
+      <span class="category-name">Uncategorized</span>
+      <span class="category-count">(${sessions.length})</span>
+    `;
+
+    section.appendChild(header);
+
+    const sessionList = document.createElement('ul');
+    sessionList.className = 'category-sessions';
+
+    // Drop zone handling for uncategorized
+    this.setupDropZone(sessionList, null);
+
+    for (const session of sessions) {
+      this.renderSessionItem(sessionList, session);
+    }
+
+    section.appendChild(sessionList);
+    container.appendChild(section);
+  }
+
+  private renderSessionItem(container: HTMLElement, session: SessionInfo): void {
+    const li = document.createElement('li');
+    li.className = 'session-item';
+    li.draggable = true;
+    li.dataset.sessionId = session.id;
+    if (session.id === this.currentSessionId) li.classList.add('active');
+    if (session.status === 'terminated') li.classList.add('terminated');
+    if (!session.attachable) li.classList.add('not-attachable');
+
+    li.innerHTML = `
+      <span class="session-drag-handle">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/>
+          <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
+        </svg>
+      </span>
+      <span class="session-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+      </span>
+      <div class="session-info">
+        <div class="session-name">${this.escapeHtml(session.name)}</div>
+        <div class="session-status">${session.status}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
+      </div>
+      <button class="session-delete-btn" title="Delete session" data-session-id="${session.id}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+      </button>
+    `;
+
+    // Drag handling
+    li.addEventListener('dragstart', (e) => {
+      this.draggedSessionId = session.id;
+      li.classList.add('dragging');
+      e.dataTransfer?.setData('text/plain', session.id);
+    });
+
+    li.addEventListener('dragend', () => {
+      this.draggedSessionId = null;
+      li.classList.remove('dragging');
+      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+    });
+
+    // Click handler for session selection
+    li.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.session-delete-btn')) return;
+      if ((e.target as HTMLElement).closest('.session-drag-handle')) return;
+
+      if (session.attachable) {
+        this.attachToSession(session.id);
+        document.getElementById('sidebar')?.classList.remove('open');
+        document.getElementById('sidebar-overlay')?.classList.remove('open');
+        document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
+      }
+    });
+
+    // Delete button handler
+    const deleteBtn = li.querySelector('.session-delete-btn');
+    deleteBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.deleteSession(session.id);
+    });
+
+    container.appendChild(li);
+  }
+
+  private setupDropZone(element: HTMLElement, categoryId: string | null): void {
+    element.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      element.classList.add('drop-target');
+    });
+
+    element.addEventListener('dragleave', (e) => {
+      if (!element.contains(e.relatedTarget as Node)) {
+        element.classList.remove('drop-target');
+      }
+    });
+
+    element.addEventListener('drop', (e) => {
+      e.preventDefault();
+      element.classList.remove('drop-target');
+
+      if (this.draggedSessionId) {
+        const session = this.sessions.get(this.draggedSessionId);
+        if (session && session.categoryId !== categoryId) {
+          this.moveSession(this.draggedSessionId, categoryId);
+        }
+      }
+    });
   }
 
   private escapeHtml(text: string): string {
@@ -547,6 +862,12 @@ class SessionManager {
   }
 
   deleteSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.attachable) {
+      if (!confirm('This session is still active. Deleting will terminate it. Continue?')) {
+        return;
+      }
+    }
     this.send('session.delete', { sessionId });
   }
 
@@ -564,6 +885,32 @@ class SessionManager {
     if (this.currentSessionId) {
       this.send('terminal.resize', { sessionId: this.currentSessionId, cols, rows });
     }
+  }
+
+  // Category methods
+
+  listCategories(): void {
+    this.send('category.list');
+  }
+
+  createCategory(name: string): void {
+    this.send('category.create', { name });
+  }
+
+  renameCategory(categoryId: string, name: string): void {
+    this.send('category.rename', { categoryId, name });
+  }
+
+  deleteCategory(categoryId: string): void {
+    this.send('category.delete', { categoryId });
+  }
+
+  toggleCategory(categoryId: string, collapsed: boolean): void {
+    this.send('category.toggle', { categoryId, collapsed });
+  }
+
+  moveSession(sessionId: string, categoryId: string | null): void {
+    this.send('session.move', { sessionId, categoryId });
   }
 
   // Modal handlers
@@ -631,6 +978,48 @@ class SessionManager {
     if (this.currentSessionId) {
       this.terminateSession(this.currentSessionId);
     }
+  }
+
+  // Category modal handlers
+
+  private categoryModalMode: 'create' | 'rename' = 'create';
+  private categoryModalCategoryId: string | null = null;
+
+  private showCategoryModal(mode: 'create' | 'rename', category?: CategoryInfo): void {
+    this.categoryModalMode = mode;
+    this.categoryModalCategoryId = category?.id || null;
+
+    const modal = document.getElementById('category-modal');
+    const title = document.getElementById('category-modal-title');
+    const input = document.getElementById('category-name-input') as HTMLInputElement;
+
+    if (modal && title && input) {
+      modal.classList.remove('hidden');
+      title.textContent = mode === 'create' ? 'Create Category' : 'Rename Category';
+      input.value = category?.name || '';
+      input.focus();
+      input.select();
+    }
+  }
+
+  private hideCategoryModal(): void {
+    document.getElementById('category-modal')?.classList.add('hidden');
+    this.categoryModalCategoryId = null;
+  }
+
+  private confirmCategoryAction(): void {
+    const input = document.getElementById('category-name-input') as HTMLInputElement;
+    const name = input.value.trim();
+
+    if (!name) return;
+
+    if (this.categoryModalMode === 'create') {
+      this.createCategory(name);
+    } else if (this.categoryModalMode === 'rename' && this.categoryModalCategoryId) {
+      this.renameCategory(this.categoryModalCategoryId, name);
+    }
+
+    this.hideCategoryModal();
   }
 }
 

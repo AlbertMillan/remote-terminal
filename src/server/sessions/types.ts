@@ -44,4 +44,14 @@ export interface SessionMetadata {
   cols: number;
   rows: number;
   tmuxSession: string | null;
+  categoryId: string | null;
+}
+
+export interface CategoryMetadata {
+  id: string;
+  name: string;
+  sortOrder: number;
+  collapsed: boolean;
+  ownerId: string | null;
+  createdAt: string;
 }

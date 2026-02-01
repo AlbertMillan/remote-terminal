@@ -152,6 +152,7 @@ class SessionManager {
       cols,
       rows,
       tmuxSession: tmuxSession || null,
+      categoryId: null,
     };
     insertSession(metadata);
     logSessionEvent(id, 'created', JSON.stringify({ shell, cwd }));
