@@ -1,11 +1,15 @@
-import { exec, spawn } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { isWindows } from '../utils/platform.js';
 import { createLogger } from '../utils/logger.js';
 import { saveScrollback, getScrollback } from '../db/queries.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const logger = createLogger('persistence');
+
+// Validation pattern for tmux session names (alphanumeric, underscore, hyphen)
+const VALID_SESSION_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 export interface TmuxSession {
   name: string;
@@ -30,12 +34,15 @@ export async function createTmuxSession(sessionName: string, shell: string, cwd:
     return false;
   }
 
+  // Validate session name to prevent injection
+  if (!VALID_SESSION_NAME_PATTERN.test(sessionName)) {
+    logger.warn({ sessionName }, 'Invalid tmux session name format');
+    return false;
+  }
+
   try {
-    // Create detached tmux session
-    await execAsync(
-      `tmux new-session -d -s "${sessionName}" -c "${cwd}" "${shell}"`,
-      { cwd }
-    );
+    // Create detached tmux session using execFile with argument array (prevents shell injection)
+    await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-c', cwd, shell], { cwd });
     logger.info({ sessionName, shell, cwd }, 'Created tmux session');
     return true;
   } catch (error) {
@@ -64,8 +71,15 @@ export async function attachToTmuxSession(sessionName: string): Promise<{ stdin:
 export async function killTmuxSession(sessionName: string): Promise<boolean> {
   if (!(await isTmuxAvailable())) return false;
 
+  // Validate session name to prevent injection
+  if (!VALID_SESSION_NAME_PATTERN.test(sessionName)) {
+    logger.warn({ sessionName }, 'Invalid tmux session name format');
+    return false;
+  }
+
   try {
-    await execAsync(`tmux kill-session -t "${sessionName}"`);
+    // Use execFile with argument array (prevents shell injection)
+    await execFileAsync('tmux', ['kill-session', '-t', sessionName]);
     logger.info({ sessionName }, 'Killed tmux session');
     return true;
   } catch (error) {
@@ -78,7 +92,12 @@ export async function listTmuxSessions(): Promise<TmuxSession[]> {
   if (!(await isTmuxAvailable())) return [];
 
   try {
-    const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}:#{session_attached}:#{session_windows}"');
+    // Use execFile with argument array (prevents shell injection)
+    const { stdout } = await execFileAsync('tmux', [
+      'list-sessions',
+      '-F',
+      '#{session_name}:#{session_attached}:#{session_windows}'
+    ]);
     return stdout
       .trim()
       .split('\n')

@@ -31,10 +31,18 @@ const mockDb = {
   exec: vi.fn(),
   prepare: vi.fn(() => mockStmt),
   close: vi.fn(),
+  transaction: vi.fn((fn: () => void) => fn),
 };
 
 vi.mock('better-sqlite3', () => ({
   default: vi.fn(() => mockDb),
+}));
+
+// Mock database schema
+vi.mock('../src/server/db/schema.js', () => ({
+  getDatabase: vi.fn(() => mockDb),
+  initDatabase: vi.fn(() => mockDb),
+  closeDatabase: vi.fn(),
 }));
 
 // Mock config
@@ -303,5 +311,507 @@ describe('IP Address Validation', () => {
     expect(IP_REGEX.test('$(whoami)')).toBe(false);
     expect(IP_REGEX.test('127.0.0.1`id`')).toBe(false);
     expect(IP_REGEX.test('192.168.1.1 && cat /etc/passwd')).toBe(false);
+  });
+});
+
+describe('SessionManager', () => {
+  // Import after mocks are set up
+  let createSessionManager: () => any;
+
+  beforeEach(async () => {
+    // Reset mocks
+    vi.clearAllMocks();
+    mockStmt.get.mockReturnValue({ count: 0 });
+    mockStmt.all.mockReturnValue([]);
+
+    // Dynamically import to get fresh instance
+    const managerModule = await import('../src/server/sessions/manager.js');
+    createSessionManager = managerModule.createSessionManager;
+  });
+
+  it('should create a session with default options', async () => {
+    const manager = createSessionManager();
+
+    const session = await manager.createSession();
+
+    expect(session).toBeDefined();
+    expect(session.id).toBeDefined();
+    expect(session.name).toMatch(/^Session \d+$/);
+    expect(session.shell).toBe('/bin/bash');
+    expect(session.status).toBe('active');
+    expect(session.cols).toBe(80);
+    expect(session.rows).toBe(24);
+
+    await manager.shutdown();
+  });
+
+  it('should create a session with custom options', async () => {
+    const manager = createSessionManager();
+
+    const session = await manager.createSession({
+      name: 'Custom Session',
+      cols: 120,
+      rows: 40,
+    });
+
+    expect(session.name).toBe('Custom Session');
+    expect(session.cols).toBe(120);
+    expect(session.rows).toBe(40);
+
+    await manager.shutdown();
+  });
+
+  it('should get session by id', async () => {
+    const manager = createSessionManager();
+    const created = await manager.createSession({ name: 'Test' });
+
+    const retrieved = manager.getSession(created.id);
+
+    expect(retrieved).toBeDefined();
+    expect(retrieved?.id).toBe(created.id);
+    expect(retrieved?.name).toBe('Test');
+
+    await manager.shutdown();
+  });
+
+  it('should return undefined for non-existent session', async () => {
+    const manager = createSessionManager();
+
+    const session = manager.getSession('non-existent-id');
+
+    expect(session).toBeUndefined();
+
+    await manager.shutdown();
+  });
+
+  it('should list all active sessions', async () => {
+    const manager = createSessionManager();
+    await manager.createSession({ name: 'Session 1' });
+    await manager.createSession({ name: 'Session 2' });
+
+    const sessions = manager.getAllSessions();
+
+    expect(sessions.length).toBe(2);
+    expect(sessions.map(s => s.name)).toContain('Session 1');
+    expect(sessions.map(s => s.name)).toContain('Session 2');
+
+    await manager.shutdown();
+  });
+
+  it('should terminate a session', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession({ name: 'To Terminate' });
+
+    const result = await manager.terminateSession(session.id);
+
+    expect(result).toBe(true);
+    expect(manager.getSession(session.id)).toBeUndefined();
+    expect(mockPty.kill).toHaveBeenCalled();
+
+    await manager.shutdown();
+  });
+
+  it('should return false when terminating non-existent session', async () => {
+    const manager = createSessionManager();
+
+    const result = await manager.terminateSession('non-existent');
+
+    expect(result).toBe(false);
+
+    await manager.shutdown();
+  });
+
+  it('should rename a session', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession({ name: 'Original' });
+
+    const result = manager.renameSession(session.id, 'Renamed');
+
+    expect(result).toBe(true);
+    expect(manager.getSession(session.id)?.name).toBe('Renamed');
+
+    await manager.shutdown();
+  });
+
+  it('should write data to session', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+
+    const result = manager.writeToSession(session.id, 'test input');
+
+    expect(result).toBe(true);
+    expect(mockPty.write).toHaveBeenCalledWith('test input');
+
+    await manager.shutdown();
+  });
+
+  it('should resize a session', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+
+    const result = manager.resizeSession(session.id, 200, 50);
+
+    expect(result).toBe(true);
+    expect(mockPty.resize).toHaveBeenCalledWith(200, 50);
+    expect(manager.getSession(session.id)?.cols).toBe(200);
+    expect(manager.getSession(session.id)?.rows).toBe(50);
+
+    await manager.shutdown();
+  });
+
+  it('should track connected clients', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+
+    manager.addClient(session.id, 'client-1');
+    manager.addClient(session.id, 'client-2');
+
+    expect(manager.getSession(session.id)?.connectedClients.size).toBe(2);
+
+    manager.removeClient(session.id, 'client-1');
+
+    expect(manager.getSession(session.id)?.connectedClients.size).toBe(1);
+
+    await manager.shutdown();
+  });
+
+  it('should register and call data listeners', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+    const listener = vi.fn();
+
+    manager.onData(session.id, listener);
+
+    // Simulate PTY data
+    const dataCallback = (mockPty as any)._dataCallback;
+    dataCallback('test output');
+
+    expect(listener).toHaveBeenCalledWith('test output');
+
+    await manager.shutdown();
+  });
+
+  it('should unsubscribe data listeners', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+    const listener = vi.fn();
+
+    const unsubscribe = manager.onData(session.id, listener);
+    unsubscribe();
+
+    // Simulate PTY data
+    const dataCallback = (mockPty as any)._dataCallback;
+    dataCallback('test output');
+
+    expect(listener).not.toHaveBeenCalled();
+
+    await manager.shutdown();
+  });
+
+  it('should get scrollback from buffer', async () => {
+    const manager = createSessionManager();
+    const session = await manager.createSession();
+
+    // Simulate PTY output
+    const dataCallback = (mockPty as any)._dataCallback;
+    dataCallback('line1\nline2\nline3\n');
+
+    const scrollback = manager.getScrollback(session.id);
+
+    expect(scrollback).toContain('line1');
+    expect(scrollback).toContain('line2');
+    expect(scrollback).toContain('line3');
+
+    await manager.shutdown();
+  });
+});
+
+describe('SessionManager - Session Limits', () => {
+  let createSessionManager: () => any;
+  let getConfig: any;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Mock config with low session limit
+    const configModule = await import('../src/server/config.js');
+    getConfig = configModule.getConfig as any;
+    getConfig.mockReturnValue({
+      sessions: {
+        maxSessions: 2,
+        defaultShell: undefined,
+        idleTimeoutMinutes: 0,
+      },
+      persistence: {
+        scrollbackLines: 10000,
+        dataDir: '/tmp/test',
+      },
+    });
+
+    mockStmt.get.mockReturnValue({ count: 0 });
+
+    const managerModule = await import('../src/server/sessions/manager.js');
+    createSessionManager = managerModule.createSessionManager;
+  });
+
+  it('should enforce session limit', async () => {
+    const manager = createSessionManager();
+
+    // Update mock to simulate session count
+    let sessionCount = 0;
+    mockStmt.get.mockImplementation(() => ({ count: sessionCount }));
+
+    await manager.createSession({ name: 'Session 1' });
+    sessionCount = 1;
+
+    await manager.createSession({ name: 'Session 2' });
+    sessionCount = 2;
+
+    // Third session should fail
+    await expect(manager.createSession({ name: 'Session 3' }))
+      .rejects.toThrow('Maximum session limit (2) reached');
+
+    await manager.shutdown();
+  });
+});
+
+describe('ScrollbackBuffer - Circular Buffer Behavior', () => {
+  it('should maintain correct order with circular wrap', () => {
+    const buffer = new ScrollbackBuffer(5);
+
+    // Add more lines than buffer size
+    buffer.push('line1\nline2\nline3\nline4\nline5\nline6\nline7\n');
+
+    const all = buffer.getAll();
+
+    // Should contain only the last 5 lines
+    expect(all.length).toBe(5);
+    expect(all[0]).toBe('line3');
+    expect(all[1]).toBe('line4');
+    expect(all[2]).toBe('line5');
+    expect(all[3]).toBe('line6');
+    expect(all[4]).toBe('line7');
+  });
+
+  it('should handle multiple pushes with wrap-around', () => {
+    const buffer = new ScrollbackBuffer(3);
+
+    buffer.push('a\nb\n');
+    buffer.push('c\nd\n');
+    buffer.push('e\n');
+
+    const all = buffer.getAll();
+
+    expect(all.length).toBe(3);
+    expect(all).toContain('c');
+    expect(all).toContain('d');
+    expect(all).toContain('e');
+  });
+
+  it('should handle empty buffer', () => {
+    const buffer = new ScrollbackBuffer(10);
+
+    expect(buffer.getAll()).toEqual([]);
+    expect(buffer.length).toBe(0);
+  });
+
+  it('should handle only partial line', () => {
+    const buffer = new ScrollbackBuffer(10);
+
+    buffer.push('partial without newline');
+
+    const all = buffer.getAll();
+    expect(all.length).toBe(1);
+    expect(all[0]).toBe('partial without newline');
+  });
+});
+
+describe('WebSocket Protocol - All Message Types', () => {
+  describe('createMessage', () => {
+    it('should create session.created message', () => {
+      const session = {
+        id: '123',
+        name: 'Test',
+        shell: '/bin/bash',
+        cwd: '/home',
+        createdAt: '2024-01-01',
+        lastAccessedAt: '2024-01-01',
+        status: 'active',
+        cols: 80,
+        rows: 24,
+        attachable: true,
+        categoryId: null,
+      };
+      const msg = createMessage('session.created', { session });
+      const parsed = JSON.parse(msg);
+
+      expect(parsed.type).toBe('session.created');
+      expect(parsed.payload.session.id).toBe('123');
+      expect(parsed.payload.session.name).toBe('Test');
+    });
+
+    it('should create terminal.data message', () => {
+      const msg = createMessage('terminal.data', { sessionId: '123', data: 'output' });
+      const parsed = JSON.parse(msg);
+
+      expect(parsed.type).toBe('terminal.data');
+      expect(parsed.payload.sessionId).toBe('123');
+      expect(parsed.payload.data).toBe('output');
+    });
+
+    it('should create error message', () => {
+      const msg = createMessage('error', { message: 'Something went wrong' });
+      const parsed = JSON.parse(msg);
+
+      expect(parsed.type).toBe('error');
+      expect(parsed.payload.message).toBe('Something went wrong');
+    });
+
+    it('should create notification message', () => {
+      const msg = createMessage('notification', {
+        sessionId: '123',
+        type: 'needs-input',
+        timestamp: '2024-01-01T00:00:00Z',
+      });
+      const parsed = JSON.parse(msg);
+
+      expect(parsed.type).toBe('notification');
+      expect(parsed.payload.type).toBe('needs-input');
+    });
+  });
+
+  describe('parseMessage', () => {
+    it('should parse session.create message', () => {
+      const msg = parseMessage('{"type":"session.create","id":"1","payload":{"name":"Test","cols":100}}');
+
+      expect(msg?.type).toBe('session.create');
+      expect((msg?.payload as any).name).toBe('Test');
+      expect((msg?.payload as any).cols).toBe(100);
+    });
+
+    it('should parse terminal.data message', () => {
+      const msg = parseMessage('{"type":"terminal.data","payload":{"sessionId":"123","data":"input"}}');
+
+      expect(msg?.type).toBe('terminal.data');
+      expect((msg?.payload as any).sessionId).toBe('123');
+      expect((msg?.payload as any).data).toBe('input');
+    });
+
+    it('should parse terminal.resize message', () => {
+      const msg = parseMessage('{"type":"terminal.resize","payload":{"sessionId":"123","cols":120,"rows":40}}');
+
+      expect(msg?.type).toBe('terminal.resize');
+      expect((msg?.payload as any).cols).toBe(120);
+      expect((msg?.payload as any).rows).toBe(40);
+    });
+
+    it('should handle malformed JSON gracefully', () => {
+      expect(parseMessage('{')).toBeNull();
+      expect(parseMessage('')).toBeNull();
+      expect(parseMessage('null')).toBeNull();
+      expect(parseMessage('[]')).toBeNull();
+    });
+
+    it('should reject messages with non-string type', () => {
+      expect(parseMessage('{"type":123}')).toBeNull();
+      expect(parseMessage('{"type":null}')).toBeNull();
+      expect(parseMessage('{"type":[]}')).toBeNull();
+    });
+  });
+});
+
+describe('RateLimiter - Edge Cases', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should not exceed max tokens on refill', () => {
+    const limiter = new RateLimiter(5, 100);
+
+    // Use one token
+    limiter.tryAcquire('client1');
+    expect(limiter.getRemainingTokens('client1')).toBe(4);
+
+    // Wait a long time
+    vi.advanceTimersByTime(10000);
+
+    // Should not exceed max
+    limiter.tryAcquire('client1');
+    expect(limiter.getRemainingTokens('client1')).toBe(4); // 5 max, minus 1 used
+  });
+
+  it('should handle rapid requests', () => {
+    const limiter = new RateLimiter(10, 10);
+
+    // Rapidly acquire all tokens
+    for (let i = 0; i < 10; i++) {
+      expect(limiter.tryAcquire('rapid')).toBe(true);
+    }
+
+    // Next should fail
+    expect(limiter.tryAcquire('rapid')).toBe(false);
+
+    // Wait for one token
+    vi.advanceTimersByTime(10);
+    expect(limiter.tryAcquire('rapid')).toBe(true);
+  });
+
+  it('should handle zero remaining tokens correctly', () => {
+    const limiter = new RateLimiter(1, 1000);
+
+    expect(limiter.tryAcquire('client')).toBe(true);
+    expect(limiter.getRemainingTokens('client')).toBe(0);
+    expect(limiter.tryAcquire('client')).toBe(false);
+  });
+});
+
+describe('Terminal Dimension Validation', () => {
+  const MIN_TERMINAL_DIMENSION = 1;
+  const MAX_TERMINAL_DIMENSION = 500;
+
+  function isValidDimension(value: number): boolean {
+    return !isNaN(value) &&
+           value >= MIN_TERMINAL_DIMENSION &&
+           value <= MAX_TERMINAL_DIMENSION;
+  }
+
+  it('should accept valid dimensions', () => {
+    expect(isValidDimension(80)).toBe(true);
+    expect(isValidDimension(24)).toBe(true);
+    expect(isValidDimension(1)).toBe(true);
+    expect(isValidDimension(500)).toBe(true);
+    expect(isValidDimension(120)).toBe(true);
+  });
+
+  it('should reject invalid dimensions', () => {
+    expect(isValidDimension(0)).toBe(false);
+    expect(isValidDimension(-1)).toBe(false);
+    expect(isValidDimension(501)).toBe(false);
+    expect(isValidDimension(10000)).toBe(false);
+    expect(isValidDimension(NaN)).toBe(false);
+  });
+});
+
+describe('Tmux Session Name Validation', () => {
+  const VALID_SESSION_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+  it('should accept valid session names', () => {
+    expect(VALID_SESSION_NAME_PATTERN.test('claude-remote-abc12345')).toBe(true);
+    expect(VALID_SESSION_NAME_PATTERN.test('session_1')).toBe(true);
+    expect(VALID_SESSION_NAME_PATTERN.test('MySession')).toBe(true);
+    expect(VALID_SESSION_NAME_PATTERN.test('test-session-123')).toBe(true);
+  });
+
+  it('should reject invalid session names', () => {
+    expect(VALID_SESSION_NAME_PATTERN.test('session; rm -rf /')).toBe(false);
+    expect(VALID_SESSION_NAME_PATTERN.test('$(whoami)')).toBe(false);
+    expect(VALID_SESSION_NAME_PATTERN.test('session name')).toBe(false);
+    expect(VALID_SESSION_NAME_PATTERN.test('session\nname')).toBe(false);
+    expect(VALID_SESSION_NAME_PATTERN.test('')).toBe(false);
+    expect(VALID_SESSION_NAME_PATTERN.test('session"name')).toBe(false);
   });
 });

@@ -925,11 +925,17 @@ class SessionManager {
     if (session.status === 'terminated') li.classList.add('terminated');
     if (!session.attachable) li.classList.add('not-attachable');
 
-    // Check for notification badge
+    // Check for notification badge - validate notification type to prevent XSS
     const notification = this.sessionNotifications.get(session.id);
-    const badgeHtml = notification
-      ? `<span class="notification-badge ${notification.type}" title="${notification.type === 'needs-input' ? 'Waiting for input' : 'Task completed'}"></span>`
+    const validNotificationTypes = ['needs-input', 'completed'] as const;
+    const notificationType = notification && validNotificationTypes.includes(notification.type) ? notification.type : null;
+    const badgeHtml = notificationType
+      ? `<span class="notification-badge ${notificationType}" title="${notificationType === 'needs-input' ? 'Waiting for input' : 'Task completed'}"></span>`
       : '';
+
+    // Escape values for safe HTML attribute insertion
+    const escapedSessionId = this.escapeAttr(session.id);
+    const escapedStatus = this.escapeHtml(session.status);
 
     li.innerHTML = `
       <span class="session-drag-handle">
@@ -947,9 +953,9 @@ class SessionManager {
       </span>
       <div class="session-info">
         <div class="session-name">${this.escapeHtml(session.name)}</div>
-        <div class="session-status">${session.status}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
+        <div class="session-status">${escapedStatus}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
       </div>
-      <button class="session-delete-btn" title="Delete session" data-session-id="${session.id}">
+      <button class="session-delete-btn" title="Delete session" data-session-id="${escapedSessionId}">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="3 6 5 6 21 6"></polyline>
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -1048,6 +1054,19 @@ class SessionManager {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  /**
+   * Escape a string for use in HTML attributes.
+   * Handles quotes and other characters that could break out of attribute context.
+   */
+  private escapeAttr(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private showTerminal(session: SessionInfo): void {
