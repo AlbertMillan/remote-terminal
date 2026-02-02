@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Remote Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 </head>
@@ -81,12 +84,53 @@
       </div>
 
       <div id="welcome-screen" class="welcome-screen">
+        <div class="welcome-noise"></div>
         <div class="welcome-content">
-          <h2>Welcome to Claude Remote Terminal</h2>
-          <p>Create a new session or select an existing one from the sidebar.</p>
-          <button id="welcome-new-session-btn" class="btn-primary">
-            Create New Session
+          <div class="welcome-ascii">
+<pre>
+ ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗
+██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝
+██║     ██║     ███████║██║   ██║██║  ██║█████╗
+██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝
+╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝
+</pre>
+            <div class="welcome-subtitle">REMOTE TERMINAL</div>
+          </div>
+
+          <div class="welcome-prompt">
+            <span class="prompt-symbol">❯</span>
+            <span class="prompt-text">ready for connection</span>
+            <span class="prompt-cursor"></span>
+          </div>
+
+          <button id="welcome-new-session-btn" class="welcome-btn">
+            <span class="btn-icon">+</span>
+            <span>New Session</span>
+            <span class="btn-hint">⌘N</span>
           </button>
+
+          <div class="welcome-shortcuts">
+            <div class="shortcut-group">
+              <div class="shortcut-item">
+                <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>V</kbd>
+                <span class="shortcut-label">Paste</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Ctrl</kbd><span>+</span><kbd>C</kbd>
+                <span class="shortcut-label">Interrupt</span>
+              </div>
+              <div class="shortcut-item">
+                <kbd>Esc</kbd>
+                <span class="shortcut-label">Close modal</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="welcome-footer">
+            <span class="footer-dot"></span>
+            <span>Secure connection via Tailscale</span>
+          </div>
         </div>
       </div>
 
