@@ -1,6 +1,6 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { isLinux, isMac, isWindows } from '../utils/platform.js';
+import { isWindows } from '../utils/platform.js';
 import { createLogger } from '../utils/logger.js';
 import { saveScrollback, getScrollback } from '../db/queries.js';
 
@@ -119,8 +119,6 @@ export function restoreScrollback(sessionId: string): string[] {
 
 // Get persistence strategy for current platform
 export function getPersistenceStrategy(): 'tmux' | 'scrollback' {
-  if (isLinux() || isMac()) {
-    return 'tmux';
-  }
-  return 'scrollback';
+  // tmux is available on Linux and macOS, Windows uses scrollback persistence
+  return isWindows() ? 'scrollback' : 'tmux';
 }

@@ -22,6 +22,10 @@ import {
 
 const logger = createLogger('session-manager');
 
+// Configuration constants
+const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
+const DB_UPDATE_DEBOUNCE_MS = 5000; // Debounce database updates for session activity
+
 class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
   private dataListeners: Map<string, Set<(data: string) => void>> = new Map();
@@ -51,7 +55,7 @@ class SessionManager {
           }
         }
       }
-    }, 60000); // Check every minute
+    }, IDLE_CHECK_INTERVAL_MS);
   }
 
   async createSession(options: SessionCreateOptions = {}): Promise<ActiveSession> {
@@ -136,10 +140,7 @@ class SessionManager {
       this.handleSessionExit(id, exitCode);
     });
 
-    // Store session
-    this.activeSessions.set(id, session);
-
-    // Persist to database
+    // Persist to database first - if this fails, clean up PTY
     const metadata: SessionMetadata = {
       id,
       name,
@@ -154,8 +155,23 @@ class SessionManager {
       tmuxSession: tmuxSession || null,
       categoryId: null,
     };
-    insertSession(metadata);
-    logSessionEvent(id, 'created', JSON.stringify({ shell, cwd }));
+
+    try {
+      insertSession(metadata);
+      logSessionEvent(id, 'created', JSON.stringify({ shell, cwd }));
+    } catch (error) {
+      // Database insert failed - clean up PTY to avoid zombie process
+      logger.error({ id, error }, 'Failed to persist session to database, cleaning up PTY');
+      killPty(pty);
+      if (tmuxSession) {
+        killTmuxSession(tmuxSession).catch(() => {});
+      }
+      this.scrollbackBuffers.delete(id);
+      throw error;
+    }
+
+    // Only add to active sessions after successful database insert
+    this.activeSessions.set(id, session);
 
     logger.info({ id, name, pid: pty.pid }, 'Session created successfully');
 
@@ -340,7 +356,7 @@ class SessionManager {
     session.lastAccessedAt = new Date();
     session.status = 'active';
 
-    // Debounce database update to at most once per 5 seconds
+    // Debounce database updates for session activity
     if (!this.touchDebounceTimers.has(id)) {
       this.touchDebounceTimers.set(id, setTimeout(() => {
         this.touchDebounceTimers.delete(id);
@@ -351,7 +367,7 @@ class SessionManager {
             status: 'active',
           });
         }
-      }, 5000));
+      }, DB_UPDATE_DEBOUNCE_MS));
     }
   }
 
@@ -417,4 +433,37 @@ class SessionManager {
 }
 
 // Singleton instance
-export const sessionManager = new SessionManager();
+let sessionManagerInstance: SessionManager | null = null;
+
+/**
+ * Get the singleton SessionManager instance.
+ * Creates a new instance if one doesn't exist.
+ */
+export function getSessionManager(): SessionManager {
+  if (!sessionManagerInstance) {
+    sessionManagerInstance = new SessionManager();
+  }
+  return sessionManagerInstance;
+}
+
+/**
+ * Create a new SessionManager instance.
+ * Useful for testing where you need isolated instances.
+ */
+export function createSessionManager(): SessionManager {
+  return new SessionManager();
+}
+
+/**
+ * Reset the singleton instance.
+ * Only use this in tests to ensure clean state between test runs.
+ */
+export async function resetSessionManager(): Promise<void> {
+  if (sessionManagerInstance) {
+    await sessionManagerInstance.shutdown();
+    sessionManagerInstance = null;
+  }
+}
+
+// Default export for backward compatibility
+export const sessionManager = getSessionManager();

@@ -490,11 +490,22 @@ function handleTerminalResize(connection: ClientConnection, message: ClientMessa
     return;
   }
 
+  // Validate terminal dimensions
+  const cols = Number(payload.cols);
+  const rows = Number(payload.rows);
+  if (
+    isNaN(cols) || isNaN(rows) ||
+    cols < MIN_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION ||
+    rows < MIN_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION
+  ) {
+    return;
+  }
+
   if (connection.attachedSession !== payload.sessionId) {
     return;
   }
 
-  sessionManager.resizeSession(payload.sessionId, payload.cols, payload.rows);
+  sessionManager.resizeSession(payload.sessionId, cols, rows);
 }
 
 function attachToSession(connection: ClientConnection, sessionId: string): void {

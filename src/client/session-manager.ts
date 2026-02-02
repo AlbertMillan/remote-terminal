@@ -1,6 +1,13 @@
 // Session and WebSocket management
 import { terminalManager, TerminalManager } from './terminal.js';
 
+// Configuration constants
+const REQUEST_TIMEOUT_MS = 30000;
+const NOTIFICATION_AUTO_CLOSE_MS = 10000;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const SESSION_REATTACH_DELAY_MS = 100;
+
 interface SessionInfo {
   id: string;
   name: string;
@@ -153,8 +160,8 @@ class SessionManager {
   private messageId = 0;
   private pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+  private maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+  private reconnectDelay = RECONNECT_BASE_DELAY_MS;
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
   private draggedSessionId: string | null = null;
 
@@ -218,8 +225,8 @@ class SessionManager {
       notification.close();
     };
 
-    // Auto-close after 10 seconds
-    setTimeout(() => notification.close(), 10000);
+    // Auto-close notification after timeout
+    setTimeout(() => notification.close(), NOTIFICATION_AUTO_CLOSE_MS);
   }
 
   private setupEventListeners(): void {
@@ -316,7 +323,7 @@ class SessionManager {
             console.log('Re-attaching to previous session:', sessionToReattach);
             this.attachToSession(sessionToReattach);
           }
-        }, 100);
+        }, SESSION_REATTACH_DELAY_MS);
       }
     };
 
@@ -368,13 +375,13 @@ class SessionManager {
       const id = this.send(type, payload);
       this.pendingRequests.set(id, { resolve, reject });
 
-      // Timeout after 30 seconds
+      // Timeout pending requests
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
           reject(new Error('Request timeout'));
         }
-      }, 30000);
+      }, REQUEST_TIMEOUT_MS);
     });
   }
 

@@ -71,13 +71,20 @@ export function killPty(ptyProcess: IPty): void {
   }
 }
 
+/**
+ * Circular buffer implementation for terminal scrollback.
+ * Uses O(1) operations instead of O(n) array shifts.
+ */
 export class ScrollbackBuffer {
-  private buffer: string[] = [];
+  private buffer: string[];
   private maxLines: number;
+  private head: number = 0; // Next write position
+  private size: number = 0; // Current number of lines
   private partialLine: string = '';
 
   constructor(maxLines?: number) {
     this.maxLines = maxLines || getConfig().persistence.scrollbackLines;
+    this.buffer = new Array(this.maxLines);
   }
 
   push(data: string): void {
@@ -88,21 +95,34 @@ export class ScrollbackBuffer {
     // Last element might be a partial line (no trailing newline)
     this.partialLine = lines.pop() || '';
 
-    // Add complete lines to buffer
+    // Add complete lines to circular buffer
     for (const line of lines) {
-      this.buffer.push(line);
-      if (this.buffer.length > this.maxLines) {
-        this.buffer.shift();
+      this.buffer[this.head] = line;
+      this.head = (this.head + 1) % this.maxLines;
+      if (this.size < this.maxLines) {
+        this.size++;
       }
     }
   }
 
   getAll(): string[] {
+    if (this.size === 0) {
+      return this.partialLine ? [this.partialLine] : [];
+    }
+
+    const result: string[] = new Array(this.size);
+    // Start reading from the oldest entry
+    const start = this.size < this.maxLines ? 0 : this.head;
+
+    for (let i = 0; i < this.size; i++) {
+      result[i] = this.buffer[(start + i) % this.maxLines];
+    }
+
     // Include partial line if present
     if (this.partialLine) {
-      return [...this.buffer, this.partialLine];
+      result.push(this.partialLine);
     }
-    return [...this.buffer];
+    return result;
   }
 
   getRecent(count: number): string[] {
@@ -111,11 +131,14 @@ export class ScrollbackBuffer {
   }
 
   clear(): void {
-    this.buffer = [];
+    this.head = 0;
+    this.size = 0;
     this.partialLine = '';
+    // Clear references to allow GC
+    this.buffer = new Array(this.maxLines);
   }
 
   get length(): number {
-    return this.buffer.length + (this.partialLine ? 1 : 0);
+    return this.size + (this.partialLine ? 1 : 0);
   }
 }

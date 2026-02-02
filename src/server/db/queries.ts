@@ -12,17 +12,35 @@ function getStatement(key: string, sql: string): Database.Statement {
   return stmtCache.get(key)!;
 }
 
+/**
+ * Execute a cached statement with automatic cache invalidation on error.
+ * Clears the specific cache entry if the statement fails (e.g., schema changed).
+ */
+function executeStatement<T>(
+  key: string,
+  sql: string,
+  executor: (stmt: Database.Statement) => T
+): T {
+  try {
+    const stmt = getStatement(key, sql);
+    return executor(stmt);
+  } catch (error) {
+    // Clear this specific cache entry on error - statement may be stale
+    stmtCache.delete(key);
+    throw error;
+  }
+}
+
 // Clear cache when database is closed (call from schema.ts closeDatabase)
 export function clearStatementCache(): void {
   stmtCache.clear();
 }
 
 export function insertSession(session: SessionMetadata): void {
-  const stmt = getStatement('insertSession', `
+  executeStatement('insertSession', `
     INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  stmt.run(
+  `, (stmt) => stmt.run(
     session.id,
     session.name,
     session.shell,
@@ -35,7 +53,7 @@ export function insertSession(session: SessionMetadata): void {
     session.rows,
     session.tmuxSession,
     session.categoryId
-  );
+  ));
 }
 
 export function updateSession(
@@ -75,13 +93,14 @@ export function updateSession(
 }
 
 export function getSession(id: string): SessionMetadata | null {
-  const stmt = getStatement('getSession', `
+  return executeStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
     FROM sessions WHERE id = ?
-  `);
-  const row = stmt.get(id) as SessionMetadata | undefined;
-  return row || null;
+  `, (stmt) => {
+    const row = stmt.get(id) as SessionMetadata | undefined;
+    return row || null;
+  });
 }
 
 export function getAllSessions(ownerId?: string): SessionMetadata[] {
@@ -147,9 +166,13 @@ export function getSessionLogs(sessionId: string, limit = 100): { eventType: str
 }
 
 export function countActiveSessions(): number {
-  const stmt = getStatement('countActiveSessions', "SELECT COUNT(*) as count FROM sessions WHERE status != 'terminated'");
-  const row = stmt.get() as { count: number };
-  return row.count;
+  return executeStatement('countActiveSessions',
+    "SELECT COUNT(*) as count FROM sessions WHERE status != 'terminated'",
+    (stmt) => {
+      const row = stmt.get() as { count: number };
+      return row.count;
+    }
+  );
 }
 
 // Category CRUD functions

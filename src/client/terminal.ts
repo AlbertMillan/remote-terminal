@@ -1,8 +1,52 @@
 // Terminal management using xterm.js
 
-declare const Terminal: any;
-declare const FitAddon: any;
-declare const WebLinksAddon: any;
+// Type definitions for xterm.js loaded via script tags
+interface ITerminalOptions {
+  cursorBlink?: boolean;
+  cursorStyle?: 'block' | 'underline' | 'bar';
+  fontSize?: number;
+  fontFamily?: string;
+  lineHeight?: number;
+  theme?: Record<string, string>;
+}
+
+interface ITerminal {
+  cols: number;
+  rows: number;
+  open(container: HTMLElement): void;
+  write(data: string): void;
+  writeln(data: string): void;
+  clear(): void;
+  focus(): void;
+  dispose(): void;
+  onData(callback: (data: string) => void): void;
+  onResize(callback: (size: { cols: number; rows: number }) => void): void;
+  loadAddon(addon: ITerminalAddon): void;
+}
+
+interface ITerminalAddon {
+  dispose?(): void;
+}
+
+interface IFitAddon extends ITerminalAddon {
+  fit(): void;
+}
+
+interface ITerminalConstructor {
+  new (options?: ITerminalOptions): ITerminal;
+}
+
+interface IFitAddonModule {
+  FitAddon: new () => IFitAddon;
+}
+
+interface IWebLinksAddonModule {
+  WebLinksAddon: new () => ITerminalAddon;
+}
+
+declare const Terminal: ITerminalConstructor;
+declare const FitAddon: IFitAddonModule;
+declare const WebLinksAddon: IWebLinksAddonModule;
 
 export interface TerminalOptions {
   container: HTMLElement;
@@ -11,8 +55,8 @@ export interface TerminalOptions {
 }
 
 export class TerminalManager {
-  private terminal: any = null;
-  private fitAddon: any = null;
+  private terminal: ITerminal | null = null;
+  private fitAddon: IFitAddon | null = null;
   private container: HTMLElement | null = null;
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
