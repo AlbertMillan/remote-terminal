@@ -113,6 +113,20 @@ function runMigrations(database: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_sessions_category ON sessions(category_id);
       `,
     },
+    {
+      name: '005_create_notification_preferences',
+      sql: `
+        CREATE TABLE IF NOT EXISTS notification_preferences (
+          user_id TEXT PRIMARY KEY,
+          browser_enabled INTEGER NOT NULL DEFAULT 1,
+          visual_enabled INTEGER NOT NULL DEFAULT 1,
+          notify_on_input INTEGER NOT NULL DEFAULT 1,
+          notify_on_completed INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `,
+    },
   ];
 
   const appliedMigrations = database

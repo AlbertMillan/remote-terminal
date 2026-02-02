@@ -104,6 +104,19 @@ interface ErrorPayload {
   message: string;
 }
 
+interface NotificationPreferencesPayload {
+  browserEnabled: boolean;
+  visualEnabled: boolean;
+  notifyOnInput: boolean;
+  notifyOnCompleted: boolean;
+}
+
+interface NotificationPayload {
+  sessionId: string;
+  type: 'needs-input' | 'completed';
+  timestamp: string;
+}
+
 type ServerMessage =
   | { type: 'auth.success'; id?: string; payload: AuthSuccessPayload }
   | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
@@ -123,6 +136,9 @@ type ServerMessage =
   | { type: 'category.reordered'; id?: string; payload: CategoryReorderedPayload }
   | { type: 'category.toggled'; id?: string; payload: CategoryToggledPayload }
   | { type: 'category.list'; id?: string; payload: CategoryListPayload }
+  | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
+  | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
+  | { type: 'notification'; id?: string; payload: NotificationPayload }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };
 
@@ -142,10 +158,68 @@ class SessionManager {
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
   private draggedSessionId: string | null = null;
 
+  // Notification state
+  private sessionNotifications: Map<string, { type: 'needs-input' | 'completed'; timestamp: string }> = new Map();
+  private notificationPreferences: NotificationPreferencesPayload = {
+    browserEnabled: true,
+    visualEnabled: true,
+    notifyOnInput: true,
+    notifyOnCompleted: true,
+  };
+  private browserNotificationsPermission: 'default' | 'granted' | 'denied' = 'default';
+
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
     this.setupEventListeners();
+    this.initBrowserNotifications();
     this.connect();
+  }
+
+  private initBrowserNotifications(): void {
+    if ('Notification' in window) {
+      this.browserNotificationsPermission = window.Notification.permission as 'default' | 'granted' | 'denied';
+    }
+  }
+
+  private async requestNotificationPermission(): Promise<boolean> {
+    if (!('Notification' in window)) {
+      return false;
+    }
+
+    if (window.Notification.permission === 'granted') {
+      this.browserNotificationsPermission = 'granted';
+      return true;
+    }
+
+    if (window.Notification.permission === 'denied') {
+      this.browserNotificationsPermission = 'denied';
+      return false;
+    }
+
+    const result = await window.Notification.requestPermission();
+    this.browserNotificationsPermission = result as 'default' | 'granted' | 'denied';
+    return result === 'granted';
+  }
+
+  private showBrowserNotification(title: string, body: string, sessionId: string): void {
+    if (this.browserNotificationsPermission !== 'granted') return;
+    if (!this.notificationPreferences.browserEnabled) return;
+    if (document.hasFocus()) return; // Don't show if tab is focused
+
+    const notification = new window.Notification(title, {
+      body,
+      icon: '/favicon.ico',
+      tag: `session-${sessionId}`,
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      this.attachToSession(sessionId);
+      notification.close();
+    };
+
+    // Auto-close after 10 seconds
+    setTimeout(() => notification.close(), 10000);
   }
 
   private setupEventListeners(): void {
@@ -182,6 +256,11 @@ class SessionManager {
     document.getElementById('category-cancel')?.addEventListener('click', () => this.hideCategoryModal());
     document.getElementById('category-confirm')?.addEventListener('click', () => this.confirmCategoryAction());
 
+    // Settings modal
+    document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
+    document.getElementById('settings-cancel')?.addEventListener('click', () => this.hideSettingsModal());
+    document.getElementById('settings-save')?.addEventListener('click', () => this.saveSettings());
+
     // Terminal header controls
     document.getElementById('rename-session-btn')?.addEventListener('click', () => this.showRenameModal());
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
@@ -192,6 +271,7 @@ class SessionManager {
         this.hideNewSessionModal();
         this.hideRenameModal();
         this.hideCategoryModal();
+        this.hideSettingsModal();
       }
     });
 
@@ -204,6 +284,9 @@ class SessionManager {
     });
     document.getElementById('category-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideCategoryModal();
+    });
+    document.getElementById('settings-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.hideSettingsModal();
     });
   }
 
@@ -221,6 +304,7 @@ class SessionManager {
       this.updateConnectionStatus('connected');
       this.listSessions();
       this.listCategories();
+      this.getNotificationPreferences();
 
       // Re-attach to previous session on reconnect (issue #7)
       if (this.previousSessionId) {
@@ -371,6 +455,15 @@ class SessionManager {
       case 'terminal.exit':
         this.handleTerminalExit(message.payload);
         break;
+      case 'notification.preferences':
+        this.handleNotificationPreferences(message.payload);
+        break;
+      case 'notification.preferences.updated':
+        this.handleNotificationPreferencesUpdated(message.payload);
+        break;
+      case 'notification':
+        this.handleNotification(message.payload);
+        break;
       case 'session.error':
         this.handleSessionError(message.payload);
         break;
@@ -415,6 +508,11 @@ class SessionManager {
   private handleSessionAttached(payload: { session: SessionInfo; scrollback: string }): void {
     this.currentSessionId = payload.session.id;
     this.sessions.set(payload.session.id, payload.session);
+
+    // Clear notification for this session
+    this.sessionNotifications.delete(payload.session.id);
+    this.send('notification.dismiss', { sessionId: payload.session.id });
+
     this.renderSessionList();
     this.showTerminal(payload.session);
 
@@ -542,6 +640,59 @@ class SessionManager {
     if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
       this.terminalMgr.writeln(`\r\n[Process exited with code ${payload.exitCode}]`);
     }
+  }
+
+  private handleNotificationPreferences(payload: NotificationPreferencesPayload): void {
+    this.notificationPreferences = payload;
+    this.updateSettingsUI();
+  }
+
+  private handleNotificationPreferencesUpdated(payload: NotificationPreferencesPayload): void {
+    this.notificationPreferences = payload;
+    this.updateSettingsUI();
+  }
+
+  private handleNotification(payload: NotificationPayload): void {
+    const session = this.sessions.get(payload.sessionId);
+    if (!session) return;
+
+    // Don't notify for current session if we're focused
+    if (payload.sessionId === this.currentSessionId && document.hasFocus()) {
+      return;
+    }
+
+    // Store notification for visual badge
+    if (this.notificationPreferences.visualEnabled) {
+      this.sessionNotifications.set(payload.sessionId, {
+        type: payload.type,
+        timestamp: payload.timestamp,
+      });
+      this.renderSessionList();
+    }
+
+    // Show browser notification
+    if (this.notificationPreferences.browserEnabled) {
+      const title = payload.type === 'needs-input'
+        ? `Input Required: ${session.name}`
+        : `Task Completed: ${session.name}`;
+      const body = payload.type === 'needs-input'
+        ? 'Claude Code is waiting for your input'
+        : 'Claude Code has finished the task';
+
+      this.showBrowserNotification(title, body, payload.sessionId);
+    }
+  }
+
+  private updateSettingsUI(): void {
+    const browserCheckbox = document.getElementById('setting-browser-notifications') as HTMLInputElement;
+    const visualCheckbox = document.getElementById('setting-visual-badges') as HTMLInputElement;
+    const inputCheckbox = document.getElementById('setting-notify-input') as HTMLInputElement;
+    const completedCheckbox = document.getElementById('setting-notify-completed') as HTMLInputElement;
+
+    if (browserCheckbox) browserCheckbox.checked = this.notificationPreferences.browserEnabled;
+    if (visualCheckbox) visualCheckbox.checked = this.notificationPreferences.visualEnabled;
+    if (inputCheckbox) inputCheckbox.checked = this.notificationPreferences.notifyOnInput;
+    if (completedCheckbox) completedCheckbox.checked = this.notificationPreferences.notifyOnCompleted;
   }
 
   private updateConnectionStatus(status: ConnectionStatus): void {
@@ -767,6 +918,12 @@ class SessionManager {
     if (session.status === 'terminated') li.classList.add('terminated');
     if (!session.attachable) li.classList.add('not-attachable');
 
+    // Check for notification badge
+    const notification = this.sessionNotifications.get(session.id);
+    const badgeHtml = notification
+      ? `<span class="notification-badge ${notification.type}" title="${notification.type === 'needs-input' ? 'Waiting for input' : 'Task completed'}"></span>`
+      : '';
+
     li.innerHTML = `
       <span class="session-drag-handle">
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -774,6 +931,7 @@ class SessionManager {
           <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
         </svg>
       </span>
+      ${badgeHtml}
       <span class="session-icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="4 17 10 11 4 5"></polyline>
@@ -1096,6 +1254,66 @@ class SessionManager {
     }
 
     this.hideCategoryModal();
+  }
+
+  // Notification preference methods
+
+  getNotificationPreferences(): void {
+    this.send('notification.preferences.get');
+  }
+
+  setNotificationPreferences(prefs: Partial<NotificationPreferencesPayload>): void {
+    this.send('notification.preferences.set', prefs);
+  }
+
+  // Settings modal handlers
+
+  private async showSettingsModal(): Promise<void> {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+
+    // Request browser notification permission if not yet granted
+    if (this.browserNotificationsPermission === 'default') {
+      await this.requestNotificationPermission();
+    }
+
+    // Update permission status display
+    const permissionStatus = document.getElementById('notification-permission-status');
+    if (permissionStatus) {
+      if (this.browserNotificationsPermission === 'granted') {
+        permissionStatus.textContent = 'Browser notifications enabled';
+        permissionStatus.className = 'permission-status granted';
+      } else if (this.browserNotificationsPermission === 'denied') {
+        permissionStatus.textContent = 'Browser notifications blocked';
+        permissionStatus.className = 'permission-status denied';
+      } else {
+        permissionStatus.textContent = 'Browser notifications not enabled';
+        permissionStatus.className = 'permission-status default';
+      }
+    }
+
+    this.updateSettingsUI();
+    modal.classList.remove('hidden');
+  }
+
+  private hideSettingsModal(): void {
+    document.getElementById('settings-modal')?.classList.add('hidden');
+  }
+
+  private saveSettings(): void {
+    const browserCheckbox = document.getElementById('setting-browser-notifications') as HTMLInputElement;
+    const visualCheckbox = document.getElementById('setting-visual-badges') as HTMLInputElement;
+    const inputCheckbox = document.getElementById('setting-notify-input') as HTMLInputElement;
+    const completedCheckbox = document.getElementById('setting-notify-completed') as HTMLInputElement;
+
+    this.setNotificationPreferences({
+      browserEnabled: browserCheckbox?.checked ?? true,
+      visualEnabled: visualCheckbox?.checked ?? true,
+      notifyOnInput: inputCheckbox?.checked ?? true,
+      notifyOnCompleted: completedCheckbox?.checked ?? true,
+    });
+
+    this.hideSettingsModal();
   }
 }
 

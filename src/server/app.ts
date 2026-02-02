@@ -11,6 +11,7 @@ import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { sessionManager } from './sessions/manager.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
+import { notificationService, type NotificationType } from './notifications/service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -98,6 +99,30 @@ export async function createApp(): Promise<FastifyInstance> {
   // API endpoints
   app.get('/api/sessions', async () => {
     return { sessions: sessionManager.getSessionList() };
+  });
+
+  // Notification webhook endpoint
+  app.post<{
+    Params: { sessionId: string; type: string };
+  }>('/api/notify/:sessionId/:type', async (request, reply) => {
+    const { sessionId, type } = request.params;
+
+    // Validate notification type
+    if (type !== 'needs-input' && type !== 'completed') {
+      return reply.status(400).send({ error: 'Invalid notification type. Use "needs-input" or "completed".' });
+    }
+
+    // Validate session exists
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
+      // Session might not be active but still valid - allow notification
+      logger.debug({ sessionId, type }, 'Notification for inactive session');
+    }
+
+    // Trigger notification
+    notificationService.notify(sessionId, type as NotificationType);
+
+    return { success: true, sessionId, type };
   });
 
   // WebSocket endpoint

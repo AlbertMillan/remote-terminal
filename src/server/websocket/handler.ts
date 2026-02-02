@@ -25,6 +25,9 @@ import {
   type CategoryReorderPayload,
   type CategoryTogglePayload,
   type CategoryInfo,
+  type NotificationPreferencesSetPayload,
+  type NotificationDismissPayload,
+  type NotificationPayload,
 } from './protocol.js';
 import {
   insertCategory,
@@ -34,12 +37,16 @@ import {
   updateSessionCategory,
   reorderCategories,
   getCategory,
+  getNotificationPreferences,
+  setNotificationPreferences,
+  type NotificationPreferences,
 } from '../db/queries.js';
 import {
   verifyTailscaleConnection,
   extractIpFromRequest,
   type TailscaleIdentity,
 } from '../auth/tailscale.js';
+import { notificationService, type Notification } from '../notifications/service.js';
 
 const logger = createLogger('websocket');
 
@@ -63,6 +70,36 @@ interface ClientConnection {
 }
 
 const connections = new Map<string, ClientConnection>();
+
+// Register notification service callback
+notificationService.onNotification((notification: Notification) => {
+  handleNotification(notification);
+});
+
+function handleNotification(notification: Notification): void {
+  logger.info({ sessionId: notification.sessionId, type: notification.type }, 'Processing notification');
+
+  // Send notification to all connected clients
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState !== WS_OPEN) continue;
+
+    // Check user preferences
+    const userId = conn.identity?.userId;
+    if (!userId) continue;
+
+    // Check if this notification type is enabled for user
+    if (!notificationService.isNotificationEnabled(userId, notification.type)) continue;
+
+    // Send notification
+    const payload: NotificationPayload = {
+      sessionId: notification.sessionId,
+      type: notification.type,
+      timestamp: notification.timestamp.toISOString(),
+    };
+
+    conn.ws.send(createMessage('notification', payload));
+  }
+}
 
 export async function handleConnection(ws: WebSocket, request: FastifyRequest): Promise<void> {
   const clientId = randomUUID();
@@ -191,6 +228,18 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
     case 'category.list':
       handleCategoryList(connection, message);
+      break;
+
+    case 'notification.preferences.get':
+      handleNotificationPreferencesGet(connection, message);
+      break;
+
+    case 'notification.preferences.set':
+      handleNotificationPreferencesSet(connection, message);
+      break;
+
+    case 'notification.dismiss':
+      handleNotificationDismiss(connection, message);
       break;
 
     case 'terminal.data':
@@ -452,6 +501,9 @@ function attachToSession(connection: ClientConnection, sessionId: string): void 
   connection.attachedSession = sessionId;
   sessionManager.addClient(sessionId, connection.id);
 
+  // Clear any pending notification for this session when user attaches
+  notificationService.clearSessionNotification(sessionId);
+
   // Subscribe to terminal data
   connection.dataUnsubscribe = sessionManager.onData(sessionId, (data) => {
     if (connection.ws.readyState === WS_OPEN) {
@@ -700,6 +752,69 @@ function broadcastSessionMoved(sessionId: string, categoryId: string | null, exc
       conn.ws.send(createMessage('session.moved', { sessionId, categoryId }));
     }
   }
+}
+
+// Notification handlers
+
+function handleNotificationPreferencesGet(connection: ClientConnection, message: ClientMessage): void {
+  const userId = connection.identity?.userId;
+  if (!userId) {
+    connection.ws.send(createMessage('error', { message: 'User not authenticated' }, message.id));
+    return;
+  }
+
+  const prefs = getNotificationPreferences(userId);
+  connection.ws.send(createMessage('notification.preferences', {
+    browserEnabled: prefs.browserEnabled,
+    visualEnabled: prefs.visualEnabled,
+    notifyOnInput: prefs.notifyOnInput,
+    notifyOnCompleted: prefs.notifyOnCompleted,
+  }, message.id));
+}
+
+function handleNotificationPreferencesSet(connection: ClientConnection, message: ClientMessage): void {
+  const userId = connection.identity?.userId;
+  if (!userId) {
+    connection.ws.send(createMessage('error', { message: 'User not authenticated' }, message.id));
+    return;
+  }
+
+  const payload = message.payload as NotificationPreferencesSetPayload;
+  if (!payload) {
+    connection.ws.send(createMessage('error', { message: 'Preferences payload required' }, message.id));
+    return;
+  }
+
+  // Get current preferences and merge with updates
+  const current = getNotificationPreferences(userId);
+  const updated: NotificationPreferences = {
+    userId,
+    browserEnabled: payload.browserEnabled ?? current.browserEnabled,
+    visualEnabled: payload.visualEnabled ?? current.visualEnabled,
+    notifyOnInput: payload.notifyOnInput ?? current.notifyOnInput,
+    notifyOnCompleted: payload.notifyOnCompleted ?? current.notifyOnCompleted,
+  };
+
+  setNotificationPreferences(updated);
+
+  connection.ws.send(createMessage('notification.preferences.updated', {
+    browserEnabled: updated.browserEnabled,
+    visualEnabled: updated.visualEnabled,
+    notifyOnInput: updated.notifyOnInput,
+    notifyOnCompleted: updated.notifyOnCompleted,
+  }, message.id));
+}
+
+function handleNotificationDismiss(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as NotificationDismissPayload;
+  if (!payload?.sessionId) {
+    connection.ws.send(createMessage('error', { message: 'Session ID required' }, message.id));
+    return;
+  }
+
+  // Clear notification for this session
+  notificationService.clearSessionNotification(payload.sessionId);
+  logger.debug({ sessionId: payload.sessionId, clientId: connection.id }, 'Notification dismissed');
 }
 
 export function getActiveConnections(): number {

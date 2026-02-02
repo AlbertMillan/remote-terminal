@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { getDatabase } from './schema.js';
-import type { SessionMetadata, SessionStatus, CategoryMetadata } from '../sessions/types.js';
+import type { SessionMetadata, CategoryMetadata } from '../sessions/types.js';
 
 // Prepared statement cache for performance
 const stmtCache = new Map<string, Database.Statement>();
@@ -245,4 +245,68 @@ export function reorderCategories(categories: { id: string; sortOrder: number }[
     }
   });
   transaction();
+}
+
+// Notification preferences
+
+export interface NotificationPreferences {
+  userId: string;
+  browserEnabled: boolean;
+  visualEnabled: boolean;
+  notifyOnInput: boolean;
+  notifyOnCompleted: boolean;
+}
+
+export function getNotificationPreferences(userId: string): NotificationPreferences {
+  const stmt = getStatement('getNotificationPreferences', `
+    SELECT user_id as userId, browser_enabled as browserEnabled, visual_enabled as visualEnabled,
+           notify_on_input as notifyOnInput, notify_on_completed as notifyOnCompleted
+    FROM notification_preferences WHERE user_id = ?
+  `);
+  const row = stmt.get(userId) as {
+    userId: string;
+    browserEnabled: number;
+    visualEnabled: number;
+    notifyOnInput: number;
+    notifyOnCompleted: number;
+  } | undefined;
+
+  if (!row) {
+    // Return defaults
+    return {
+      userId,
+      browserEnabled: true,
+      visualEnabled: true,
+      notifyOnInput: true,
+      notifyOnCompleted: true,
+    };
+  }
+
+  return {
+    userId: row.userId,
+    browserEnabled: row.browserEnabled === 1,
+    visualEnabled: row.visualEnabled === 1,
+    notifyOnInput: row.notifyOnInput === 1,
+    notifyOnCompleted: row.notifyOnCompleted === 1,
+  };
+}
+
+export function setNotificationPreferences(prefs: NotificationPreferences): void {
+  const stmt = getStatement('setNotificationPreferences', `
+    INSERT INTO notification_preferences (user_id, browser_enabled, visual_enabled, notify_on_input, notify_on_completed, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(user_id) DO UPDATE SET
+      browser_enabled = excluded.browser_enabled,
+      visual_enabled = excluded.visual_enabled,
+      notify_on_input = excluded.notify_on_input,
+      notify_on_completed = excluded.notify_on_completed,
+      updated_at = datetime('now')
+  `);
+  stmt.run(
+    prefs.userId,
+    prefs.browserEnabled ? 1 : 0,
+    prefs.visualEnabled ? 1 : 0,
+    prefs.notifyOnInput ? 1 : 0,
+    prefs.notifyOnCompleted ? 1 : 0
+  );
 }

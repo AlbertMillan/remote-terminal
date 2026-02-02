@@ -1,14 +1,12 @@
 import { randomUUID } from 'crypto';
-import type { IPty } from 'node-pty';
 import { createPty, resizePty, writeToPty, killPty, ScrollbackBuffer } from './pty-handler.js';
-import type { Session, ActiveSession, SessionCreateOptions, SessionMetadata, SessionStatus } from './types.js';
+import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDefaultShell, isWindows } from '../utils/platform.js';
 import {
   insertSession,
   updateSession,
-  getSession as getSessionFromDb,
   getAllSessions as getAllSessionsFromDb,
   deleteSession as deleteSessionFromDb,
   countActiveSessions,
@@ -17,7 +15,6 @@ import {
 import {
   createTmuxSession,
   killTmuxSession,
-  tmuxSessionExists,
   persistScrollback,
   restoreScrollback,
   isTmuxAvailable,
@@ -76,13 +73,16 @@ class SessionManager {
 
     logger.info({ id, name, shell, cwd }, 'Creating new session');
 
-    // Create PTY
+    // Create PTY with session ID environment variable for webhook notifications
     const pty = createPty({
       shell,
       cwd,
       cols,
       rows,
-      env: options.env,
+      env: {
+        ...options.env,
+        CLAUDE_REMOTE_SESSION_ID: id,
+      },
     });
 
     // Try to create tmux session on Linux/Mac

@@ -18,6 +18,9 @@ export type ClientMessageType =
   | 'category.reorder'
   | 'category.toggle'
   | 'category.list'
+  | 'notification.preferences.get'
+  | 'notification.preferences.set'
+  | 'notification.dismiss'
   | 'ping';
 
 export type ServerMessageType =
@@ -40,6 +43,9 @@ export type ServerMessageType =
   | 'category.reordered'
   | 'category.toggled'
   | 'category.list'
+  | 'notification.preferences'
+  | 'notification.preferences.updated'
+  | 'notification'
   | 'error'
   | 'pong';
 
@@ -209,6 +215,32 @@ export interface CategoryListPayload {
 export interface SessionMovedPayload {
   sessionId: string;
   categoryId: string | null;
+}
+
+// Notification payloads
+
+export interface NotificationPreferencesPayload {
+  browserEnabled: boolean;
+  visualEnabled: boolean;
+  notifyOnInput: boolean;
+  notifyOnCompleted: boolean;
+}
+
+export interface NotificationPreferencesSetPayload {
+  browserEnabled?: boolean;
+  visualEnabled?: boolean;
+  notifyOnInput?: boolean;
+  notifyOnCompleted?: boolean;
+}
+
+export interface NotificationDismissPayload {
+  sessionId: string;
+}
+
+export interface NotificationPayload {
+  sessionId: string;
+  type: 'needs-input' | 'completed';
+  timestamp: string;
 }
 
 // Helper functions
