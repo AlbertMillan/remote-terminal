@@ -163,18 +163,12 @@ export async function getTailscaleCertPaths(): Promise<{ certPath: string; keyPa
   }
 }
 
-export function extractIpFromRequest(request: { socket?: { remoteAddress?: string }; headers?: Record<string, string | string[] | undefined> }): string {
-  // Check X-Forwarded-For header first
-  const forwarded = request.headers?.['x-forwarded-for'];
-  if (forwarded) {
-    const ip = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0];
-    return ip.trim();
-  }
-
-  // Fall back to socket remote address
+export function extractIpFromRequest(request: { socket?: { remoteAddress?: string } }): string {
+  // Only trust the socket's remote address to prevent IP spoofing via X-Forwarded-For.
+  // This application is designed for direct Tailscale access, not reverse proxy deployments.
   const remoteAddress = request.socket?.remoteAddress || '127.0.0.1';
 
-  // Remove IPv6 prefix if present
+  // Remove IPv6 prefix if present (e.g., ::ffff:192.168.1.1 -> 192.168.1.1)
   if (remoteAddress.startsWith('::ffff:')) {
     return remoteAddress.slice(7);
   }
