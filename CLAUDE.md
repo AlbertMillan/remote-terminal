@@ -69,6 +69,41 @@ wscript.exe start-server-hidden.vbs
 **Remove auto-start:**
 Delete the VBS file from `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
 
+## Notification System
+
+The server supports webhook notifications to alert users when Claude Code needs input or completes tasks.
+
+**HTTP Endpoint**: `POST /api/notify/:sessionId/:type`
+- Types: `needs-input`, `completed`
+- Sessions pass `CLAUDE_REMOTE_SESSION_ID` env var to PTY processes
+
+**WebSocket Messages**:
+- Server sends: `notification` (with sessionId, type, timestamp)
+- Client sends: `notification.dismiss`, `notification.preferences.get`, `notification.preferences.set`
+
+**Claude Code Hooks** (Windows - add to `~/.claude/settings.json`):
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/completed"
+      }]
+    }],
+    "Notification": [{
+      "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+      "hooks": [{
+        "type": "command",
+        "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/needs-input"
+      }]
+    }]
+  }
+}
+```
+
+Note: On Windows, `cmd /c` is required for proper `%VAR%` expansion. PowerShell doesn't inherit PTY environment variables.
+
 ## Logging & Debugging
 
 Logs are written to `~/.claude-remote/logs/server.log` (JSON format, rotates every 3 days).

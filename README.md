@@ -148,6 +148,7 @@ Connect to `/ws` for the WebSocket endpoint.
 |----------|--------|-------------|
 | `/health` | GET | Health check and status |
 | `/api/sessions` | GET | List all sessions |
+| `/api/notify/:sessionId/:type` | POST | Trigger notification (type: `needs-input` or `completed`) |
 
 ## Security
 
@@ -156,6 +157,86 @@ Connect to `/ws` for the WebSocket endpoint.
 - **Authentication**: Tailscale identity verification
 - **Authorization**: Optional user allowlist
 - **Isolation**: Separate PTY processes per session
+
+## Notifications (Claude Code Integration)
+
+Get notified when Claude Code needs input or completes a task. A visual badge appears in the session list, and browser notifications are sent when the tab is not focused.
+
+### Setup (Windows)
+
+Add the following to your Claude Code settings file (`~/.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/completed"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/needs-input"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Setup (Linux/macOS)
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -X POST http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/completed"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -X POST http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/needs-input"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### How It Works
+
+1. When you create a session, the server sets `CLAUDE_REMOTE_SESSION_ID` environment variable
+2. When Claude Code triggers a notification event (permission prompt, task completion), hooks call the server's notification endpoint
+3. The server sends a WebSocket message to all connected clients
+4. The client shows a visual badge (yellow for "needs input", green for "completed") and optionally a browser notification
+
+### Notification Settings
+
+Click the Settings button in the web UI to configure:
+- Enable/disable browser notifications
+- Enable/disable visual badges
+- Choose which notification types to receive
 
 ## Development
 
