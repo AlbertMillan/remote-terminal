@@ -37,6 +37,7 @@ import {
   updateSessionCategory,
   reorderCategories,
   getCategory,
+  getSession as getSessionFromDb,
   getNotificationPreferences,
   setNotificationPreferences,
   type NotificationPreferences,
@@ -375,6 +376,9 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
     return;
   }
 
+  // Get session metadata from database to include categoryId
+  const sessionMetadata = getSessionFromDb(payload.sessionId);
+
   // Detach from current session if any
   if (connection.attachedSession) {
     detachFromSession(connection);
@@ -389,7 +393,7 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo(session),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null }),
         scrollback: scrollback.join('\n'),
       },
       message.id
