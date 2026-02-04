@@ -63,6 +63,9 @@ export class TerminalManager {
   private resizeObserver: ResizeObserver | null = null;
 
   initialize(options: TerminalOptions): void {
+    // Dispose any existing terminal to prevent duplicate event handlers
+    this.dispose();
+
     this.container = options.container;
     this.onDataCallback = options.onData;
     this.onResizeCallback = options.onResize;

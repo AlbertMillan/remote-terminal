@@ -157,6 +157,7 @@ class SessionManager {
   private categories: Map<string, CategoryInfo> = new Map();
   private currentSessionId: string | null = null;
   private previousSessionId: string | null = null; // For reconnection (issue #7)
+  private attachingSessionId: string | null = null; // Prevents duplicate attach requests
   private messageId = 0;
   private pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
   private reconnectAttempts = 0;
@@ -421,6 +422,19 @@ class SessionManager {
   }
 
   private connect(): void {
+    // Close existing WebSocket to prevent duplicate connections
+    if (this.ws) {
+      // Remove handlers before closing to prevent reconnect loop
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      this.ws.onopen = null;
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
+
     this.updateConnectionStatus('connecting');
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -454,9 +468,12 @@ class SessionManager {
       console.log('WebSocket disconnected');
       this.updateConnectionStatus('disconnected');
       // Save current session for re-attachment on reconnect (issue #7)
+      // Clear currentSessionId and attachingSessionId so reattach can proceed
       if (this.currentSessionId) {
         this.previousSessionId = this.currentSessionId;
+        this.currentSessionId = null;
       }
+      this.attachingSessionId = null;
       this.attemptReconnect();
     };
 
@@ -636,7 +653,11 @@ class SessionManager {
   }
 
   private handleSessionAttached(payload: { session: SessionInfo; scrollback: string }): void {
+    // Guard against duplicate attach responses (e.g., from race conditions)
+    const isAlreadyAttached = this.currentSessionId === payload.session.id;
+
     this.currentSessionId = payload.session.id;
+    this.attachingSessionId = null; // Clear in-flight flag
     this.sessions.set(payload.session.id, payload.session);
 
     // Clear notification for this session
@@ -646,10 +667,17 @@ class SessionManager {
     this.renderSessionList();
     this.showTerminal(payload.session);
 
+    // Skip terminal reinitialization if already attached to this session
+    // This prevents duplicate terminals from race conditions
+    if (isAlreadyAttached) {
+      return;
+    }
+
     // Initialize terminal
     const container = document.getElementById('terminal-container');
     if (container && this.terminalMgr) {
-      // Clear previous terminal if any
+      // Dispose previous terminal to prevent duplicate event handlers
+      this.terminalMgr.dispose();
       container.innerHTML = '';
 
       this.terminalMgr.initialize({
@@ -1225,7 +1253,9 @@ class SessionManager {
   }
 
   attachToSession(sessionId: string): void {
+    // Prevent duplicate attach requests (e.g., double-clicks, rapid navigation)
     if (this.currentSessionId === sessionId) return;
+    if (this.attachingSessionId === sessionId) return;
 
     // Detach from current session
     if (this.currentSessionId) {
@@ -1235,6 +1265,7 @@ class SessionManager {
       }
     }
 
+    this.attachingSessionId = sessionId;
     this.send('session.attach', { sessionId });
   }
 
