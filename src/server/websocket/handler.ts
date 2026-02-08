@@ -354,6 +354,13 @@ async function handleSessionCreate(connection: ClientConnection, message: Client
       )
     );
 
+    // Detach from current session before auto-attaching to new one
+    // Without this, the old session's data listener leaks (never unsubscribed),
+    // causing duplicate terminal output when switching back to it
+    if (connection.attachedSession) {
+      detachFromSession(connection);
+    }
+
     // Auto-attach to the new session
     attachToSession(connection, session.id);
   } catch (error) {
