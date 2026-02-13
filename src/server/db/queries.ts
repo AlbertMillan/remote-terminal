@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -52,7 +52,8 @@ export function insertSession(session: SessionMetadata): void {
     session.cols,
     session.rows,
     session.tmuxSession,
-    session.categoryId
+    session.categoryId,
+    session.sortOrder
   ));
 }
 
@@ -95,7 +96,8 @@ export function updateSession(
 export function getSession(id: string): SessionMetadata | null {
   return executeStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
+           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
+           sort_order as sortOrder
     FROM sessions WHERE id = ?
   `, (stmt) => {
     const row = stmt.get(id) as SessionMetadata | undefined;
@@ -107,17 +109,19 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
   if (ownerId) {
     const stmt = getStatement('getAllSessionsByOwner', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
+             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
+             sort_order as sortOrder
       FROM sessions WHERE owner_id = ? OR owner_id IS NULL
-      ORDER BY last_accessed_at DESC
+      ORDER BY sort_order ASC
     `);
     return stmt.all(ownerId) as SessionMetadata[];
   } else {
     const stmt = getStatement('getAllSessions', `
       SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
+             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
+             sort_order as sortOrder
       FROM sessions
-      ORDER BY last_accessed_at DESC
+      ORDER BY sort_order ASC
     `);
     return stmt.all() as SessionMetadata[];
   }
@@ -126,9 +130,10 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
 export function getActiveSessions(): SessionMetadata[] {
   const stmt = getStatement('getActiveSessions', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId
+           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
+           sort_order as sortOrder
     FROM sessions WHERE status != 'terminated'
-    ORDER BY last_accessed_at DESC
+    ORDER BY sort_order ASC
   `);
   return stmt.all() as SessionMetadata[];
 }
@@ -255,8 +260,35 @@ export function getAllCategories(ownerId?: string): CategoryMetadata[] {
 }
 
 export function updateSessionCategory(sessionId: string, categoryId: string | null): void {
-  const stmt = getStatement('updateSessionCategory', 'UPDATE sessions SET category_id = ? WHERE id = ?');
-  stmt.run(categoryId, sessionId);
+  const newSortOrder = getMaxSessionSortOrder(categoryId) + 1;
+  executeStatement('updateSessionCategory',
+    'UPDATE sessions SET category_id = ?, sort_order = ? WHERE id = ?',
+    (stmt) => stmt.run(categoryId, newSortOrder, sessionId)
+  );
+}
+
+export function getMaxSessionSortOrder(categoryId: string | null): number {
+  if (categoryId) {
+    return executeStatement('getMaxSessionSortOrderCat',
+      'SELECT MAX(sort_order) as maxOrder FROM sessions WHERE category_id = ?',
+      (stmt) => (stmt.get(categoryId) as { maxOrder: number | null })?.maxOrder ?? -1
+    );
+  }
+  return executeStatement('getMaxSessionSortOrderNull',
+    'SELECT MAX(sort_order) as maxOrder FROM sessions WHERE category_id IS NULL',
+    (stmt) => (stmt.get() as { maxOrder: number | null })?.maxOrder ?? -1
+  );
+}
+
+export function reorderSessions(sessions: { id: string; sortOrder: number }[]): void {
+  const stmt = getStatement('reorderSession', 'UPDATE sessions SET sort_order = ? WHERE id = ?');
+  const db = getDatabase();
+  const transaction = db.transaction(() => {
+    for (const s of sessions) {
+      stmt.run(s.sortOrder, s.id);
+    }
+  });
+  transaction();
 }
 
 export function reorderCategories(categories: { id: string; sortOrder: number }[]): void {

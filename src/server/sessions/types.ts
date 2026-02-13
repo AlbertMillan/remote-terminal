@@ -45,6 +45,7 @@ export interface SessionMetadata {
   rows: number;
   tmuxSession: string | null;
   categoryId: string | null;
+  sortOrder: number;
 }
 
 export interface CategoryMetadata {

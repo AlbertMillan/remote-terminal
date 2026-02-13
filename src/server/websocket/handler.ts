@@ -16,6 +16,7 @@ import {
   type SessionDeletePayload,
   type SessionRenamePayload,
   type SessionMovePayload,
+  type SessionReorderPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
   type SessionInfo,
@@ -36,6 +37,7 @@ import {
   getAllCategories,
   updateSessionCategory,
   reorderCategories,
+  reorderSessions,
   getCategory,
   getSession as getSessionFromDb,
   getNotificationPreferences,
@@ -205,6 +207,10 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
     case 'session.move':
       handleSessionMove(connection, message);
+      break;
+
+    case 'session.reorder':
+      handleSessionReorder(connection, message);
       break;
 
     case 'category.create':
@@ -588,7 +594,7 @@ function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'delete
   }
 }
 
-function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null }): SessionInfo {
+function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -601,6 +607,7 @@ function sessionToInfo(session: { id: string; name: string; shell: string; cwd: 
     rows: session.rows,
     attachable: session.attachable ?? true, // Default to true for active sessions
     categoryId: session.categoryId ?? null,
+    sortOrder: session.sortOrder ?? 0,
   };
 }
 
@@ -745,8 +752,33 @@ function handleSessionMove(connection: ClientConnection, message: ClientMessage)
 
   updateSessionCategory(payload.sessionId, categoryId);
 
-  connection.ws.send(createMessage('session.moved', { sessionId: payload.sessionId, categoryId }, message.id));
-  broadcastSessionMoved(payload.sessionId, categoryId, connection.id);
+  // Read back the new sortOrder assigned by updateSessionCategory
+  const updatedSession = getSessionFromDb(payload.sessionId);
+  const sortOrder = updatedSession?.sortOrder ?? 0;
+
+  connection.ws.send(createMessage('session.moved', { sessionId: payload.sessionId, categoryId, sortOrder }, message.id));
+  broadcastSessionMoved(payload.sessionId, categoryId, sortOrder, connection.id);
+}
+
+function handleSessionReorder(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as SessionReorderPayload;
+
+  if (!payload?.sessions || !Array.isArray(payload.sessions)) {
+    connection.ws.send(createMessage('error', { message: 'Sessions array required' }, message.id));
+    return;
+  }
+
+  for (const s of payload.sessions) {
+    if (typeof s.id !== 'string' || typeof s.sortOrder !== 'number' || !Number.isFinite(s.sortOrder)) {
+      connection.ws.send(createMessage('error', { message: 'Invalid session reorder entry' }, message.id));
+      return;
+    }
+  }
+
+  reorderSessions(payload.sessions);
+
+  connection.ws.send(createMessage('session.reordered', { sessions: payload.sessions }, message.id));
+  broadcastSessionReordered(payload.sessions, connection.id);
 }
 
 function categoryToInfo(category: { id: string; name: string; sortOrder: number; collapsed: boolean }): CategoryInfo {
@@ -768,10 +800,18 @@ function broadcastCategoryUpdate(event: 'created' | 'renamed' | 'deleted' | 'reo
   }
 }
 
-function broadcastSessionMoved(sessionId: string, categoryId: string | null, excludeClientId?: string): void {
+function broadcastSessionMoved(sessionId: string, categoryId: string | null, sortOrder: number, excludeClientId?: string): void {
   for (const conn of connections.values()) {
     if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {
-      conn.ws.send(createMessage('session.moved', { sessionId, categoryId }));
+      conn.ws.send(createMessage('session.moved', { sessionId, categoryId, sortOrder }));
+    }
+  }
+}
+
+function broadcastSessionReordered(sessions: { id: string; sortOrder: number }[], excludeClientId?: string): void {
+  for (const conn of connections.values()) {
+    if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.reordered', { sessions }));
     }
   }
 }

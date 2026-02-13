@@ -1210,6 +1210,14 @@ body {
   border-radius: 8px;
 }
 
+.session-item.drop-before {
+  border-top: 2px solid var(--accent);
+}
+
+.session-item.drop-after {
+  border-bottom: 2px solid var(--accent);
+}
+
 /* Show delete button for all sessions on hover */
 .session-item:hover .session-delete-btn {
   opacity: 0.7;

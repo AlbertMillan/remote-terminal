@@ -20,6 +20,7 @@ interface SessionInfo {
   rows: number;
   attachable: boolean;
   categoryId: string | null;
+  sortOrder: number;
 }
 
 interface CategoryInfo {
@@ -69,6 +70,11 @@ interface SessionRenamedPayload {
 interface SessionMovedPayload {
   sessionId: string;
   categoryId: string | null;
+  sortOrder: number;
+}
+
+interface SessionReorderedPayload {
+  sessions: { id: string; sortOrder: number }[];
 }
 
 interface CategoryCreatedPayload {
@@ -134,6 +140,7 @@ type ServerMessage =
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
   | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
+  | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
   | { type: 'session.error'; id?: string; payload: ErrorPayload }
   | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
   | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
@@ -165,6 +172,7 @@ class SessionManager {
   private reconnectDelay = RECONNECT_BASE_DELAY_MS;
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
   private draggedSessionId: string | null = null;
+  private dropIndicatorEl: HTMLElement | null = null;
 
   // Notification state
   private sessionNotifications: Map<string, { type: 'needs-input' | 'completed'; timestamp: string }> = new Map();
@@ -578,6 +586,9 @@ class SessionManager {
       case 'session.moved':
         this.handleSessionMoved(message.payload);
         break;
+      case 'session.reordered':
+        this.handleSessionReordered(message.payload);
+        break;
       case 'category.list':
         this.handleCategoryList(message.payload);
         break;
@@ -737,7 +748,18 @@ class SessionManager {
     const session = this.sessions.get(payload.sessionId);
     if (session) {
       session.categoryId = payload.categoryId;
+      session.sortOrder = payload.sortOrder;
       this.sessions.set(payload.sessionId, session);
+    }
+    this.renderSessionList();
+  }
+
+  private handleSessionReordered(payload: SessionReorderedPayload): void {
+    for (const s of payload.sessions) {
+      const session = this.sessions.get(s.id);
+      if (session) {
+        session.sortOrder = s.sortOrder;
+      }
     }
     this.renderSessionList();
   }
@@ -870,9 +892,9 @@ class SessionManager {
 
     listEl.innerHTML = '';
 
-    // Sort sessions by lastAccessedAt
+    // Sort sessions by sortOrder (ascending)
     const sortedSessions = Array.from(this.sessions.values()).sort(
-      (a, b) => new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
+      (a, b) => a.sortOrder - b.sortOrder
     );
 
     // Sort categories by sortOrder
@@ -1124,15 +1146,50 @@ class SessionManager {
     li.addEventListener('dragend', () => {
       this.draggedSessionId = null;
       li.classList.remove('dragging');
+      if (this.dropIndicatorEl) {
+        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
+        this.dropIndicatorEl = null;
+      }
       document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
     });
 
-    // Allow drops on session items (for dropping into their parent category)
+    // Allow drops on session items for reordering within same category or moving between categories
     li.addEventListener('dragover', (e) => {
       e.preventDefault();
+      if (!this.draggedSessionId || this.draggedSessionId === session.id) return;
+
+      const draggedSession = this.sessions.get(this.draggedSessionId);
+      if (!draggedSession) return;
+
       const categorySection = li.closest('.category-section');
-      const sessionList = categorySection?.querySelector('.category-sessions');
-      sessionList?.classList.add('drop-target');
+      const categoryIdAttr = categorySection?.dataset.categoryId;
+      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
+
+      // Same category: show insertion indicator
+      if (draggedSession.categoryId === targetCategoryId) {
+        // Clear previous indicator if it's a different element
+        if (this.dropIndicatorEl && this.dropIndicatorEl !== li) {
+          this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
+        }
+        this.dropIndicatorEl = li;
+
+        const rect = li.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        li.classList.remove('drop-before', 'drop-after');
+        if (e.clientY < midY) {
+          li.classList.add('drop-before');
+        } else {
+          li.classList.add('drop-after');
+        }
+      } else {
+        // Different category: highlight the target category's session list
+        const sessionList = categorySection?.querySelector('.category-sessions');
+        sessionList?.classList.add('drop-target');
+      }
+    });
+
+    li.addEventListener('dragleave', () => {
+      li.classList.remove('drop-before', 'drop-after');
     });
 
     li.addEventListener('drop', (e) => {
@@ -1145,11 +1202,24 @@ class SessionManager {
 
       if (this.draggedSessionId) {
         const draggedSession = this.sessions.get(this.draggedSessionId);
-        if (draggedSession && draggedSession.categoryId !== targetCategoryId) {
+        if (!draggedSession) return;
+
+        if (draggedSession.categoryId === targetCategoryId) {
+          // Same category: reorder
+          const rect = li.getBoundingClientRect();
+          const midY = rect.top + rect.height / 2;
+          const insertBefore = e.clientY < midY;
+          this.reorderSessionInCategory(this.draggedSessionId, session.id, targetCategoryId, insertBefore);
+        } else {
+          // Different category: move
           this.moveSession(this.draggedSessionId, targetCategoryId);
         }
       }
 
+      if (this.dropIndicatorEl) {
+        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
+        this.dropIndicatorEl = null;
+      }
       document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
     });
 
@@ -1325,6 +1395,43 @@ class SessionManager {
 
   moveSession(sessionId: string, categoryId: string | null): void {
     this.send('session.move', { sessionId, categoryId });
+  }
+
+  private reorderSessionInCategory(draggedId: string, targetId: string, categoryId: string | null, insertBefore: boolean): void {
+    // Get all sessions in this category, sorted by current sortOrder
+    const sessionsInCategory = Array.from(this.sessions.values())
+      .filter(s => s.categoryId === categoryId)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+
+    // Remove dragged session from the list
+    const filtered = sessionsInCategory.filter(s => s.id !== draggedId);
+
+    // Find insertion index
+    const targetIndex = filtered.findIndex(s => s.id === targetId);
+    if (targetIndex === -1) return;
+
+    const insertIndex = insertBefore ? targetIndex : targetIndex + 1;
+
+    // Insert at new position
+    const draggedSession = this.sessions.get(draggedId);
+    if (!draggedSession) return;
+    filtered.splice(insertIndex, 0, draggedSession);
+
+    // Assign new sort orders
+    const updates: { id: string; sortOrder: number }[] = filtered.map((s, i) => ({
+      id: s.id,
+      sortOrder: i,
+    }));
+
+    // Optimistically update local state
+    for (const u of updates) {
+      const session = this.sessions.get(u.id);
+      if (session) session.sortOrder = u.sortOrder;
+    }
+    this.renderSessionList();
+
+    // Send to server
+    this.send('session.reorder', { sessions: updates });
   }
 
   // Modal handlers

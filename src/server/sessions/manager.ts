@@ -11,6 +11,7 @@ import {
   deleteSession as deleteSessionFromDb,
   countActiveSessions,
   logSessionEvent,
+  getMaxSessionSortOrder,
 } from '../db/queries.js';
 import {
   createTmuxSession,
@@ -141,6 +142,9 @@ class SessionManager {
     });
 
     // Persist to database first - if this fails, clean up PTY
+    // New sessions go at the bottom of uncategorized (categoryId = null)
+    const sortOrder = getMaxSessionSortOrder(null) + 1;
+
     const metadata: SessionMetadata = {
       id,
       name,
@@ -154,6 +158,7 @@ class SessionManager {
       rows,
       tmuxSession: tmuxSession || null,
       categoryId: null,
+      sortOrder,
     };
 
     try {

@@ -127,6 +127,12 @@ function runMigrations(database: Database.Database): void {
         );
       `,
     },
+    {
+      name: '006_add_session_sort_order',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+      `,
+    },
   ];
 
   const appliedMigrations = database

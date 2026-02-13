@@ -9,6 +9,7 @@ export type ClientMessageType =
   | 'session.delete'
   | 'session.rename'
   | 'session.move'
+  | 'session.reorder'
   | 'session.list'
   | 'terminal.data'
   | 'terminal.resize'
@@ -33,6 +34,7 @@ export type ServerMessageType =
   | 'session.deleted'
   | 'session.renamed'
   | 'session.moved'
+  | 'session.reordered'
   | 'session.list'
   | 'session.error'
   | 'terminal.data'
@@ -100,6 +102,10 @@ export interface SessionMovePayload {
   categoryId: string | null;
 }
 
+export interface SessionReorderPayload {
+  sessions: { id: string; sortOrder: number }[];
+}
+
 export interface TerminalDataPayload {
   sessionId: string;
   data: string;
@@ -147,6 +153,7 @@ export interface SessionInfo {
   rows: number;
   attachable: boolean;
   categoryId: string | null;
+  sortOrder: number;
 }
 
 export interface CategoryInfo {
@@ -215,6 +222,11 @@ export interface CategoryListPayload {
 export interface SessionMovedPayload {
   sessionId: string;
   categoryId: string | null;
+  sortOrder: number;
+}
+
+export interface SessionReorderedPayload {
+  sessions: { id: string; sortOrder: number }[];
 }
 
 // Notification payloads
