@@ -267,14 +267,26 @@ class SessionManager {
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
     document.getElementById('new-session-confirm')?.addEventListener('click', () => this.createSessionFromModal());
+    document.getElementById('session-name-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.createSessionFromModal();
+    });
+    document.getElementById('session-cwd-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.createSessionFromModal();
+    });
 
     // Rename modal
     document.getElementById('rename-cancel')?.addEventListener('click', () => this.hideRenameModal());
     document.getElementById('rename-confirm')?.addEventListener('click', () => this.confirmRename());
+    document.getElementById('rename-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.confirmRename();
+    });
 
     // Category modal
     document.getElementById('category-cancel')?.addEventListener('click', () => this.hideCategoryModal());
     document.getElementById('category-confirm')?.addEventListener('click', () => this.confirmCategoryAction());
+    document.getElementById('category-name-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.confirmCategoryAction();
+    });
 
     // Settings modal
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
