@@ -350,11 +350,14 @@ async function handleSessionCreate(connection: ClientConnection, message: Client
       ownerId: connection.identity?.userId,
     });
 
+    // Read back metadata from DB to get the actual sortOrder and categoryId
+    const sessionMetadata = getSessionFromDb(session.id);
+
     connection.ws.send(
       createMessage(
         'session.created',
         {
-          session: sessionToInfo(session),
+          session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0 }),
         },
         message.id
       )
@@ -406,7 +409,7 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null }),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0 }),
         scrollback: scrollback.join('\n'),
       },
       message.id
