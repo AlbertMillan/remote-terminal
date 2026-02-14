@@ -676,6 +676,14 @@ body {
   transform: translateY(0);
 }
 
+/* PiP button */
+#pip-session-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
 .btn-icon.danger {
   border-color: rgba(247, 118, 142, 0.2);
 }

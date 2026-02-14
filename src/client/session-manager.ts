@@ -1,5 +1,7 @@
 // Session and WebSocket management
 import { terminalManager, TerminalManager } from './terminal.js';
+import { PipManager, type PipSessionInfo } from './pip-manager.js';
+import { escapeHtml, escapeAttr } from './html-utils.js';
 
 // Configuration constants
 const REQUEST_TIMEOUT_MS = 30000;
@@ -187,10 +189,14 @@ class SessionManager {
   // Mobile navigation state
   private mobileNavVisible = true;
 
+  // PiP manager
+  private pipManager = new PipManager();
+
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
     this.setupEventListeners();
     this.setupMobileNavigation();
+    this.setupPipButton();
     this.initBrowserNotifications();
     this.connect();
   }
@@ -375,6 +381,24 @@ class SessionManager {
       btn.addEventListener('mousedown', (e) => e.preventDefault());
       btn.addEventListener('click', handleKeyPress);
     });
+  }
+
+  private setupPipButton(): void {
+    const pipBtn = document.getElementById('pip-session-btn');
+    if (!pipBtn) return;
+
+    // Hide if not supported
+    if (!PipManager.isSupported()) {
+      pipBtn.style.display = 'none';
+      return;
+    }
+
+    pipBtn.addEventListener('click', () => this.openPip());
+  }
+
+  private openPip(): void {
+    if (!this.currentSessionId) return;
+    this.pipManager.open(this.currentSessionId, this.sessions, this.sessionNotifications);
   }
 
   private toggleMobileNav(): void {
@@ -667,11 +691,13 @@ class SessionManager {
       this.sessions.set(session.id, session);
     }
     this.renderSessionList();
+    this.syncPip();
   }
 
   private handleSessionCreated(payload: { session: SessionInfo }): void {
     this.sessions.set(payload.session.id, payload.session);
     this.renderSessionList();
+    this.syncPip();
     this.attachToSession(payload.session.id);
   }
 
@@ -727,6 +753,7 @@ class SessionManager {
       this.sessions.set(payload.sessionId, session);
     }
     this.renderSessionList();
+    this.syncPip();
 
     if (this.currentSessionId === payload.sessionId) {
       this.showWelcomeScreen();
@@ -736,6 +763,7 @@ class SessionManager {
   private handleSessionDeleted(payload: { sessionId: string }): void {
     this.sessions.delete(payload.sessionId);
     this.renderSessionList();
+    this.syncPip();
 
     if (this.currentSessionId === payload.sessionId) {
       this.showWelcomeScreen();
@@ -749,6 +777,7 @@ class SessionManager {
       this.sessions.set(payload.sessionId, session);
     }
     this.renderSessionList();
+    this.syncPip();
 
     if (this.currentSessionId === payload.sessionId) {
       const nameEl = document.getElementById('session-name');
@@ -860,6 +889,7 @@ class SessionManager {
         timestamp: payload.timestamp,
       });
       this.renderSessionList();
+      this.syncPip();
     }
 
     // Show browser notification
@@ -970,7 +1000,7 @@ class SessionManager {
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
       </button>
-      <span class="category-name">${this.escapeHtml(category.name)}</span>
+      <span class="category-name">${escapeHtml(category.name)}</span>
       <span class="category-count">(${sessions.length})</span>
       <div class="category-actions">
         <button class="category-rename-btn" title="Rename">
@@ -1119,8 +1149,8 @@ class SessionManager {
       : '';
 
     // Escape values for safe HTML attribute insertion
-    const escapedSessionId = this.escapeAttr(session.id);
-    const escapedStatus = this.escapeHtml(session.status);
+    const escapedSessionId = escapeAttr(session.id);
+    const escapedStatus = escapeHtml(session.status);
 
     li.innerHTML = `
       <span class="session-drag-handle">
@@ -1137,7 +1167,7 @@ class SessionManager {
         </svg>
       </span>
       <div class="session-info">
-        <div class="session-name">${this.escapeHtml(session.name)}</div>
+        <div class="session-name">${escapeHtml(session.name)}</div>
         <div class="session-status">${escapedStatus}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
       </div>
       <button class="session-delete-btn" title="Delete session" data-session-id="${escapedSessionId}">
@@ -1283,25 +1313,6 @@ class SessionManager {
     });
   }
 
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  /**
-   * Escape a string for use in HTML attributes.
-   * Handles quotes and other characters that could break out of attribute context.
-   */
-  private escapeAttr(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   private showTerminal(session: SessionInfo): void {
     document.getElementById('welcome-screen')?.classList.add('hidden');
     document.getElementById('terminal-container')?.classList.remove('hidden');
@@ -1444,6 +1455,14 @@ class SessionManager {
 
     // Send to server
     this.send('session.reorder', { sessions: updates });
+  }
+
+  // PiP sync
+
+  private syncPip(): void {
+    if (this.pipManager.isOpen()) {
+      this.pipManager.updateSessions(this.sessions, this.sessionNotifications);
+    }
   }
 
   // Modal handlers
