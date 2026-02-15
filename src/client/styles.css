@@ -919,6 +919,49 @@ body {
   background: transparent;
 }
 
+/* Hide native xterm scrollbar (blocked by canvas layer, not interactive) */
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  display: none;
+}
+
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+
+/* Custom terminal scrollbar overlay */
+.terminal-scrollbar {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 10;
+  cursor: default;
+}
+
+.terminal-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.terminal-scrollbar:hover .terminal-scrollbar-thumb,
+.terminal-scrollbar-thumb.active {
+  opacity: 1;
+}
+
+.terminal-scrollbar-thumb:hover,
+.terminal-scrollbar-thumb.active {
+  background: var(--text-muted);
+}
+
 /* Mobile menu button */
 .mobile-menu-btn {
   display: none;

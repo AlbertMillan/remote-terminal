@@ -86,6 +86,14 @@ export class TerminalManager {
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private scrollbar: {
+    track: HTMLElement;
+    thumb: HTMLElement;
+    viewport: HTMLElement;
+    observer: MutationObserver;
+    abortController: AbortController;
+    update: () => void;
+  } | null = null;
 
   initialize(options: TerminalOptions): void {
     // Dispose any existing terminal to prevent duplicate event handlers
@@ -117,6 +125,9 @@ export class TerminalManager {
 
     // Fit to container
     this.fit();
+
+    // Set up custom scrollbar (native xterm scrollbar is behind canvas layer)
+    this.setupScrollbar();
 
     // Handle terminal input
     this.terminal.onData((data: string) => {
@@ -168,6 +179,100 @@ export class TerminalManager {
         // Ignore fit errors during initialization
       }
     }
+    this.scrollbar?.update();
+  }
+
+  private setupScrollbar(): void {
+    if (!this.container) return;
+
+    const viewport = this.container.querySelector('.xterm-viewport') as HTMLElement;
+    const xtermEl = this.container.querySelector('.xterm') as HTMLElement;
+    if (!viewport || !xtermEl) return;
+
+    const track = document.createElement('div');
+    track.className = 'terminal-scrollbar';
+
+    const thumb = document.createElement('div');
+    thumb.className = 'terminal-scrollbar-thumb';
+    track.appendChild(thumb);
+
+    xtermEl.appendChild(track);
+
+    const ac = new AbortController();
+    const signal = ac.signal;
+
+    const update = () => {
+      const { scrollHeight, clientHeight, scrollTop } = viewport;
+      if (scrollHeight <= clientHeight) {
+        track.style.display = 'none';
+        return;
+      }
+      track.style.display = '';
+      const trackH = track.clientHeight;
+      const thumbH = Math.max(30, (clientHeight / scrollHeight) * trackH);
+      const maxScroll = scrollHeight - clientHeight;
+      const thumbTop = maxScroll > 0 ? (scrollTop / maxScroll) * (trackH - thumbH) : 0;
+      thumb.style.height = `${thumbH}px`;
+      thumb.style.transform = `translateY(${thumbTop}px)`;
+    };
+
+    viewport.addEventListener('scroll', update, { signal });
+
+    // Watch scroll area height changes (new terminal output)
+    const scrollArea = viewport.querySelector('.xterm-scroll-area');
+    const observer = new MutationObserver(update);
+    if (scrollArea) {
+      observer.observe(scrollArea, { attributes: true, attributeFilter: ['style'] });
+    }
+
+    // Thumb drag
+    thumb.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startY = e.clientY;
+      const startScrollTop = viewport.scrollTop;
+      thumb.classList.add('active');
+      document.body.style.userSelect = 'none';
+
+      const onMove = (ev: MouseEvent) => {
+        ev.preventDefault();
+        const deltaY = ev.clientY - startY;
+        const trackH = track.clientHeight;
+        const thumbH = thumb.clientHeight;
+        const scrollable = viewport.scrollHeight - viewport.clientHeight;
+        const maxThumbMove = trackH - thumbH;
+        if (maxThumbMove > 0) {
+          viewport.scrollTop = startScrollTop + (deltaY / maxThumbMove) * scrollable;
+        }
+      };
+
+      const onUp = () => {
+        thumb.classList.remove('active');
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }, { signal });
+
+    // Track click to jump
+    track.addEventListener('mousedown', (e) => {
+      if (e.target === thumb) return;
+      const rect = track.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      const trackH = rect.height;
+      const thumbH = thumb.clientHeight;
+      const centerY = clickY - thumbH / 2;
+      const maxThumbTop = trackH - thumbH;
+      const ratio = Math.max(0, Math.min(1, centerY / maxThumbTop));
+      viewport.scrollTop = ratio * (viewport.scrollHeight - viewport.clientHeight);
+    }, { signal });
+
+    this.scrollbar = { track, thumb, viewport, observer, abortController: ac, update };
+
+    update();
   }
 
   focus(): void {
@@ -187,6 +292,12 @@ export class TerminalManager {
   }
 
   dispose(): void {
+    if (this.scrollbar) {
+      this.scrollbar.abortController.abort();
+      this.scrollbar.observer.disconnect();
+      this.scrollbar.track.remove();
+      this.scrollbar = null;
+    }
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
