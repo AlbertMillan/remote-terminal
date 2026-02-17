@@ -378,6 +378,8 @@ body {
 
 #terminal-container {
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
   background-color: var(--terminal-bg);
   padding: 8px;
   position: relative;
