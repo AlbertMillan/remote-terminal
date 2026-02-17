@@ -4,6 +4,7 @@
 interface ITerminalOptions {
   cursorBlink?: boolean;
   cursorStyle?: 'block' | 'underline' | 'bar';
+  convertEol?: boolean;
   fontSize?: number;
   fontFamily?: string;
   lineHeight?: number;
@@ -17,6 +18,7 @@ interface ITerminal {
   write(data: string): void;
   writeln(data: string): void;
   clear(): void;
+  resize(cols: number, rows: number): void;
   focus(): void;
   dispose(): void;
   onData(callback: (data: string) => void): void;
@@ -107,6 +109,7 @@ export class TerminalManager {
     this.terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
+      convertEol: true,
       fontSize: 14,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.2,
@@ -168,6 +171,12 @@ export class TerminalManager {
   clear(): void {
     if (this.terminal) {
       this.terminal.clear();
+    }
+  }
+
+  resize(cols: number, rows: number): void {
+    if (this.terminal) {
+      this.terminal.resize(cols, rows);
     }
   }
 

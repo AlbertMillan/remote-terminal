@@ -410,7 +410,7 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
       'session.attached',
       {
         session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0 }),
-        scrollback: scrollback.join('\n'),
+        scrollback: scrollback.join('\r\n'),
       },
       message.id
     )

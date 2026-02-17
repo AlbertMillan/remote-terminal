@@ -13,9 +13,13 @@ dist/
 .claude/
 .playwright-mcp/
 
+# Git worktrees
+android/
+
 # OS files
 .DS_Store
 Thumbs.db
+nul
 
 # Logs
 *.log

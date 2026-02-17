@@ -735,9 +735,21 @@ class SessionManager {
         onResize: (cols: number, rows: number) => this.sendTerminalResize(cols, rows),
       });
 
-      // Write scrollback
+      // Write scrollback at the session's original dimensions so escape
+      // sequences (cursor positioning, line wrapping) render correctly.
+      // Then fit to the current container and let xterm.js reflow.
       if (payload.scrollback) {
+        const sessionCols = payload.session.cols;
+        const sessionRows = payload.session.rows;
+        const currentDims = this.terminalMgr.getDimensions();
+
+        if (sessionCols && sessionRows &&
+            (sessionCols !== currentDims.cols || sessionRows !== currentDims.rows)) {
+          this.terminalMgr.resize(sessionCols, sessionRows);
+        }
+
         this.terminalMgr.write(payload.scrollback);
+        this.terminalMgr.fit();
       }
 
       // Send initial resize
