@@ -81,28 +81,28 @@ The server supports webhook notifications to alert users when Claude Code needs 
 - Server sends: `notification` (with sessionId, type, timestamp)
 - Client sends: `notification.dismiss`, `notification.preferences.get`, `notification.preferences.set`
 
-**Claude Code Hooks** (Windows - add to `~/.claude/settings.json`):
+**Claude Code Hooks** (add to `~/.claude/settings.json`):
 ```json
 {
   "hooks": {
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/completed"
+        "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/completed\""
       }]
     }],
     "Notification": [{
       "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
       "hooks": [{
         "type": "command",
-        "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/needs-input"
+        "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/needs-input\""
       }]
     }]
   }
 }
 ```
 
-Note: On Windows, `cmd /c` is required for proper `%VAR%` expansion. PowerShell doesn't inherit PTY environment variables.
+Note: Claude Code runs hooks via bash (`/usr/bin/bash`) on Windows too, so use bash `$VAR` syntax. The `[ -n "$VAR" ]` guard ensures the hook is a no-op when not running inside a claude-remote session.
 
 ## Logging & Debugging
 
