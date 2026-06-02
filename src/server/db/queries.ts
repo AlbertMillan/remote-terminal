@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -53,7 +53,10 @@ export function insertSession(session: SessionMetadata): void {
     session.rows,
     session.tmuxSession,
     session.categoryId,
-    session.sortOrder
+    session.sortOrder,
+    session.claudeSessionId ?? null,
+    session.isFork ? 1 : 0,
+    session.forkJsonlPath ?? null,
   ));
 }
 
@@ -97,45 +100,63 @@ export function getSession(id: string): SessionMetadata | null {
   return executeStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
-           sort_order as sortOrder
+           sort_order as sortOrder, claude_session_id as claudeSessionId,
+           is_fork as isFork, fork_jsonl_path as forkJsonlPath
     FROM sessions WHERE id = ?
   `, (stmt) => {
-    const row = stmt.get(id) as SessionMetadata | undefined;
-    return row || null;
+    const row = stmt.get(id) as (Omit<SessionMetadata, 'isFork'> & { isFork: number }) | undefined;
+    if (!row) return null;
+    return { ...row, isFork: row.isFork === 1 };
   });
 }
 
+export function setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
+  executeStatement('setClaudeSessionId',
+    'UPDATE sessions SET claude_session_id = ? WHERE id = ?',
+    (stmt) => stmt.run(claudeSessionId, sessionId)
+  );
+}
+
+export function clearForkFlag(sessionId: string): void {
+  executeStatement('clearForkFlag',
+    'UPDATE sessions SET is_fork = 0, fork_jsonl_path = NULL WHERE id = ?',
+    (stmt) => stmt.run(sessionId)
+  );
+}
+
+const SESSION_SELECT = `
+  SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
+         owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
+         sort_order as sortOrder, claude_session_id as claudeSessionId,
+         is_fork as isFork, fork_jsonl_path as forkJsonlPath
+  FROM sessions
+`;
+
+function toSessionMetadata(row: Omit<SessionMetadata, 'isFork'> & { isFork: number }): SessionMetadata {
+  return { ...row, isFork: row.isFork === 1 };
+}
+
 export function getAllSessions(ownerId?: string): SessionMetadata[] {
+  type RawRow = Omit<SessionMetadata, 'isFork'> & { isFork: number };
   if (ownerId) {
-    const stmt = getStatement('getAllSessionsByOwner', `
-      SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
-             sort_order as sortOrder
-      FROM sessions WHERE owner_id = ? OR owner_id IS NULL
-      ORDER BY sort_order ASC
-    `);
-    return stmt.all(ownerId) as SessionMetadata[];
+    const stmt = getStatement('getAllSessionsByOwner',
+      SESSION_SELECT + 'WHERE owner_id = ? OR owner_id IS NULL ORDER BY sort_order ASC'
+    );
+    return (stmt.all(ownerId) as RawRow[]).map(toSessionMetadata);
   } else {
-    const stmt = getStatement('getAllSessions', `
-      SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-             owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
-             sort_order as sortOrder
-      FROM sessions
-      ORDER BY sort_order ASC
-    `);
-    return stmt.all() as SessionMetadata[];
+    const stmt = getStatement('getAllSessions',
+      SESSION_SELECT + 'ORDER BY sort_order ASC'
+    );
+    return (stmt.all() as RawRow[]).map(toSessionMetadata);
   }
 }
 
 export function getActiveSessions(): SessionMetadata[] {
-  const stmt = getStatement('getActiveSessions', `
-    SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
-           owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
-           sort_order as sortOrder
-    FROM sessions WHERE status != 'terminated'
-    ORDER BY sort_order ASC
-  `);
-  return stmt.all() as SessionMetadata[];
+  type RawRow = Omit<SessionMetadata, 'isFork'> & { isFork: number };
+  const stmt = getStatement('getActiveSessions',
+    SESSION_SELECT + "WHERE status != 'terminated' ORDER BY sort_order ASC"
+  );
+  return (stmt.all() as RawRow[]).map(toSessionMetadata);
 }
 
 export function deleteSession(id: string): void {

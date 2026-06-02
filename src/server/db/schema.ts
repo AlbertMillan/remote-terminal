@@ -133,6 +133,14 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
       `,
     },
+    {
+      name: '007_add_fork_columns',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN claude_session_id TEXT;
+        ALTER TABLE sessions ADD COLUMN is_fork INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN fork_jsonl_path TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

@@ -24,6 +24,7 @@ interface ITerminal {
   onData(callback: (data: string) => void): void;
   onResize(callback: (size: { cols: number; rows: number }) => void): void;
   loadAddon(addon: ITerminalAddon): void;
+  attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean): void;
 }
 
 interface ITerminalAddon {
@@ -88,6 +89,8 @@ export class TerminalManager {
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private navigateSessionCallback: ((direction: 'prev' | 'next') => void) | null = null;
+  private newSessionCallback: (() => void) | null = null;
   private scrollbar: {
     track: HTMLElement;
     thumb: HTMLElement;
@@ -96,6 +99,14 @@ export class TerminalManager {
     abortController: AbortController;
     update: () => void;
   } | null = null;
+
+  setNavigateSessionCallback(callback: ((direction: 'prev' | 'next') => void) | null): void {
+    this.navigateSessionCallback = callback;
+  }
+
+  setNewSessionCallback(callback: (() => void) | null): void {
+    this.newSessionCallback = callback;
+  }
 
   initialize(options: TerminalOptions): void {
     // Dispose any existing terminal to prevent duplicate event handlers
@@ -114,6 +125,27 @@ export class TerminalManager {
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.2,
       theme: TERMINAL_THEME,
+    });
+
+    // Intercept Ctrl+Q / Ctrl+E for session navigation (prevent sending to PTY)
+    this.terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type === 'keydown' && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        if (e.key === 'q' || e.key === 'Q') {
+          if (this.navigateSessionCallback) this.navigateSessionCallback('prev');
+          return false;
+        }
+        if (e.key === 'e' || e.key === 'E') {
+          if (this.navigateSessionCallback) this.navigateSessionCallback('next');
+          return false;
+        }
+      }
+      if (e.type === 'keydown' && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        if (e.key === 'n' || e.key === 'N') {
+          if (this.newSessionCallback) this.newSessionCallback();
+          return false;
+        }
+      }
+      return true;
     });
 
     // Load addons

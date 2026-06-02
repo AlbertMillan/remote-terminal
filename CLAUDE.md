@@ -104,6 +104,26 @@ The server supports webhook notifications to alert users when Claude Code needs 
 
 Note: Claude Code runs hooks via bash (`/usr/bin/bash`) on Windows too, so use bash `$VAR` syntax. The `[ -n "$VAR" ]` guard ensures the hook is a no-op when not running inside a claude-remote session.
 
+## Session Fork Feature
+
+The fork button in the terminal header branches the current Claude Code conversation into an independent new session (copies the JSONL transcript to a new UUID, then runs `claude --resume <new-uuid>`). The fork is ephemeral — its transcript is deleted when the session is closed. Click **Keep** to make it permanent.
+
+**Required hook** — add to `~/.claude/settings.json` so the server knows the Claude session ID:
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/session/$CLAUDE_REMOTE_SESSION_ID/claude-session\" -H \"Content-Type: application/json\" -d \"{\\\"claudeSessionId\\\": \\\"$CLAUDE_CODE_SESSION_ID\\\"}\""
+      }]
+    }]
+  }
+}
+```
+
+The Fork button will show an error if no Claude session ID has been registered yet (i.e., Claude hasn't stopped at least once since the terminal opened).
+
 ## Logging & Debugging
 
 Logs are written to `~/.claude-remote/logs/server.log` (JSON format, rotates every 3 days).

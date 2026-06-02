@@ -12,6 +12,8 @@ import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { sessionManager } from './sessions/manager.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
+import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
+import { cleanupOrphanedForkFiles } from './sessions/manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,6 +27,7 @@ export async function createApp(): Promise<FastifyInstance> {
 
   // Initialize database
   initDatabase();
+  cleanupOrphanedForkFiles();
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -99,6 +102,37 @@ export async function createApp(): Promise<FastifyInstance> {
   // API endpoints
   app.get('/api/sessions', async () => {
     return { sessions: sessionManager.getSessionList() };
+  });
+
+  // Claude session ID registration (called by the Stop hook)
+  app.post<{
+    Params: { sessionId: string };
+    Body: { claudeSessionId: string };
+  }>('/api/session/:sessionId/claude-session', async (request, reply) => {
+    const { sessionId } = request.params;
+    const body = request.body as { claudeSessionId?: string };
+    const claudeSessionId = body?.claudeSessionId;
+
+    if (!claudeSessionId || typeof claudeSessionId !== 'string') {
+      return reply.status(400).send({ error: 'claudeSessionId required' });
+    }
+
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(claudeSessionId)) {
+      return reply.status(400).send({ error: 'Invalid claudeSessionId format' });
+    }
+
+    // C2: Validate session exists to prevent arbitrary ID poisoning
+    const activeSession = sessionManager.getSession(sessionId);
+    if (!activeSession) {
+      const dbSession = getSessionFromDb(sessionId);
+      if (!dbSession) {
+        return reply.status(404).send({ error: 'Session not found' });
+      }
+    }
+
+    setClaudeSessionId(sessionId, claudeSessionId);
+    return { success: true };
   });
 
   // Notification webhook endpoint

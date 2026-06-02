@@ -11,6 +11,8 @@ export type ClientMessageType =
   | 'session.move'
   | 'session.reorder'
   | 'session.list'
+  | 'session.fork'
+  | 'session.keep'
   | 'terminal.data'
   | 'terminal.resize'
   | 'category.create'
@@ -36,6 +38,8 @@ export type ServerMessageType =
   | 'session.moved'
   | 'session.reordered'
   | 'session.list'
+  | 'session.forked'
+  | 'session.kept'
   | 'session.error'
   | 'terminal.data'
   | 'terminal.exit'
@@ -154,6 +158,19 @@ export interface SessionInfo {
   attachable: boolean;
   categoryId: string | null;
   sortOrder: number;
+  isFork: boolean;
+}
+
+export interface SessionForkPayload {
+  sessionId: string;
+}
+
+export interface SessionKeepPayload {
+  sessionId: string;
+}
+
+export interface SessionKeptPayload {
+  sessionId: string;
 }
 
 export interface CategoryInfo {

@@ -64,6 +64,19 @@
       <div id="terminal-header" class="terminal-header hidden">
         <span id="session-name">Session</span>
         <div class="terminal-controls">
+          <button id="keep-session-btn" class="btn-icon hidden" title="Keep this session (won't be deleted on close)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </button>
+          <button id="fork-session-btn" class="btn-icon" title="Fork session (branch conversation)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="6" y1="3" x2="6" y2="15"></line>
+              <circle cx="18" cy="6" r="3"></circle>
+              <circle cx="6" cy="18" r="3"></circle>
+              <path d="M18 9a9 9 0 0 1-9 9"></path>
+            </svg>
+          </button>
           <button id="pip-session-btn" class="btn-icon" title="Pop out to Picture-in-Picture">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
@@ -85,6 +98,8 @@
           </button>
         </div>
       </div>
+
+      <div id="fork-error-toast" class="fork-error-toast hidden"></div>
 
       <div id="terminal-container" class="hidden">
         <!-- xterm.js will render here -->

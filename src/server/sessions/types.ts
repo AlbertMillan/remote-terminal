@@ -46,6 +46,9 @@ export interface SessionMetadata {
   tmuxSession: string | null;
   categoryId: string | null;
   sortOrder: number;
+  claudeSessionId: string | null;
+  isFork: boolean;
+  forkJsonlPath: string | null;
 }
 
 export interface CategoryMetadata {

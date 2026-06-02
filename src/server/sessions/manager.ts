@@ -1,4 +1,7 @@
 import { randomUUID } from 'crypto';
+import { copyFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { createPty, resizePty, writeToPty, killPty, ScrollbackBuffer } from './pty-handler.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
@@ -9,9 +12,11 @@ import {
   updateSession,
   getAllSessions as getAllSessionsFromDb,
   deleteSession as deleteSessionFromDb,
+  getSession as getSessionMetadata,
   countActiveSessions,
   logSessionEvent,
   getMaxSessionSortOrder,
+  clearForkFlag,
 } from '../db/queries.js';
 import {
   createTmuxSession,
@@ -22,6 +27,34 @@ import {
 } from './persistence.js';
 
 const logger = createLogger('session-manager');
+
+// C1: Robust JSONL location — tries computed slug first, falls back to scanning all project dirs.
+// Claude Code derives its project folder by replacing path separators with '-', but the exact
+// algorithm may vary. Scanning by known session ID is always correct.
+function findClaudeProjectDir(homeDir: string, cwd: string, claudeSessionId: string): string {
+  const projectsDir = join(homeDir, '.claude', 'projects');
+  const slug = cwd.replace(/[:\\/]/g, '-').replace(/^-+/, '');
+  const computedDir = join(projectsDir, slug);
+  if (existsSync(join(computedDir, `${claudeSessionId}.jsonl`))) {
+    return computedDir;
+  }
+  try {
+    const entries = readdirSync(projectsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (existsSync(join(projectsDir, entry.name, `${claudeSessionId}.jsonl`))) {
+        return join(projectsDir, entry.name);
+      }
+    }
+  } catch {
+    // projectsDir not readable
+  }
+  throw new Error(
+    `Claude session transcript not found for session "${claudeSessionId}". ` +
+    `Searched in ${projectsDir}. Ensure the claude-session hook is configured ` +
+    `and Claude has stopped at least once in this terminal.`
+  );
+}
 
 // Configuration constants
 const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
@@ -37,6 +70,27 @@ class SessionManager {
 
   constructor() {
     this.startIdleChecker();
+  }
+
+  // N1: Shared PTY wiring — scrollback buffer + data/exit listeners.
+  // Called by both createSession and forkSession to avoid duplication.
+  private _initSessionPty(session: ActiveSession): void {
+    const { id, pty } = session;
+    const scrollbackBuffer = new ScrollbackBuffer();
+    this.scrollbackBuffers.set(id, scrollbackBuffer);
+
+    pty.onData((data: string) => {
+      scrollbackBuffer.push(data);
+      const listeners = this.dataListeners.get(id);
+      if (listeners) {
+        for (const listener of listeners) listener(data);
+      }
+    });
+
+    pty.onExit(({ exitCode }) => {
+      logger.info({ id, exitCode }, 'Session PTY exited');
+      this.handleSessionExit(id, exitCode);
+    });
   }
 
   private startIdleChecker(): void {
@@ -119,27 +173,7 @@ class SessionManager {
       connectedClients: new Set(),
     };
 
-    // Initialize scrollback buffer and store reference
-    const scrollbackBuffer = new ScrollbackBuffer();
-    this.scrollbackBuffers.set(id, scrollbackBuffer);
-
-    // Set up data listener - no longer copies buffer on every event
-    pty.onData((data: string) => {
-      scrollbackBuffer.push(data);
-
-      const listeners = this.dataListeners.get(id);
-      if (listeners) {
-        for (const listener of listeners) {
-          listener(data);
-        }
-      }
-    });
-
-    // Set up exit listener
-    pty.onExit(({ exitCode }) => {
-      logger.info({ id, exitCode }, 'Session PTY exited');
-      this.handleSessionExit(id, exitCode);
-    });
+    this._initSessionPty(session);
 
     // Persist to database first - if this fails, clean up PTY
     // New sessions go at the bottom of uncategorized (categoryId = null)
@@ -159,6 +193,9 @@ class SessionManager {
       tmuxSession: tmuxSession || null,
       categoryId: null,
       sortOrder,
+      claudeSessionId: null,
+      isFork: false,
+      forkJsonlPath: null,
     };
 
     try {
@@ -209,6 +246,9 @@ class SessionManager {
 
     logger.info({ id, name: session.name }, 'Terminating session');
 
+    // Get fork metadata before any cleanup
+    const metadata = getSessionMetadata(id);
+
     // Persist scrollback before terminating (Windows)
     const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
     if (isWindows() && scrollback.length > 0) {
@@ -239,6 +279,16 @@ class SessionManager {
     updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
     logSessionEvent(id, 'terminated');
 
+    // Delete ephemeral fork JSONL
+    if (metadata?.isFork && metadata.forkJsonlPath) {
+      try {
+        unlinkSync(metadata.forkJsonlPath);
+        logger.info({ id, path: metadata.forkJsonlPath }, 'Deleted fork JSONL on terminate');
+      } catch (err) {
+        logger.warn({ id, err }, 'Failed to delete fork JSONL on terminate');
+      }
+    }
+
     // Remove from active sessions
     this.activeSessions.delete(id);
 
@@ -246,9 +296,20 @@ class SessionManager {
   }
 
   async deleteSession(id: string): Promise<boolean> {
-    // Terminate if active
+    // Get fork metadata before any deletion
+    const metadata = getSessionMetadata(id);
+
     if (this.activeSessions.has(id)) {
+      // terminateSession handles JSONL cleanup for active forks
       await this.terminateSession(id);
+    } else if (metadata?.isFork && metadata.forkJsonlPath) {
+      // Already terminated fork — clean up JSONL now
+      try {
+        unlinkSync(metadata.forkJsonlPath);
+        logger.info({ id, path: metadata.forkJsonlPath }, 'Deleted fork JSONL on delete');
+      } catch (err) {
+        logger.warn({ id, err }, 'Failed to delete fork JSONL on delete');
+      }
     }
 
     // Log before deleting (foreign key constraint)
@@ -396,7 +457,144 @@ class SessionManager {
       if (isWindows() && scrollback.length > 0) {
         persistScrollback(id, scrollback);
       }
+
+      // Delete ephemeral fork JSONL on natural exit
+      const metadata = getSessionMetadata(id);
+      if (metadata?.isFork && metadata.forkJsonlPath) {
+        try {
+          unlinkSync(metadata.forkJsonlPath);
+          logger.info({ id, path: metadata.forkJsonlPath }, 'Deleted fork JSONL on exit');
+        } catch (err) {
+          logger.warn({ id, err }, 'Failed to delete fork JSONL on exit');
+        }
+      }
     }
+  }
+
+  async forkSession(sourceId: string, options: { ownerId?: string; cols?: number; rows?: number } = {}): Promise<ActiveSession> {
+    // C5: Reject immediately if source session is not active
+    if (!this.activeSessions.has(sourceId)) {
+      throw new Error('Source session is not active');
+    }
+
+    const config = getConfig();
+    const activeCount = countActiveSessions();
+    if (activeCount >= config.sessions.maxSessions) {
+      throw new Error(`Maximum session limit (${config.sessions.maxSessions}) reached`);
+    }
+
+    const sourceMetadata = getSessionMetadata(sourceId);
+    if (!sourceMetadata) throw new Error('Source session not found');
+
+    const { claudeSessionId } = sourceMetadata;
+    if (!claudeSessionId) {
+      throw new Error(
+        'No Claude session ID registered for this session. ' +
+        'Ensure the claude-session hook is configured in ~/.claude/settings.json ' +
+        'and Claude has stopped at least once in this terminal.'
+      );
+    }
+
+    // C1: Robust project dir lookup — computed slug first, fallback scans all project dirs
+    const projectDir = findClaudeProjectDir(homedir(), sourceMetadata.cwd, claudeSessionId);
+    const sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
+    const newClaudeSessionId = randomUUID();
+    const destJsonlPath = join(projectDir, `${newClaudeSessionId}.jsonl`);
+
+    const id = randomUUID();
+    const name = `Fork: ${sourceMetadata.name}`;
+    const shell = sourceMetadata.shell;
+    const cwd = sourceMetadata.cwd;
+    const cols = options.cols || sourceMetadata.cols;
+    const rows = options.rows || sourceMetadata.rows;
+    const now = new Date();
+    const sortOrder = getMaxSessionSortOrder(null) + 1;
+
+    logger.info({ id, sourceId, name }, 'Creating fork session');
+
+    // C3: Insert DB record FIRST so forkJsonlPath is tracked before any file operations.
+    // If the server crashes after this point, cleanupOrphanedForkFiles() recovers on next start.
+    const metadata: SessionMetadata = {
+      id, name, shell, cwd,
+      createdAt: now.toISOString(),
+      lastAccessedAt: now.toISOString(),
+      ownerId: options.ownerId || null,
+      status: 'active',
+      cols, rows,
+      tmuxSession: null,
+      categoryId: null,
+      sortOrder,
+      claudeSessionId: newClaudeSessionId,
+      isFork: true,
+      forkJsonlPath: destJsonlPath,
+    };
+    insertSession(metadata);
+
+    // Copy transcript (DB record exists, so crash here is recoverable on next startup)
+    try {
+      copyFileSync(sourceJsonlPath, destJsonlPath);
+    } catch (error) {
+      updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
+      throw new Error(`Failed to copy session transcript: ${error instanceof Error ? error.message : error}`);
+    }
+
+    // Create PTY
+    let ptyProcess;
+    try {
+      ptyProcess = createPty({ shell, cwd, cols, rows, env: { CLAUDE_REMOTE_SESSION_ID: id } });
+    } catch (error) {
+      try { unlinkSync(destJsonlPath); } catch {}
+      updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
+      throw error;
+    }
+
+    const session: ActiveSession = {
+      id, name, shell, cwd,
+      createdAt: now, lastAccessedAt: now,
+      ownerId: options.ownerId,
+      status: 'active',
+      cols, rows,
+      pty: ptyProcess,
+      scrollback: [],
+      connectedClients: new Set(),
+    };
+
+    // N1: shared PTY init
+    this._initSessionPty(session);
+    this.activeSessions.set(id, session);
+    logSessionEvent(id, 'forked', JSON.stringify({ sourceId, claudeSessionId: newClaudeSessionId }));
+
+    // C4: Inject resume command after the shell produces first output (= ready for input).
+    // Debounced 100ms so rc-file output settles; 5s hard fallback if shell stays silent.
+    let commandSent = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const startupDisposable = ptyProcess.onData(() => {
+      if (commandSent) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (!commandSent) {
+          commandSent = true;
+          startupDisposable.dispose();
+          writeToPty(session.pty, `claude --resume ${newClaudeSessionId}\r`);
+        }
+      }, 100);
+    });
+    setTimeout(() => {
+      if (!commandSent) {
+        commandSent = true;
+        writeToPty(session.pty, `claude --resume ${newClaudeSessionId}\r`);
+      }
+    }, 5000);
+
+    logger.info({ id, name, pid: ptyProcess.pid }, 'Fork session created successfully');
+    return session;
+  }
+
+  keepForkSession(id: string): boolean {
+    clearForkFlag(id);
+    logSessionEvent(id, 'fork_kept');
+    logger.info({ id }, 'Fork session kept');
+    return true;
   }
 
   async shutdown(): Promise<void> {
@@ -415,14 +613,21 @@ class SessionManager {
     this.touchDebounceTimers.clear();
 
     for (const [id, session] of this.activeSessions) {
-      // Persist scrollback
-      const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
-      if (scrollback.length > 0) {
-        persistScrollback(id, scrollback);
-      }
+      const meta = getSessionMetadata(id);
 
-      // Mark as idle (not terminated, so we can reconnect on restart)
-      updateSession(id, { status: 'idle', lastAccessedAt: new Date().toISOString() });
+      if (meta?.isFork && meta.forkJsonlPath) {
+        // Fork sessions are ephemeral: delete JSONL and mark terminated on shutdown
+        try { unlinkSync(meta.forkJsonlPath); } catch {}
+        updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
+      } else {
+        // Persist scrollback
+        const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
+        if (scrollback.length > 0) {
+          persistScrollback(id, scrollback);
+        }
+        // Mark as idle (not terminated, so we can reconnect on restart)
+        updateSession(id, { status: 'idle', lastAccessedAt: new Date().toISOString() });
+      }
 
       // Kill PTY but keep tmux session alive on Linux
       if (!session.tmuxSession) {
@@ -467,6 +672,27 @@ export async function resetSessionManager(): Promise<void> {
   if (sessionManagerInstance) {
     await sessionManagerInstance.shutdown();
     sessionManagerInstance = null;
+  }
+}
+
+/**
+ * Called on server startup to recover from crashes mid-fork.
+ * Any fork session that isn't 'terminated' at startup has no live PTY —
+ * delete its JSONL and mark it terminated so it doesn't reappear as stale.
+ */
+export function cleanupOrphanedForkFiles(): void {
+  const dbSessions = getAllSessionsFromDb();
+  for (const session of dbSessions) {
+    if (!session.isFork || session.status === 'terminated') continue;
+    if (session.forkJsonlPath) {
+      try {
+        unlinkSync(session.forkJsonlPath);
+        logger.info({ id: session.id, path: session.forkJsonlPath }, 'Cleaned up orphaned fork JSONL');
+      } catch {
+        // File may not exist if crash happened before copy completed
+      }
+    }
+    updateSession(session.id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
   }
 }
 

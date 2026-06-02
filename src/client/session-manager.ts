@@ -23,6 +23,7 @@ interface SessionInfo {
   attachable: boolean;
   categoryId: string | null;
   sortOrder: number;
+  isFork: boolean;
 }
 
 interface CategoryInfo {
@@ -143,6 +144,8 @@ type ServerMessage =
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
   | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
   | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
+  | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }
+  | { type: 'session.kept'; id?: string; payload: { sessionId: string } }
   | { type: 'session.error'; id?: string; payload: ErrorPayload }
   | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
   | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
@@ -302,6 +305,8 @@ class SessionManager {
     // Terminal header controls
     document.getElementById('rename-session-btn')?.addEventListener('click', () => this.showRenameModal());
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
+    document.getElementById('fork-session-btn')?.addEventListener('click', () => this.forkCurrentSession());
+    document.getElementById('keep-session-btn')?.addEventListener('click', () => this.keepCurrentForkSession());
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
@@ -310,6 +315,28 @@ class SessionManager {
         this.hideRenameModal();
         this.hideCategoryModal();
         this.hideSettingsModal();
+      }
+      // New session: Alt+N
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
+        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') {
+          e.preventDefault();
+          this.showNewSessionModal();
+        }
+      }
+      // Session navigation: Ctrl+Q = prev, Ctrl+E = next
+      // Skip when an input/textarea is focused (modal inputs or xterm helper textarea)
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') {
+          if (e.key === 'q' || e.key === 'Q') {
+            e.preventDefault();
+            this.navigateToSession('prev');
+          } else if (e.key === 'e' || e.key === 'E') {
+            e.preventDefault();
+            this.navigateToSession('next');
+          }
+        }
       }
     });
 
@@ -625,6 +652,12 @@ class SessionManager {
       case 'session.reordered':
         this.handleSessionReordered(message.payload);
         break;
+      case 'session.forked':
+        this.handleSessionForked(message.payload);
+        break;
+      case 'session.kept':
+        this.handleSessionKept(message.payload);
+        break;
       case 'category.list':
         this.handleCategoryList(message.payload);
         break;
@@ -734,6 +767,8 @@ class SessionManager {
         onData: (data: string) => this.sendTerminalData(data),
         onResize: (cols: number, rows: number) => this.sendTerminalResize(cols, rows),
       });
+      this.terminalMgr.setNavigateSessionCallback((dir) => this.navigateToSession(dir));
+      this.terminalMgr.setNewSessionCallback(() => this.showNewSessionModal());
 
       // Write scrollback at the session's original dimensions so escape
       // sequences (cursor positioning, line wrapping) render correctly.
@@ -938,6 +973,51 @@ class SessionManager {
         textEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
       }
     }
+  }
+
+  private getOrderedVisibleSessionIds(): string[] {
+    const sortedSessions = Array.from(this.sessions.values()).sort(
+      (a, b) => a.sortOrder - b.sortOrder
+    );
+    const sortedCategories = Array.from(this.categories.values()).sort(
+      (a, b) => a.sortOrder - b.sortOrder
+    );
+
+    if (sortedCategories.length === 0) {
+      return sortedSessions.map(s => s.id);
+    }
+
+    const result: string[] = [];
+    for (const category of sortedCategories) {
+      if (category.collapsed) continue;
+      for (const session of sortedSessions) {
+        if (session.categoryId === category.id) result.push(session.id);
+      }
+    }
+    // Uncategorized sessions last
+    for (const session of sortedSessions) {
+      if (!session.categoryId) result.push(session.id);
+    }
+    return result;
+  }
+
+  private navigateToSession(direction: 'prev' | 'next'): void {
+    const sessionIds = this.getOrderedVisibleSessionIds();
+    if (sessionIds.length === 0) return;
+
+    const currentIndex = this.currentSessionId ? sessionIds.indexOf(this.currentSessionId) : -1;
+
+    let nextIndex: number;
+    if (currentIndex === -1) {
+      nextIndex = direction === 'next' ? 0 : sessionIds.length - 1;
+    } else if (direction === 'next') {
+      nextIndex = (currentIndex + 1) % sessionIds.length;
+    } else {
+      nextIndex = (currentIndex - 1 + sessionIds.length) % sessionIds.length;
+    }
+
+    const targetId = sessionIds[nextIndex];
+    if (targetId) this.attachToSession(targetId);
   }
 
   private renderSessionList(): void {
@@ -1332,6 +1412,19 @@ class SessionManager {
 
     const nameEl = document.getElementById('session-name');
     if (nameEl) nameEl.textContent = session.name;
+
+    this.updateForkControls(session);
+  }
+
+  private updateForkControls(session?: SessionInfo): void {
+    const keepBtn = document.getElementById('keep-session-btn');
+    if (!keepBtn) return;
+    const s = session ?? (this.currentSessionId ? this.sessions.get(this.currentSessionId) : undefined);
+    if (s?.isFork) {
+      keepBtn.classList.remove('hidden');
+    } else {
+      keepBtn.classList.add('hidden');
+    }
   }
 
   private showWelcomeScreen(): void {
@@ -1345,6 +1438,47 @@ class SessionManager {
     document.getElementById('welcome-screen')?.classList.remove('hidden');
 
     this.renderSessionList();
+  }
+
+  private handleSessionForked(payload: { session: SessionInfo }): void {
+    this.sessions.set(payload.session.id, payload.session);
+    this.renderSessionList();
+    this.syncPip();
+    // session.attached arrives next from the server to do terminal setup
+  }
+
+  private handleSessionKept(payload: { sessionId: string }): void {
+    const session = this.sessions.get(payload.sessionId);
+    if (session) {
+      session.isFork = false;
+      this.sessions.set(payload.sessionId, session);
+    }
+    if (this.currentSessionId === payload.sessionId) {
+      this.updateForkControls();
+    }
+    this.renderSessionList();
+  }
+
+  private async forkCurrentSession(): Promise<void> {
+    if (!this.currentSessionId) return;
+    try {
+      await this.sendRequest('session.fork', { sessionId: this.currentSessionId });
+    } catch (error) {
+      this.showForkError(error instanceof Error ? error.message : 'Failed to fork session');
+    }
+  }
+
+  private showForkError(message: string): void {
+    const toast = document.getElementById('fork-error-toast');
+    if (!toast) return;
+    toast.textContent = message;
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), 6000);
+  }
+
+  private keepCurrentForkSession(): void {
+    if (!this.currentSessionId) return;
+    this.send('session.keep', { sessionId: this.currentSessionId });
   }
 
   // Public methods

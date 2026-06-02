@@ -17,6 +17,8 @@ import {
   type SessionRenamePayload,
   type SessionMovePayload,
   type SessionReorderPayload,
+  type SessionForkPayload,
+  type SessionKeepPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
   type SessionInfo,
@@ -213,6 +215,14 @@ function handleMessage(connection: ClientConnection, data: string): void {
       handleSessionReorder(connection, message);
       break;
 
+    case 'session.fork':
+      handleSessionFork(connection, message);
+      break;
+
+    case 'session.keep':
+      handleSessionKeep(connection, message);
+      break;
+
     case 'category.create':
       handleCategoryCreate(connection, message);
       break;
@@ -357,7 +367,7 @@ async function handleSessionCreate(connection: ClientConnection, message: Client
       createMessage(
         'session.created',
         {
-          session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0 }),
+          session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: false }),
         },
         message.id
       )
@@ -409,7 +419,7 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0 }),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false }),
         scrollback: scrollback.join('\r\n'),
       },
       message.id
@@ -597,7 +607,7 @@ function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'delete
   }
 }
 
-function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number }): SessionInfo {
+function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -608,10 +618,86 @@ function sessionToInfo(session: { id: string; name: string; shell: string; cwd: 
     status: session.status,
     cols: session.cols,
     rows: session.rows,
-    attachable: session.attachable ?? true, // Default to true for active sessions
+    attachable: session.attachable ?? true,
     categoryId: session.categoryId ?? null,
     sortOrder: session.sortOrder ?? 0,
+    isFork: session.isFork ?? false,
   };
+}
+
+// Fork handlers
+
+async function handleSessionFork(connection: ClientConnection, message: ClientMessage): Promise<void> {
+  const payload = message.payload as SessionForkPayload;
+
+  if (!payload?.sessionId) {
+    connection.ws.send(createMessage('session.error', { message: 'Session ID required' }, message.id));
+    return;
+  }
+
+  try {
+    const sourceSession = sessionManager.getSession(payload.sessionId);
+    const cols = sourceSession?.cols;
+    const rows = sourceSession?.rows;
+
+    const forkedSession = await sessionManager.forkSession(payload.sessionId, {
+      ownerId: connection.identity?.userId,
+      cols,
+      rows,
+    });
+
+    const forkMetadata = getSessionFromDb(forkedSession.id);
+
+    connection.ws.send(
+      createMessage(
+        'session.forked',
+        {
+          session: sessionToInfo({
+            ...forkedSession,
+            categoryId: forkMetadata?.categoryId ?? null,
+            sortOrder: forkMetadata?.sortOrder ?? 0,
+            isFork: true,
+          }),
+        },
+        message.id
+      )
+    );
+
+    // Detach from source, auto-attach to fork
+    if (connection.attachedSession) {
+      detachFromSession(connection);
+    }
+    attachToSession(connection, forkedSession.id);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to fork session';
+    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+  }
+}
+
+function handleSessionKeep(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as SessionKeepPayload;
+
+  if (!payload?.sessionId) {
+    connection.ws.send(createMessage('session.error', { message: 'Session ID required' }, message.id));
+    return;
+  }
+
+  const success = sessionManager.keepForkSession(payload.sessionId);
+
+  if (success) {
+    connection.ws.send(createMessage('session.kept', { sessionId: payload.sessionId }, message.id));
+    broadcastSessionKept(payload.sessionId, connection.id);
+  } else {
+    connection.ws.send(createMessage('session.error', { message: 'Failed to keep session' }, message.id));
+  }
+}
+
+function broadcastSessionKept(sessionId: string, excludeClientId?: string): void {
+  for (const conn of connections.values()) {
+    if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.kept', { sessionId }));
+    }
+  }
 }
 
 // Category handlers
