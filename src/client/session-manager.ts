@@ -1529,12 +1529,6 @@ class SessionManager {
     this.send('session.attach', { sessionId });
   }
 
-  terminateSession(sessionId: string): void {
-    if (confirm('Are you sure you want to terminate this session?')) {
-      this.send('session.terminate', { sessionId });
-    }
-  }
-
   deleteSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session?.attachable) {
@@ -1695,7 +1689,10 @@ class SessionManager {
 
   private terminateCurrentSession(): void {
     if (this.currentSessionId) {
-      this.terminateSession(this.currentSessionId);
+      // Delete (not just terminate) so the session is also removed from the
+      // sidebar. deleteSession terminates the active process first on the
+      // server, then removes the record — surviving a page reload.
+      this.deleteSession(this.currentSessionId);
     }
   }
 
