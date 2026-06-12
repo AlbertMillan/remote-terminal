@@ -2,6 +2,7 @@
 import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager, type PipSessionInfo } from './pip-manager.js';
 import { escapeHtml, escapeAttr } from './html-utils.js';
+import { SHORTCUT_GROUPS } from './shortcuts.js';
 
 // Configuration constants
 const REQUEST_TIMEOUT_MS = 30000;
@@ -199,6 +200,7 @@ class SessionManager {
     this.terminalMgr = terminal;
     this.setupEventListeners();
     this.setupMobileNavigation();
+    this.renderWelcomeShortcuts();
     this.setupPipButton();
     this.initBrowserNotifications();
     this.connect();
@@ -302,6 +304,10 @@ class SessionManager {
     document.getElementById('settings-cancel')?.addEventListener('click', () => this.hideSettingsModal());
     document.getElementById('settings-save')?.addEventListener('click', () => this.saveSettings());
 
+    // Keyboard shortcuts modal
+    document.getElementById('shortcuts-btn')?.addEventListener('click', () => this.showShortcutsModal());
+    document.getElementById('shortcuts-close')?.addEventListener('click', () => this.hideShortcutsModal());
+
     // Terminal header controls
     document.getElementById('rename-session-btn')?.addEventListener('click', () => this.showRenameModal());
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
@@ -315,6 +321,18 @@ class SessionManager {
         this.hideRenameModal();
         this.hideCategoryModal();
         this.hideSettingsModal();
+        this.hideShortcutsModal();
+      }
+      // Show keyboard shortcuts: ?
+      // Skip when an input/textarea is focused (modal inputs or xterm helper
+      // textarea), or when another modal is already open (avoid stacking).
+      if (e.key === '?' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+        const otherModalOpen = !!document.querySelector('.modal:not(.hidden):not(#shortcuts-modal)');
+        if (tag !== 'input' && tag !== 'textarea' && !otherModalOpen) {
+          e.preventDefault();
+          this.toggleShortcutsModal();
+        }
       }
       // New session: Alt+N
       if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
@@ -352,6 +370,9 @@ class SessionManager {
     });
     document.getElementById('settings-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideSettingsModal();
+    });
+    document.getElementById('shortcuts-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.hideShortcutsModal();
     });
   }
 
@@ -1762,6 +1783,86 @@ class SessionManager {
 
   private hideSettingsModal(): void {
     document.getElementById('settings-modal')?.classList.add('hidden');
+  }
+
+  // Keyboard shortcuts modal — rendered from the SHORTCUT_GROUPS registry so
+  // new shortcuts appear here automatically once added to shortcuts.ts.
+
+  private shortcutsRendered = false;
+  private shortcutsPreviousFocus: HTMLElement | null = null;
+
+  /** Render key tokens as <kbd> elements joined by a "+" separator. */
+  private renderKeys(keys: string[], plusClass = ''): string {
+    const plus = plusClass ? `<span class="${plusClass}">+</span>` : '<span>+</span>';
+    return keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join(plus);
+  }
+
+  private renderShortcutsModal(): void {
+    if (this.shortcutsRendered) return;
+
+    const container = document.getElementById('shortcuts-list');
+    if (!container) return;
+
+    container.innerHTML = SHORTCUT_GROUPS.map(
+      (group) => `
+        <div class="shortcuts-group">
+          <div class="shortcuts-group-title">${escapeHtml(group.title)}</div>
+          ${group.shortcuts
+            .map(
+              (s) => `
+            <div class="shortcuts-row">
+              <span class="shortcuts-keys">${this.renderKeys(s.keys, 'shortcuts-plus')}</span>
+              <span class="shortcuts-desc">${escapeHtml(s.label)}</span>
+            </div>`
+            )
+            .join('')}
+        </div>`
+    ).join('');
+
+    this.shortcutsRendered = true;
+  }
+
+  private renderWelcomeShortcuts(): void {
+    const container = document.getElementById('welcome-shortcut-group');
+    if (!container) return;
+
+    const items = SHORTCUT_GROUPS.flatMap((group) => group.shortcuts).filter((s) => s.welcome);
+    container.innerHTML = items
+      .map(
+        (s) => `
+        <div class="shortcut-item">
+          ${this.renderKeys(s.keys)}
+          <span class="shortcut-label">${escapeHtml(s.label)}</span>
+        </div>`
+      )
+      .join('');
+  }
+
+  private showShortcutsModal(): void {
+    this.renderShortcutsModal();
+    document.getElementById('shortcuts-modal')?.classList.remove('hidden');
+    // Remember what had focus so we can restore it when the modal closes.
+    this.shortcutsPreviousFocus = document.activeElement as HTMLElement | null;
+    document.getElementById('shortcuts-close')?.focus();
+  }
+
+  private hideShortcutsModal(): void {
+    const modal = document.getElementById('shortcuts-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    modal.classList.add('hidden');
+    // Restore focus to wherever it was before the modal opened.
+    this.shortcutsPreviousFocus?.focus();
+    this.shortcutsPreviousFocus = null;
+  }
+
+  private toggleShortcutsModal(): void {
+    const modal = document.getElementById('shortcuts-modal');
+    if (!modal) return;
+    if (modal.classList.contains('hidden')) {
+      this.showShortcutsModal();
+    } else {
+      this.hideShortcutsModal();
+    }
   }
 
   private saveSettings(): void {

@@ -28,6 +28,13 @@
           <span class="status-text">Disconnected</span>
         </div>
         <div class="sidebar-header-actions">
+          <button id="shortcuts-btn" class="settings-btn" title="Keyboard Shortcuts (?)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
+              <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8"></path>
+            </svg>
+            Shortcuts
+          </button>
           <button id="settings-btn" class="settings-btn" title="Notification Settings">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
@@ -133,19 +140,8 @@
           </button>
 
           <div class="welcome-shortcuts">
-            <div class="shortcut-group">
-              <div class="shortcut-item">
-                <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>V</kbd>
-                <span class="shortcut-label">Paste</span>
-              </div>
-              <div class="shortcut-item">
-                <kbd>Ctrl</kbd><span>+</span><kbd>C</kbd>
-                <span class="shortcut-label">Interrupt</span>
-              </div>
-              <div class="shortcut-item">
-                <kbd>Esc</kbd>
-                <span class="shortcut-label">Close modal</span>
-              </div>
+            <div id="welcome-shortcut-group" class="shortcut-group">
+              <!-- Populated from the shortcuts registry (src/client/shortcuts.ts) -->
             </div>
           </div>
 
@@ -289,6 +285,19 @@
       <div class="modal-actions">
         <button id="settings-cancel" class="btn-secondary">Cancel</button>
         <button id="settings-save" class="btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Modal -->
+  <div id="shortcuts-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-modal-title">
+    <div class="modal-content">
+      <h3 id="shortcuts-modal-title">Keyboard Shortcuts</h3>
+      <div id="shortcuts-list" class="shortcuts-list">
+        <!-- Populated from the shortcuts registry -->
+      </div>
+      <div class="modal-actions">
+        <button id="shortcuts-close" class="btn-primary">Close</button>
       </div>
     </div>
   </div>

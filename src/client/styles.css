@@ -1505,6 +1505,79 @@ body {
   transform: rotate(45deg);
 }
 
+/* The shortcuts button reuses .settings-btn but shouldn't spin its keyboard icon */
+#shortcuts-btn:hover svg {
+  transform: none;
+}
+
+/* Keyboard Shortcuts modal */
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 4px 0 8px;
+}
+
+.shortcuts-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcuts-group-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 2px;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.shortcuts-row:hover {
+  background: var(--bg-primary);
+}
+
+.shortcuts-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 130px;
+}
+
+.shortcuts-keys kbd {
+  display: inline-block;
+  padding: 3px 7px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  box-shadow: 0 2px 0 var(--border);
+}
+
+.shortcuts-plus {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.shortcuts-desc {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
 /* Mobile Navigation Overlay */
 .mobile-nav-toggle {
   display: none;

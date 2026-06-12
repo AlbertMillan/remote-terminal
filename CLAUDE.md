@@ -124,6 +124,14 @@ The fork button in the terminal header branches the current Claude Code conversa
 
 The Fork button will show an error if no Claude session ID has been registered yet (i.e., Claude hasn't stopped at least once since the terminal opened).
 
+## Keyboard Shortcuts Display
+
+All keyboard shortcuts are registered in a single source of truth: `src/client/shortcuts.ts` (`SHORTCUT_GROUPS`). Two surfaces render directly from this registry, so they never drift:
+- The "Keyboard Shortcuts" modal — open it with the **?** key or the keyboard icon in the sidebar header (`#shortcuts-btn`).
+- The welcome screen's shortcut hints (`#welcome-shortcut-group`).
+
+**When adding a new shortcut**, register it in `SHORTCUT_GROUPS` (in addition to wiring up its handler) so it automatically appears in both displays. No HTML/CSS changes are needed.
+
 ## Logging & Debugging
 
 Logs are written to `~/.claude-remote/logs/server.log` (JSON format, rotates every 3 days).
