@@ -112,6 +112,12 @@ The fork button in the terminal header branches the current Claude Code conversa
 ```json
 {
   "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/session/$CLAUDE_REMOTE_SESSION_ID/claude-session\" -H \"Content-Type: application/json\" -d \"{\\\"claudeSessionId\\\": \\\"$CLAUDE_CODE_SESSION_ID\\\"}\""
+      }]
+    }],
     "Stop": [{
       "hooks": [{
         "type": "command",
@@ -122,7 +128,7 @@ The fork button in the terminal header branches the current Claude Code conversa
 }
 ```
 
-The Fork button will show an error if no Claude session ID has been registered yet (i.e., Claude hasn't stopped at least once since the terminal opened).
+`SessionStart` registers the ID immediately on launch (including `--resume`), so Fork is available without needing to send any message first. `Stop` keeps it updated in case the session ID changes.
 
 ## Keyboard Shortcuts Display
 
