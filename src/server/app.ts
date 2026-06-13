@@ -14,6 +14,7 @@ import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles } from './sessions/manager.js';
+import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -104,13 +105,18 @@ export async function createApp(): Promise<FastifyInstance> {
     return { sessions: sessionManager.getSessionList() };
   });
 
+  // Recent working directories (for the new-session path dropdown)
+  app.get('/api/recent-paths', async () => {
+    return { paths: getRecentPaths().map((p) => p.cwd) };
+  });
+
   // Claude session ID registration (called by the Stop hook)
   app.post<{
     Params: { sessionId: string };
-    Body: { claudeSessionId: string };
+    Body: { claudeSessionId: string; cwd?: string };
   }>('/api/session/:sessionId/claude-session', async (request, reply) => {
     const { sessionId } = request.params;
-    const body = request.body as { claudeSessionId?: string };
+    const body = request.body as { claudeSessionId?: string; cwd?: string };
     const claudeSessionId = body?.claudeSessionId;
 
     if (!claudeSessionId || typeof claudeSessionId !== 'string') {
@@ -131,7 +137,12 @@ export async function createApp(): Promise<FastifyInstance> {
       }
     }
 
-    setClaudeSessionId(sessionId, claudeSessionId);
+    let cwd = typeof body?.cwd === 'string' && body.cwd.length > 0 ? body.cwd : undefined;
+    // Convert MSYS/Git Bash Unix-style paths to Windows paths (e.g. /c/Users/... → C:\Users\...)
+    if (cwd && process.platform === 'win32') {
+      cwd = cwd.replace(/^\/([a-zA-Z])\//, '$1:\\').replace(/\//g, '\\');
+    }
+    setClaudeSessionId(sessionId, claudeSessionId, cwd);
     return { success: true };
   });
 

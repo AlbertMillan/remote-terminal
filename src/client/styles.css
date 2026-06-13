@@ -896,6 +896,104 @@ body {
   color: var(--text-muted);
 }
 
+/* Working-directory suggestions dropdown */
+.cwd-field {
+  position: relative;
+}
+
+.cwd-field input[type="text"] {
+  padding-right: 40px;
+}
+
+.cwd-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0 10px 10px 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.cwd-toggle:hover {
+  color: var(--accent);
+}
+
+.cwd-toggle svg {
+  transition: transform var(--transition-fast);
+}
+
+.cwd-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.cwd-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.cwd-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color var(--transition-fast);
+}
+
+.cwd-suggestion svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.cwd-suggestion .cwd-suggestion-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Truncate from the LEFT so the meaningful tail (project folder) stays
+     visible; the &lrm; in the markup keeps the path reading left-to-right. */
+  direction: rtl;
+}
+
+.cwd-suggestion:hover,
+.cwd-suggestion.active {
+  background-color: var(--bg-hover, var(--bg-primary));
+}
+
+.cwd-suggestion:hover svg,
+.cwd-suggestion.active svg {
+  color: var(--accent);
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

@@ -213,7 +213,13 @@
       </div>
       <div class="form-group">
         <label for="session-cwd-input">Working Directory (optional)</label>
-        <input type="text" id="session-cwd-input" placeholder="/path/to/directory">
+        <div class="cwd-field">
+          <input type="text" id="session-cwd-input" placeholder="/path/to/directory" autocomplete="off">
+          <button type="button" id="cwd-toggle" class="cwd-toggle hidden" aria-label="Show recent paths" title="Recent paths">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+          <ul id="cwd-suggestions" class="cwd-suggestions hidden"></ul>
+        </div>
       </div>
       <div class="modal-actions">
         <button id="new-session-cancel" class="btn-secondary">Cancel</button>

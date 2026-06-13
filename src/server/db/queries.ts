@@ -110,11 +110,18 @@ export function getSession(id: string): SessionMetadata | null {
   });
 }
 
-export function setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
-  executeStatement('setClaudeSessionId',
-    'UPDATE sessions SET claude_session_id = ? WHERE id = ?',
-    (stmt) => stmt.run(claudeSessionId, sessionId)
-  );
+export function setClaudeSessionId(sessionId: string, claudeSessionId: string, cwd?: string): void {
+  if (cwd) {
+    executeStatement('setClaudeSessionIdAndCwd',
+      'UPDATE sessions SET claude_session_id = ?, cwd = ? WHERE id = ?',
+      (stmt) => stmt.run(claudeSessionId, cwd, sessionId)
+    );
+  } else {
+    executeStatement('setClaudeSessionId',
+      'UPDATE sessions SET claude_session_id = ? WHERE id = ?',
+      (stmt) => stmt.run(claudeSessionId, sessionId)
+    );
+  }
 }
 
 export function clearForkFlag(sessionId: string): void {
@@ -134,6 +141,21 @@ const SESSION_SELECT = `
 
 function toSessionMetadata(row: Omit<SessionMetadata, 'isFork'> & { isFork: number }): SessionMetadata {
   return { ...row, isFork: row.isFork === 1 };
+}
+
+/**
+ * Distinct working directories from past sessions, most-recently-used first.
+ * Used to suggest recent paths when creating a new session.
+ */
+export function getRecentCwds(limit = 50): { cwd: string; lastAccessedAt: string }[] {
+  return executeStatement('getRecentCwds', `
+    SELECT cwd, MAX(last_accessed_at) as lastAccessedAt
+    FROM sessions
+    WHERE cwd IS NOT NULL AND cwd != ''
+    GROUP BY cwd
+    ORDER BY lastAccessedAt DESC
+    LIMIT ?
+  `, (stmt) => stmt.all(limit) as { cwd: string; lastAccessedAt: string }[]);
 }
 
 export function getAllSessions(ownerId?: string): SessionMetadata[] {
