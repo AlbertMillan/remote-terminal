@@ -138,9 +138,12 @@ export async function createApp(): Promise<FastifyInstance> {
     }
 
     let cwd = typeof body?.cwd === 'string' && body.cwd.length > 0 ? body.cwd : undefined;
-    // Convert MSYS/Git Bash Unix-style paths to Windows paths (e.g. /c/Users/... → C:\Users\...)
+    // Convert MSYS/Git Bash Unix-style paths to Windows paths (e.g. /c/Users/... → C:\Users\...).
+    // Uppercase the drive letter: Git Bash emits a lowercase /c/, but Windows convention (and
+    // claude --resume's case-sensitive cwd matching) expects C:\. Preserving the lowercase here
+    // previously seeded lowercase cwds into the DB, hiding sessions from the resume picker.
     if (cwd && process.platform === 'win32') {
-      cwd = cwd.replace(/^\/([a-zA-Z])\//, '$1:\\').replace(/\//g, '\\');
+      cwd = cwd.replace(/^\/([a-zA-Z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, '\\');
     }
     setClaudeSessionId(sessionId, claudeSessionId, cwd);
     return { success: true };
