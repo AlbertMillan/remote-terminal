@@ -18,7 +18,15 @@ export interface PtyOptions {
 export function createPty(options: PtyOptions = {}): IPty {
   const shell = options.shell || getDefaultShell();
   const args = options.args || getShellArgs();
-  const cwd = options.cwd || process.cwd();
+  let cwd = options.cwd || process.cwd();
+  // Normalize the Windows drive letter to uppercase (e.g. c:\ -> C:\). This is the single
+  // chokepoint for every PTY spawn, so it guarantees the cwd `claude` records is uppercase
+  // no matter what the new-session form, recent-paths dropdown, or DB supplied. claude --resume
+  // matches a session's recorded cwd case-sensitively, so a lowercase drive letter would hide
+  // the session from the resume picker.
+  if (isWindows()) {
+    cwd = cwd.replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`);
+  }
   const cols = options.cols || 80;
   const rows = options.rows || 24;
 
