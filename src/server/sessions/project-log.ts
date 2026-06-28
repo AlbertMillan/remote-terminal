@@ -92,6 +92,39 @@ async function isGitRepo(cwd: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
+
+// Shared instruction for the normalized, grouped phases manifest. Real plans use
+// many conventions (Phase N / M-N / SU-N / "✅ shipped" / status blockquotes /
+// prose) and several parallel tracks per project, so the model interprets them
+// into one consistent schema the dashboard renders.
+function phasesInstruction(planGlobs: string[], currentSessionId: string | null): string {
+  const attribution = currentSessionId
+    ? `For items you advanced or completed in THIS session, add "${currentSessionId}" to their sessionIds (avoid duplicates). Preserve every id already present.`
+    : `Best-effort attribute historical claude session ids: existing log-entry markers carry "claudeSessionId", and the transcripts show who did what — populate sessionIds when reasonably confident (an item may list several). Preserve every id already present.`;
+  return `MAINTAIN THE PHASES MANIFEST (this powers the project dashboard — do it every run):
+Use Glob to find this project's plan/design docs (patterns: ${planGlobs.join(', ')}) and read them.
+Extract the development stages/phases. Docs differ: numbered "Phase N", "M1/M2" milestones,
+"SU-N"/"DS-N" stages, "✅ shipped" suffixes, a status blockquote, or plain prose — interpret
+each and normalize into this EXACT block, written once right AFTER the "# Session Log" header
+and updated in place on later runs (never duplicate it):
+
+<!-- claude-remote-phases
+[
+  { "group": "<track label>", "source": "<relative doc path>", "items": [
+    { "id": "<e.g. Phase 1, M3, SU-2>", "title": "<short title>", "status": "done|in_progress|pending", "sessionIds": [] }
+  ]}
+]
+-->
+
+Rules:
+- Keep each plan track / doc as its OWN group; NEVER merge different axes (don't mix "Phase 2"
+  with "SU-2"). Preserve logical execution order within each track.
+- status: "done" if the doc marks it shipped/complete; "in_progress" if started but not finished;
+  else "pending". Be faithful to the doc's own signals.
+- sessionIds: ${attribution}
+- The block MUST be valid JSON.`;
+}
+
 function buildPrompt(opts: {
   ctx: SessionLogContext;
   fileName: string;
@@ -122,7 +155,7 @@ function buildPrompt(opts: {
     headingDate: nowIso.slice(0, 10),
     headingTitle: ctx.name,
     hints: {
-      done: '<one or two sentences on what was accomplished>',
+      done: '<ONE concise sentence on what THIS session changed — a delta, not a project summary>',
       changed: '<comma-separated key files/areas>',
       planProgress: '<completed objectives, or "n/a">',
       openNext: '<what remains, or "nothing pending">',
@@ -143,11 +176,13 @@ Your job:
 2. Use the git diff and recent commits below as the ground truth for what actually changed.
 3. Prepend ONE new entry to the top of ${fileName} at the project root${fileExists ? ' (the file already exists — keep all existing entries unchanged, newest first)' : ' (create the file with a short "# Session Log" header, then the entry)'}.
 ${planInstruction}
+5. ${phasesInstruction(planGlobs, ctx.claudeSessionId)}
 
 STRICT CONSTRAINTS:
 - Modify ONLY ${fileName}${editPlanFiles ? ' and the plan/design files you tick checkboxes in' : ''}. Touch no other file.
-- Never rewrite, reorder, or delete existing log entries.
-- Keep the entry concise and factual. No speculation.
+- Never rewrite, reorder, or delete existing dated log entries (the phases manifest block IS updated in place).
+- This is a per-session DELTA, not a project summary: keep "Done" to a single
+  sentence and each other field to one short line. Be factual; no speculation.
 
 Use EXACTLY this entry format (fill the marker JSON's blockers/openItems with integer counts):
 
@@ -344,8 +379,9 @@ function buildBackfillPrompt(opts: {
   diff: string;
   log: string;
   transcriptPaths: string[];
+  planGlobs: string[];
 }): string {
-  const { cwd, fileName, branch, nowIso, diff, log, transcriptPaths } = opts;
+  const { cwd, fileName, branch, nowIso, diff, log, transcriptPaths, planGlobs } = opts;
   const transcripts = transcriptPaths.length
     ? transcriptPaths.map((p) => `  - ${p}`).join('\n')
     : '  (none small enough to read — rely on git context)';
@@ -382,6 +418,8 @@ Then create ${fileName} at the project root with a "# Session Log" header follow
 ONE entry in EXACTLY this format (fill the marker JSON's blockers/openItems with integer counts):
 
 ${skeleton}
+
+${phasesInstruction(planGlobs, null)}
 
 STRICT CONSTRAINTS:
 - Create/modify ONLY ${fileName}. Touch no other file.
@@ -441,6 +479,7 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
       diff,
       log,
       transcriptPaths: usableTranscripts,
+      planGlobs: cfg.planGlobs,
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');

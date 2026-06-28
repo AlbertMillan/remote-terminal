@@ -47,6 +47,69 @@ export function parseLogEntries(markdown: string): ParsedLogEntry[] {
   });
 }
 
+// --- Phases manifest -------------------------------------------------------
+// A normalized, model-produced view of the project's plan stages. Source docs
+// use wildly different conventions (Phase N / SU-N / M-N / "✅ shipped" / prose
+// status), so the generator interprets them into this schema for a consistent
+// cross-project report. Grouped by track/doc since one project can have several
+// parallel stage axes that must NOT be conflated.
+export type PhaseStatus = 'done' | 'in_progress' | 'pending';
+
+export interface PhaseItem {
+  id: string; // e.g. "Phase 1", "M3", "SU-2"
+  title: string;
+  status: PhaseStatus;
+  sessionIds: string[]; // claude session ids that contributed (best-effort, multi)
+}
+
+export interface PhaseGroup {
+  group: string; // track label, e.g. "Feature roadmap"
+  source: string; // source doc, e.g. "docs/project-onboarding.md"
+  items: PhaseItem[];
+}
+
+// Multi-line JSON inside an HTML comment; distinct prefix from the log marker.
+const PHASES_BLOCK_RE = /<!-- claude-remote-phases\s+([\s\S]*?)-->/;
+
+function normalizeStatus(s: unknown): PhaseStatus {
+  return s === 'done' || s === 'in_progress' || s === 'pending' ? s : 'pending';
+}
+
+/** Parse the `<!-- claude-remote-phases [...] -->` manifest. Defensive: returns
+ *  [] on a missing or malformed block so the dashboard degrades gracefully. */
+export function parsePhasesBlock(markdown: string): PhaseGroup[] {
+  const m = markdown.match(PHASES_BLOCK_RE);
+  if (!m) return [];
+  let data: unknown;
+  try {
+    data = JSON.parse(m[1].trim());
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+  const groups: PhaseGroup[] = [];
+  for (const g of data) {
+    if (!g || typeof g !== 'object') continue;
+    const gg = g as Record<string, unknown>;
+    const rawItems = Array.isArray(gg.items) ? gg.items : [];
+    const items: PhaseItem[] = rawItems
+      .filter((it): it is Record<string, unknown> => !!it && typeof it === 'object')
+      .map((it) => ({
+        id: typeof it.id === 'string' ? it.id : '',
+        title: typeof it.title === 'string' ? it.title : '',
+        status: normalizeStatus(it.status),
+        sessionIds: Array.isArray(it.sessionIds) ? it.sessionIds.filter((x): x is string => typeof x === 'string') : [],
+      }))
+      .filter((it) => it.id || it.title);
+    groups.push({
+      group: typeof gg.group === 'string' ? gg.group : 'Phases',
+      source: typeof gg.source === 'string' ? gg.source : '',
+      items,
+    });
+  }
+  return groups;
+}
+
 export interface EntryHints {
   done: string;
   changed: string;

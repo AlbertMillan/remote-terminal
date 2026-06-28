@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getRecentCwds } from '../db/queries.js';
-import { parseLogEntries, type LogEntryMeta, type ParsedLogEntry } from './session-log-format.js';
+import { parseLogEntries, parsePhasesBlock, type LogEntryMeta, type ParsedLogEntry, type PhaseGroup } from './session-log-format.js';
 
 const logger = createLogger('project-discovery');
 
@@ -179,22 +179,26 @@ export interface ProjectBoardItem {
   transcriptCount: number;
   entries: ParsedLogEntry[]; // parsed SESSION-LOG.md entries, newest first ([] if no log)
   latest: LogEntryMeta | null; // marker of the newest entry, for at-a-glance status
+  phaseGroups: PhaseGroup[]; // normalized plan stages, grouped by track ([] if none)
 }
 
 /**
  * Discovery enriched with each project's parsed SESSION-LOG.md — the payload the
  * dashboard renders. Log files are small, so reading them all per request is
- * cheap; an unreadable/missing log yields an empty entry list.
+ * cheap; an unreadable/missing log yields empty entries/phases.
  */
 export function getProjectBoard(): ProjectBoardItem[] {
   const fileName = getConfig().projectLog.fileName;
   return discoverProjects().map((p) => {
     let entries: ParsedLogEntry[] = [];
+    let phaseGroups: PhaseGroup[] = [];
     if (p.hasLog) {
       try {
-        entries = parseLogEntries(readFileSync(join(p.cwd, fileName), 'utf-8'));
+        const md = readFileSync(join(p.cwd, fileName), 'utf-8');
+        entries = parseLogEntries(md);
+        phaseGroups = parsePhasesBlock(md);
       } catch {
-        // unreadable log — surface as having no entries
+        // unreadable log — surface as having no entries/phases
       }
     }
     return {
@@ -205,6 +209,7 @@ export function getProjectBoard(): ProjectBoardItem[] {
       transcriptCount: p.transcriptCount,
       entries,
       latest: entries[0]?.meta ?? null,
+      phaseGroups,
     };
   });
 }

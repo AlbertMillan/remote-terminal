@@ -2144,3 +2144,110 @@ body {
   border-radius: 4px;
 }
 .log-entry-body p { margin: 4px 0; }
+
+/* Phases / plan-progress tables */
+.project-log-subhead {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  margin: 8px 0 12px;
+}
+.phase-groups { margin-bottom: 24px; }
+
+.phase-group {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.phase-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.phase-group-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.phase-group-src {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.phase-progress {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.phase-list { list-style: none; margin: 0; padding: 0; }
+.phase-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+.phase-item:first-child { border-top: none; }
+
+.phase-status {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+}
+.phase-status.done { color: var(--success); }
+.phase-status.in_progress { color: var(--warning); }
+.phase-status.pending { color: var(--text-muted); }
+
+.phase-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 56px;
+}
+.phase-title {
+  flex: 1 1 auto;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.phase-sessions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sid-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 1px 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: all var(--transition-fast);
+}
+.sid-chip:hover { border-color: var(--accent); color: var(--text-primary); }
+.sid-chip .sid-copy { opacity: 0.6; }
+.sid-chip.copied {
+  color: var(--success);
+  border-color: var(--success);
+}
+.sid-chip.copied .sid-copy::after { content: ' copied'; }

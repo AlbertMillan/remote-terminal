@@ -47,6 +47,17 @@ interface ParsedLogEntry {
   meta: LogEntryMeta | null;
   body: string;
 }
+interface PhaseItem {
+  id: string;
+  title: string;
+  status: 'done' | 'in_progress' | 'pending';
+  sessionIds: string[];
+}
+interface PhaseGroup {
+  group: string;
+  source: string;
+  items: PhaseItem[];
+}
 interface ProjectBoardItem {
   cwd: string;
   name: string;
@@ -55,6 +66,7 @@ interface ProjectBoardItem {
   transcriptCount: number;
   entries: ParsedLogEntry[];
   latest: LogEntryMeta | null;
+  phaseGroups: PhaseGroup[];
 }
 
 // Type-safe server message definitions (issue #14)
@@ -321,6 +333,15 @@ class SessionManager {
     document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
     document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
+    // Copy session ids from the phases table (event delegation)
+    document.getElementById('project-log-entries')?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-copy]') as HTMLElement | null;
+      if (!btn) return;
+      const sid = btn.getAttribute('data-copy') || '';
+      navigator.clipboard?.writeText(sid);
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 1000);
+    });
 
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
@@ -1685,13 +1706,52 @@ class SessionManager {
 
     const entriesEl = document.getElementById('project-log-entries');
     if (entriesEl) {
-      if (project.entries.length === 0) {
-        entriesEl.innerHTML = '<div class="project-empty">No entries yet.</div>';
-      } else {
-        entriesEl.innerHTML = project.entries.map((e) => this.renderLogEntry(e)).join('');
-      }
+      const phasesHtml = this.renderPhaseGroups(project.phaseGroups);
+      const entriesHtml =
+        project.entries.length === 0
+          ? '<div class="project-empty">No entries yet.</div>'
+          : `<h3 class="project-log-subhead">Session history</h3>` +
+            project.entries.map((e) => this.renderLogEntry(e)).join('');
+      entriesEl.innerHTML = phasesHtml + entriesHtml;
     }
     this.renderProjectList(); // refresh active highlight
+  }
+
+  private renderPhaseGroups(groups: PhaseGroup[]): string {
+    if (!groups || groups.length === 0) return '';
+    const icon = (s: string): string =>
+      s === 'done' ? '✓' : s === 'in_progress' ? '◷' : '○';
+    const sidChip = (sid: string): string => {
+      if (!sid || sid === 'backfill' || sid === 'unknown') return '';
+      const short = escapeHtml(sid.slice(0, 8));
+      return `<button class="sid-chip" data-copy="${escapeAttr(sid)}" title="Copy session id ${escapeAttr(sid)}">${short}<span class="sid-copy">⧉</span></button>`;
+    };
+    const renderGroup = (g: PhaseGroup): string => {
+      const done = g.items.filter((i) => i.status === 'done').length;
+      const rows = g.items
+        .map(
+          (it) => `
+        <li class="phase-item">
+          <span class="phase-status ${it.status}" title="${it.status}">${icon(it.status)}</span>
+          ${it.id ? `<span class="phase-id">${escapeHtml(it.id)}</span>` : ''}
+          <span class="phase-title">${escapeHtml(it.title)}</span>
+          <span class="phase-sessions">${it.sessionIds.map(sidChip).join('')}</span>
+        </li>`
+        )
+        .join('');
+      return `
+        <div class="phase-group">
+          <div class="phase-group-head">
+            <span class="phase-group-name">${escapeHtml(g.group)}</span>
+            ${g.source ? `<span class="phase-group-src">${escapeHtml(g.source)}</span>` : ''}
+            <span class="phase-progress">${done}/${g.items.length}</span>
+          </div>
+          <ul class="phase-list">${rows}</ul>
+        </div>`;
+    };
+    return `<div class="phase-groups"><h3 class="project-log-subhead">Plan progress</h3>${groups
+      .map(renderGroup)
+      .join('')}</div>`;
   }
 
   private renderLogEntry(entry: ParsedLogEntry): string {
@@ -1726,12 +1786,10 @@ class SessionManager {
   }
 
   private openSessionForSelectedProject(): void {
-    const cwd = this.selectedProjectCwd;
-    if (!cwd) return;
-    this.selectedProjectCwd = null;
-    document.getElementById('project-log-view')?.classList.add('hidden');
-    document.getElementById('welcome-screen')?.classList.remove('hidden');
-    this.showNewSessionModal(cwd);
+    if (!this.selectedProjectCwd) return;
+    // Open the modal over the project view. If the user cancels, the project log
+    // stays put; if they create a session, showTerminal() takes over the area.
+    this.showNewSessionModal(this.selectedProjectCwd);
   }
 
   private async backfillProject(cwd: string, btn: HTMLButtonElement): Promise<void> {
