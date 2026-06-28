@@ -461,7 +461,7 @@ class SessionManager {
    */
   private maybeLogSession(metadata: SessionMetadata | null): void {
     if (!metadata) return;
-    if (!getConfig().projectLog.enabled) return;
+    if (!getConfig().projectLog?.enabled) return;
     if (metadata.isFork || !metadata.claudeSessionId) return;
     void generateSessionLog({
       sessionId: metadata.id,
@@ -706,7 +706,7 @@ export function cleanupOrphanedForkFiles(): void {
  * each session so this never double-logs. No-op when the feature is disabled.
  */
 export function sweepUnloggedSessions(): void {
-  if (!getConfig().projectLog.enabled) return;
+  if (!getConfig().projectLog?.enabled) return;
   const sessions = getUnloggedSessionsForLog();
   if (sessions.length === 0) return;
   logger.info({ count: sessions.length }, 'project-log: startup sweep processing unlogged sessions');

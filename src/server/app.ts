@@ -121,10 +121,11 @@ export async function createApp(): Promise<FastifyInstance> {
 
   // Backfill SESSION-LOG.md for projects that don't have one yet. Body is
   // optional: { cwds?: string[] } targets specific projects; default is every
-  // discovered project without a log. Runs claude-per-project sequentially
-  // (queue-bounded) and returns each outcome. Projects with an existing log are
-  // never overwritten.
-  app.post<{ Body?: { cwds?: string[] } }>('/api/project-logs/backfill', async (request) => {
+  // discovered project without a log. Jobs are fired into the bounded generation
+  // queue and the request returns 202 immediately — progress is observable via
+  // GET /api/project-logs as each project's `hasLog` flips. Projects with an
+  // existing log are never overwritten.
+  app.post<{ Body?: { cwds?: string[] } }>('/api/project-logs/backfill', async (request, reply) => {
     const body = (request.body || {}) as { cwds?: string[] };
     const wanted =
       Array.isArray(body.cwds) && body.cwds.length > 0 ? new Set(body.cwds.map(pathKey)) : null;
@@ -134,12 +135,12 @@ export async function createApp(): Promise<FastifyInstance> {
       return wanted ? wanted.has(pathKey(p.cwd)) : true;
     });
 
-    const results: { cwd: string; outcome: string }[] = [];
+    // Fire-and-forget: generateProjectBackfill is queue-bounded and never throws.
     for (const p of targets) {
-      const outcome = await generateProjectBackfill({ cwd: p.cwd, transcriptPaths: p.transcriptPaths });
-      results.push({ cwd: p.cwd, outcome });
+      void generateProjectBackfill({ cwd: p.cwd, transcriptPaths: p.transcriptPaths });
     }
-    return { requested: targets.length, results };
+    logger.info({ accepted: targets.length }, 'project-log: backfill accepted');
+    return reply.status(202).send({ accepted: targets.length, cwds: targets.map((p) => p.cwd) });
   });
 
   // Claude session ID registration (called by the Stop hook)

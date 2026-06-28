@@ -1,5 +1,29 @@
-import { existsSync, readdirSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
+
+const EDIT_TOOL_RE = /"name"\s*:\s*"(Edit|Write|MultiEdit|NotebookEdit)"/;
+
+/** Read a transcript file into a string, returning '' if it can't be read. */
+export function readTranscript(path: string): string {
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+/** True if the transcript contains any file-editing tool call. */
+export function transcriptHasEdits(transcript: string): boolean {
+  return EDIT_TOOL_RE.test(transcript);
+}
+
+/** Count user turns in a transcript (rough signal of session substance). */
+export function countUserTurns(transcript: string): number {
+  let count = 0;
+  const re = /"type"\s*:\s*"user"/g;
+  while (re.exec(transcript)) count++;
+  return count;
+}
 
 /**
  * Robust JSONL location — tries the computed slug first, falls back to scanning

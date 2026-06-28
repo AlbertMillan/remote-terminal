@@ -246,6 +246,18 @@ and progress-reported — never automatic on startup.
 - **Generation failure:** non-fatal, logged; `logged_at` left unset so the next
   startup sweep can retry.
 - **Re-opened project:** next close appends the next delta entry → natural changelog.
+- **Untrusted repo content reaches an agent with write access (security):** the
+  generator inlines the raw `git diff` (and points at the transcript) into a
+  `claude -p` run that holds `Edit`/`Write` under `acceptEdits`. The "only modify
+  SESSION-LOG.md" rule is *prompt-enforced* — the CLI does not path-restrict
+  edits — so a diff/transcript carrying injected instructions could in principle
+  induce edits to other files. Mitigations in place: `allowedTools` excludes
+  `Bash` (no arbitrary command execution) and the server sits behind Tailscale
+  auth. Residual risk: discovery enumerates *every* project on the machine,
+  including third-party clones whose content you don't control. Keep auto-logging
+  opt-in (`enabled: false` by default) and prefer it on repos you trust; treat
+  backfill of unfamiliar repos with the same caution. A hard fix would require a
+  CLI flag to scope writes to specific paths, which doesn't currently exist.
 - **Working-tree diff is not session-scoped:** the skip-gate/generator use the
   full `git diff` of the working tree, while `git log --since=<createdAt>` is
   time-bounded. So uncommitted changes that pre-date the session are attributed

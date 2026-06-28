@@ -1,12 +1,13 @@
 import { spawn, execFile } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { stampSessionLogged } from '../db/queries.js';
-import { tryGetTranscriptPath } from './transcript.js';
+import { tryGetTranscriptPath, readTranscript, transcriptHasEdits, countUserTurns } from './transcript.js';
+import { buildEntrySkeleton } from './session-log-format.js';
 
 const logger = createLogger('project-log');
 const execFileAsync = promisify(execFile);
@@ -14,7 +15,6 @@ const execFileAsync = promisify(execFile);
 // Bounds on how much git context we inline into the generation prompt.
 const MAX_DIFF_CHARS = 12000;
 const MAX_LOG_CHARS = 2000;
-const EDIT_TOOL_RE = /"name"\s*:\s*"(Edit|Write|MultiEdit|NotebookEdit)"/;
 
 export interface SessionLogContext {
   sessionId: string; // claude-remote session id (DB primary key)
@@ -70,28 +70,6 @@ async function isGitRepo(cwd: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Skip-gate signals
-// ---------------------------------------------------------------------------
-function readTranscript(path: string): string {
-  try {
-    return readFileSync(path, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
-function transcriptHasEdits(transcript: string): boolean {
-  return EDIT_TOOL_RE.test(transcript);
-}
-
-function countUserTurns(transcript: string): number {
-  let count = 0;
-  const re = /"type"\s*:\s*"user"/g;
-  while (re.exec(transcript)) count++;
-  return count;
-}
-
-// ---------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------
 function buildPrompt(opts: {
@@ -111,6 +89,19 @@ function buildPrompt(opts: {
   const planInstruction = editPlanFiles
     ? `4. Find plan/design docs (glob patterns: ${planGlobs.join(', ')}) with Glob, and for objectives this session completed, tick their checkboxes ("- [ ]" -> "- [x]"). Only flip boxes you are confident are done.`
     : '4. Do not modify plan or design files.';
+
+  const skeleton = buildEntrySkeleton({
+    meta: { date: nowIso, session: ctx.name, branch, claudeSessionId: ctx.claudeSessionId, blockers: 0, openItems: 0 },
+    headingDate: nowIso.slice(0, 10),
+    headingTitle: ctx.name,
+    hints: {
+      done: '<one or two sentences on what was accomplished>',
+      changed: '<comma-separated key files/areas>',
+      planProgress: '<completed objectives, or "n/a">',
+      openNext: '<what remains, or "nothing pending">',
+      blockers: '<blockers, or "none">',
+    },
+  });
 
   return `You are writing a single changelog entry for a development session that just ended.
 
@@ -134,13 +125,7 @@ STRICT CONSTRAINTS:
 
 Use EXACTLY this entry format (fill the marker JSON's blockers/openItems with integer counts):
 
-<!-- claude-remote-log {"date":"${nowIso}","session":${JSON.stringify(ctx.name)},"branch":${JSON.stringify(branch)},"claudeSessionId":"${ctx.claudeSessionId}","blockers":0,"openItems":0} -->
-## ${nowIso.slice(0, 10)} · ${ctx.name} · ${branch}
-**Done:** <one or two sentences on what was accomplished>
-**Changed:** <comma-separated key files/areas>
-**Plan progress:** <completed objectives, or "n/a">
-**Open / next:** <what remains, or "nothing pending">
-**Blockers:** <blockers, or "none">
+${skeleton}
 
 === GIT DIFF (truncated) ===
 ${diff || '(no diff)'}
@@ -328,6 +313,19 @@ function buildBackfillPrompt(opts: {
     ? transcriptPaths.map((p) => `  - ${p}`).join('\n')
     : '  (none on disk)';
 
+  const skeleton = buildEntrySkeleton({
+    meta: { date: nowIso, session: '(backfill)', branch, claudeSessionId: 'backfill', blockers: 0, openItems: 0 },
+    headingDate: nowIso.slice(0, 10),
+    headingTitle: '(backfill)',
+    hints: {
+      done: '<what the project currently provides / major features built>',
+      changed: '<key areas/modules of the codebase>',
+      planProgress: '<completed vs outstanding objectives if a plan exists, else "n/a">',
+      openNext: '<what appears in progress or unfinished>',
+      blockers: '<known blockers, or "none">',
+    },
+  });
+
   return `You are seeding a project changelog for a project that has no ${fileName} yet.
 Write ONE summary entry capturing the CURRENT STATE of the project — what has been
 built so far and what appears in progress — by collapsing its whole history.
@@ -346,13 +344,7 @@ ${transcripts}
 Then create ${fileName} at the project root with a "# Session Log" header followed by
 ONE entry in EXACTLY this format (fill the marker JSON's blockers/openItems with integer counts):
 
-<!-- claude-remote-log {"date":"${nowIso}","session":"(backfill)","branch":${JSON.stringify(branch)},"claudeSessionId":"backfill","blockers":0,"openItems":0} -->
-## ${nowIso.slice(0, 10)} · (backfill) · ${branch}
-**Done:** <what the project currently provides / major features built>
-**Changed:** <key areas/modules of the codebase>
-**Plan progress:** <completed vs outstanding objectives if a plan exists, else "n/a">
-**Open / next:** <what appears in progress or unfinished>
-**Blockers:** <known blockers, or "none">
+${skeleton}
 
 STRICT CONSTRAINTS:
 - Create/modify ONLY ${fileName}. Touch no other file.

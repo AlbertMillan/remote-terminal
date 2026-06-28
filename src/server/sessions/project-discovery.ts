@@ -60,13 +60,29 @@ interface Accum {
   lastActivityMs: number;
 }
 
+const CACHE_TTL_MS = 5000;
+let cache: { at: number; projects: DiscoveredProject[] } | null = null;
+
 /**
  * Enumerate known projects from two sources, unified by working directory:
  *  - every project dir under ~/.claude/projects (real cwd decoded from a
  *    transcript line, since the slugified dir name is lossy), and
  *  - distinct cwds recorded in the sessions DB.
+ *
+ * Cached for a few seconds because the scan is fully synchronous fs IO and the
+ * dashboard may poll it. Pass { force: true } to bypass the cache.
  */
-export function discoverProjects(): DiscoveredProject[] {
+export function discoverProjects(opts?: { force?: boolean }): DiscoveredProject[] {
+  const now = Date.now();
+  if (!opts?.force && cache && now - cache.at < CACHE_TTL_MS) {
+    return cache.projects;
+  }
+  const projects = scanProjects();
+  cache = { at: now, projects };
+  return projects;
+}
+
+function scanProjects(): DiscoveredProject[] {
   const byKey = new Map<string, Accum>();
 
   // Source 1: ~/.claude/projects/*

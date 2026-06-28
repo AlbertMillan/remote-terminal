@@ -57,6 +57,9 @@ vi.mock('../src/server/config.js', () => ({
       scrollbackLines: 10000,
       dataDir: '/tmp/test',
     },
+    projectLog: {
+      enabled: false,
+    },
   })),
   loadConfig: vi.fn(),
 }));
@@ -545,6 +548,9 @@ describe('SessionManager - Session Limits', () => {
       persistence: {
         scrollbackLines: 10000,
         dataDir: '/tmp/test',
+      },
+      projectLog: {
+        enabled: false,
       },
     });
 
