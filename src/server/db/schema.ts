@@ -141,6 +141,12 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN fork_jsonl_path TEXT;
       `,
     },
+    {
+      name: '008_add_logged_at',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN logged_at TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

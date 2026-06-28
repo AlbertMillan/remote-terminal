@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
-import { copyFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { copyFileSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createPty, resizePty, writeToPty, killPty, ScrollbackBuffer } from './pty-handler.js';
+import { findClaudeProjectDir } from './transcript.js';
+import { generateSessionLog } from './project-log.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
@@ -17,6 +19,7 @@ import {
   logSessionEvent,
   getMaxSessionSortOrder,
   clearForkFlag,
+  getUnloggedSessionsForLog,
 } from '../db/queries.js';
 import {
   createTmuxSession,
@@ -28,33 +31,6 @@ import {
 
 const logger = createLogger('session-manager');
 
-// C1: Robust JSONL location — tries computed slug first, falls back to scanning all project dirs.
-// Claude Code derives its project folder by replacing path separators with '-', but the exact
-// algorithm may vary. Scanning by known session ID is always correct.
-function findClaudeProjectDir(homeDir: string, cwd: string, claudeSessionId: string): string {
-  const projectsDir = join(homeDir, '.claude', 'projects');
-  const slug = cwd.replace(/[:\\/]/g, '-').replace(/^-+/, '');
-  const computedDir = join(projectsDir, slug);
-  if (existsSync(join(computedDir, `${claudeSessionId}.jsonl`))) {
-    return computedDir;
-  }
-  try {
-    const entries = readdirSync(projectsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (existsSync(join(projectsDir, entry.name, `${claudeSessionId}.jsonl`))) {
-        return join(projectsDir, entry.name);
-      }
-    }
-  } catch {
-    // projectsDir not readable
-  }
-  throw new Error(
-    `Claude session transcript not found for session "${claudeSessionId}". ` +
-    `Searched in ${projectsDir}. Ensure the claude-session hook is configured ` +
-    `and Claude has stopped at least once in this terminal.`
-  );
-}
 
 // Configuration constants
 const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
@@ -279,6 +255,9 @@ class SessionManager {
     updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
     logSessionEvent(id, 'terminated');
 
+    // Project-log: capture what this session accomplished (no-op if disabled)
+    this.maybeLogSession(metadata);
+
     // Delete ephemeral fork JSONL
     if (metadata?.isFork && metadata.forkJsonlPath) {
       try {
@@ -460,6 +439,10 @@ class SessionManager {
 
       // Delete ephemeral fork JSONL on natural exit
       const metadata = getSessionMetadata(id);
+
+      // Project-log: capture what this session accomplished (no-op if disabled)
+      this.maybeLogSession(metadata);
+
       if (metadata?.isFork && metadata.forkJsonlPath) {
         try {
           unlinkSync(metadata.forkJsonlPath);
@@ -469,6 +452,24 @@ class SessionManager {
         }
       }
     }
+  }
+
+  /**
+   * Fire-and-forget: generate a SESSION-LOG.md entry for a just-ended session.
+   * Inert unless the feature is enabled; skips forks and sessions with no known
+   * Claude session id. generateSessionLog handles its own skip-gate and stamping.
+   */
+  private maybeLogSession(metadata: SessionMetadata | null): void {
+    if (!metadata) return;
+    if (!getConfig().projectLog.enabled) return;
+    if (metadata.isFork || !metadata.claudeSessionId) return;
+    void generateSessionLog({
+      sessionId: metadata.id,
+      name: metadata.name,
+      cwd: metadata.cwd,
+      claudeSessionId: metadata.claudeSessionId,
+      createdAt: metadata.createdAt,
+    });
   }
 
   async forkSession(sourceId: string, options: { ownerId?: string; cols?: number; rows?: number } = {}): Promise<ActiveSession> {
@@ -693,6 +694,30 @@ export function cleanupOrphanedForkFiles(): void {
       }
     }
     updateSession(session.id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
+  }
+}
+
+/**
+ * Startup reconciliation sweep for the project-log feature. Sessions that ended
+ * because the machine shut down or the server crashed never ran through the
+ * close triggers, so they have no logged_at stamp. After a restart no PTY is
+ * alive, so every un-stamped non-fork session with a known Claude session id is
+ * safe to process now. generateSessionLog applies its own skip-gate and stamps
+ * each session so this never double-logs. No-op when the feature is disabled.
+ */
+export function sweepUnloggedSessions(): void {
+  if (!getConfig().projectLog.enabled) return;
+  const sessions = getUnloggedSessionsForLog();
+  if (sessions.length === 0) return;
+  logger.info({ count: sessions.length }, 'project-log: startup sweep processing unlogged sessions');
+  for (const s of sessions) {
+    void generateSessionLog({
+      sessionId: s.id,
+      name: s.name,
+      cwd: s.cwd,
+      claudeSessionId: s.claudeSessionId,
+      createdAt: s.createdAt,
+    });
   }
 }
 

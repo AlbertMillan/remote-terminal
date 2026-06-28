@@ -13,7 +13,8 @@ import { sessionManager } from './sessions/manager.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
-import { cleanupOrphanedForkFiles } from './sessions/manager.js';
+import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
+import { generateSessionLogForced } from './sessions/project-log.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,6 +30,8 @@ export async function createApp(): Promise<FastifyInstance> {
   // Initialize database
   initDatabase();
   cleanupOrphanedForkFiles();
+  // Retroactively log sessions that ended via crash/OS-shutdown (no-op if disabled)
+  sweepUnloggedSessions();
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -172,6 +175,39 @@ export async function createApp(): Promise<FastifyInstance> {
 
     return { success: true, sessionId, type };
   });
+
+  // Dev-only: smoke-test the project-log generator against an existing session.
+  // Registered only when CLAUDE_REMOTE_DEV=1 so it never exists in production.
+  // Runs even if projectLog.enabled is false, so you can test without flipping
+  // the global config. Example:
+  //   curl -X POST http://localhost:4220/api/dev/project-log/<sessionId>
+  if (process.env.CLAUDE_REMOTE_DEV === '1') {
+    app.post<{ Params: { sessionId: string } }>(
+      '/api/dev/project-log/:sessionId',
+      async (request, reply) => {
+        const { sessionId } = request.params;
+        const session = getSessionFromDb(sessionId);
+        if (!session) {
+          return reply.status(404).send({ error: 'Session not found' });
+        }
+        if (!session.claudeSessionId) {
+          return reply.status(400).send({
+            error: 'Session has no claudeSessionId — ensure the claude-session hook ran for it.',
+          });
+        }
+        logger.info({ sessionId }, 'Dev endpoint: forcing project-log generation');
+        const outcome = await generateSessionLogForced({
+          sessionId: session.id,
+          name: session.name,
+          cwd: session.cwd,
+          claudeSessionId: session.claudeSessionId,
+          createdAt: session.createdAt,
+        });
+        return { sessionId, outcome, cwd: session.cwd, fileName: getConfig().projectLog.fileName };
+      }
+    );
+    logger.warn('Dev endpoint enabled: POST /api/dev/project-log/:sessionId');
+  }
 
   // WebSocket endpoint
   app.get('/ws', { websocket: true }, (socket, request) => {

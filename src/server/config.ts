@@ -29,6 +29,16 @@ export interface Config {
     scrollbackLines: number;
     dataDir: string;
   };
+  projectLog: {
+    enabled: boolean; // master toggle; when false the whole feature is inert
+    fileName: string; // per-project log file, at repo root
+    editPlanFiles: boolean; // also tick completed checkboxes in plan/design docs
+    planGlobs: string[]; // globs used to locate plan/design docs
+    maxConcurrent: number; // max simultaneous `claude -p` generation runs
+    timeoutMs: number; // kill a generation run after this long
+    minTurnsToLog: number; // tiebreaker floor on transcript user-turns
+    claudeCommand: string; // executable used for headless generation
+  };
 }
 
 const defaultConfig: Config = {
@@ -50,6 +60,16 @@ const defaultConfig: Config = {
   persistence: {
     scrollbackLines: 10000,
     dataDir: join(homedir(), '.claude-remote'),
+  },
+  projectLog: {
+    enabled: false,
+    fileName: 'SESSION-LOG.md',
+    editPlanFiles: true,
+    planGlobs: ['*plan*.md', '*design*.md', 'docs/**/*.md'],
+    maxConcurrent: 1,
+    timeoutMs: 180000,
+    minTurnsToLog: 2,
+    claudeCommand: 'claude',
   },
 };
 

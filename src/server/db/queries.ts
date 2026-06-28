@@ -131,6 +131,39 @@ export function clearForkFlag(sessionId: string): void {
   );
 }
 
+/** Mark a session as handled by the project-log feature (skip or successful generation). */
+export function stampSessionLogged(sessionId: string, loggedAt: string): void {
+  executeStatement('stampSessionLogged',
+    'UPDATE sessions SET logged_at = ? WHERE id = ?',
+    (stmt) => stmt.run(loggedAt, sessionId)
+  );
+}
+
+/**
+ * Sessions that ended without ever being processed by the project-log feature —
+ * used by the startup reconciliation sweep to cover crash/OS-shutdown. Only real
+ * (non-fork) sessions with a known Claude session id are eligible.
+ */
+export function getUnloggedSessionsForLog(): {
+  id: string;
+  name: string;
+  cwd: string;
+  claudeSessionId: string;
+  createdAt: string;
+}[] {
+  return executeStatement('getUnloggedSessionsForLog', `
+    SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt
+    FROM sessions
+    WHERE logged_at IS NULL AND is_fork = 0 AND claude_session_id IS NOT NULL
+  `, (stmt) => stmt.all() as {
+    id: string;
+    name: string;
+    cwd: string;
+    claudeSessionId: string;
+    createdAt: string;
+  }[]);
+}
+
 const SESSION_SELECT = `
   SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
          owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
