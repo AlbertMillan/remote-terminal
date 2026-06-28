@@ -544,7 +544,7 @@ class SessionManager {
     try {
       ptyProcess = createPty({ shell, cwd, cols, rows, env: { CLAUDE_REMOTE_SESSION_ID: id } });
     } catch (error) {
-      try { unlinkSync(destJsonlPath); } catch {}
+      try { unlinkSync(destJsonlPath); } catch { /* best-effort cleanup */ }
       updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
       throw error;
     }
@@ -618,7 +618,7 @@ class SessionManager {
 
       if (meta?.isFork && meta.forkJsonlPath) {
         // Fork sessions are ephemeral: delete JSONL and mark terminated on shutdown
-        try { unlinkSync(meta.forkJsonlPath); } catch {}
+        try { unlinkSync(meta.forkJsonlPath); } catch { /* best-effort cleanup */ }
         updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
       } else {
         // Persist scrollback

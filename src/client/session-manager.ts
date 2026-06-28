@@ -1,6 +1,6 @@
 // Session and WebSocket management
 import { terminalManager, TerminalManager } from './terminal.js';
-import { PipManager, type PipSessionInfo } from './pip-manager.js';
+import { PipManager } from './pip-manager.js';
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 

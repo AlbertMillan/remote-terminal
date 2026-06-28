@@ -1,7 +1,6 @@
 // Picture-in-Picture terminal overlay manager
 // Uses Document Picture-in-Picture API (Chrome/Edge 116+)
 import { TERMINAL_THEME } from './terminal.js';
-import { escapeHtml, escapeAttr } from './html-utils.js';
 
 export interface PipSessionInfo {
   id: string;
@@ -140,7 +139,7 @@ export class PipManager {
     this.terminal.open(termContainer);
 
     // Fit terminal
-    try { this.fitAddon.fit(); } catch {}
+    try { this.fitAddon.fit(); } catch { /* fit can throw before layout settles */ }
 
     // Handle terminal input - send to session via own WebSocket
     this.terminal.onData((data: string) => {
@@ -151,7 +150,7 @@ export class PipManager {
 
     // Resize observer for fit
     this.resizeObserver = new ResizeObserver(() => {
-      try { this.fitAddon?.fit(); } catch {}
+      try { this.fitAddon?.fit(); } catch { /* fit can throw before layout settles */ }
     });
     this.resizeObserver.observe(termContainer);
 
@@ -160,7 +159,7 @@ export class PipManager {
 
     // Handle PiP window resize
     this.pipWindow.addEventListener('resize', () => {
-      try { this.fitAddon?.fit(); } catch {}
+      try { this.fitAddon?.fit(); } catch { /* fit can throw before layout settles */ }
     });
 
     // Connect own WebSocket and attach to session.
