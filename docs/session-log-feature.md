@@ -4,7 +4,9 @@ A modular feature that captures *what happened* in each Claude Code session and
 writes it to a per-project `SESSION-LOG.md`, so an unfinished project can be
 understood at a glance — both by a human and by a future Claude session.
 
-Status: **design / plan** (not yet implemented). Off by default.
+Status: **implemented** (off by default — `projectLog.enabled`). Auto-logging on
+session close, on-demand backfill, a sidebar Projects board, and a normalized
+plan-phases progress view (§11) are all in place.
 
 ---
 
@@ -32,8 +34,9 @@ reads these files to show the state of every project in one place.
 - No extra schema/serialization complexity. The file is the source of truth.
 - It is committable, diffable, and human-readable — a natural project changelog.
 
-The only structured element is a machine-readable HTML comment before each entry,
-which the dashboard parses for sorting/filtering.
+The structured elements are machine-readable HTML comments the dashboard parses:
+a marker before each entry (below), and a single phases manifest block near the
+top of the file (§11). Everything else is human-readable prose.
 
 ### Entry format
 
@@ -225,20 +228,64 @@ and progress-reported — never automatic on startup.
 
 ## 10. Dashboard (cross-project state view)
 
-- `GET /api/project-logs` → enumerate discovered projects, read each
-  `SESSION-LOG.md`, parse the `<!-- claude-remote-log … -->` markers, return
-  sorted by recency with blocker/open-item counts.
-- Client: a **second tab in the existing sidebar** (alongside the sessions list),
-  one click from sessions and consistent with the current single-pane layout. The
-  board is sortable by staleness, filterable by "has blockers" / "has open items",
-  and renders each entry's markdown prose. Projects with no log show
-  "no log yet — [Generate]". Clicking a project can start/resume a session in its
-  `cwd` (reusing the recent-paths machinery).
-- Cost-free to render: every entry was generated once, at close time.
+- `GET /api/project-logs` → `getProjectBoard()` enumerates discovered projects,
+  reads each `SESSION-LOG.md`, and returns it enriched with parsed entries, the
+  latest marker (blocker/open-item counts), and the parsed phases manifest (§11).
+- Client: a **second tab in the existing sidebar** (alongside the sessions list).
+  Each row shows a staleness status dot and blocker/open-item badges; projects
+  with no log show a **Generate** button (async backfill + poll, with a Retry
+  state on no-write). Clicking a project opens a main-area detail view with the
+  **plan-phases tables** (§11) on top and the chronological entries below.
+  "Open session" prefills a new session in the project's `cwd`.
+- Cost-free to render: every entry/manifest was generated once, at close time.
 
 ---
 
-## 11. Edge cases
+## 11. Plan-phases progress board
+
+The most informative view: a per-track table of the project's development
+phases/stages, with completion status and the claude sessions that worked on each.
+
+**Why model-normalized, not parsed.** Grounding this in a real project (`prod-app`)
+showed plans don't use a single convention: stages are H3 headings (not
+`- [ ]` checkboxes), named `Phase N` / `M-N` / `SU-N` / `DS-N`, with status
+expressed as `✅ shipped` suffixes, a prose status blockquote, or plain prose —
+and **multiple independent tracks coexist** in one project (the docs explicitly
+warn not to conflate `Phase 2` with `SU-2`). Deterministic parsing can't
+generalize across that. So the **generator interprets** the plan/design docs and
+emits one normalized schema, giving consistent cross-project reports regardless of
+source format.
+
+**Manifest** — one block near the top of `SESSION-LOG.md`, maintained each run:
+
+```markdown
+<!-- claude-remote-phases
+[
+  { "group": "Product roadmap", "source": "PLANNING.md", "items": [
+    { "id": "Phase 1", "title": "Plastic changelog generator", "status": "in_progress", "sessionIds": ["<uuid>"] }
+  ]},
+  { "group": "Project onboarding", "source": "docs/project-onboarding.md", "items": [
+    { "id": "M3", "title": "Repo discovery + create project", "status": "done", "sessionIds": ["<uuid>", "<uuid>"] }
+  ]}
+]
+-->
+```
+
+- **Grouped by track/doc** — never merged, preserving each axis's logical order.
+- **`status`** normalized to `done | in_progress | pending` (the model maps each
+  doc's own signals onto this).
+- **`sessionIds`** — best-effort, may be multiple per item. Per-session runs append
+  the *current* claude session id to phases they advanced; backfill infers
+  historical ids from existing entry markers and transcripts where confident.
+- **Parser** (`session-log-format.ts:parsePhasesBlock`) is defensive — a missing or
+  malformed block yields no table rather than an error.
+
+**UI:** one table per group with a status icon, phase id, title, and
+copy-to-clipboard session-id chips.
+
+---
+
+## 12. Edge cases
 
 - **Fork sessions:** skipped (ephemeral by design).
 - **Non-git projects:** degraded-but-working (transcript-only signal).
@@ -267,7 +314,7 @@ and progress-reported — never automatic on startup.
 
 ---
 
-## 12. Build order
+## 13. Build order
 
 1. ✅ Plan (this doc).
 2. ✅ Backend: config block, `logged_at` migration, `maybeLogSession` + trigger
@@ -279,3 +326,9 @@ and progress-reported — never automatic on startup.
    open-item badges) and a main-area detail view rendering parsed
    `SESSION-LOG.md` entries; per-project Generate (backfill) + refresh.
    Server `getProjectBoard()` returns discovery enriched with parsed entries.
+6. ✅ Reliability + UX hardening (commit `bfacd0a`): verify the run actually wrote
+   the log (no false "generated"); skip transcripts > 1 MB (an 8 MB transcript
+   derailed runs); Retry state on no-write.
+7. ✅ Plan-phases progress board (§11) — normalized grouped manifest + per-track
+   tables with copy-to-clipboard session chips; concise per-session entries;
+   cancel-keeps-project-view. (commit `80a6e52`)
