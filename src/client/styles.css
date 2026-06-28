@@ -1932,6 +1932,20 @@ body {
   gap: 4px;
 }
 
+@keyframes pl-spin {
+  to { transform: rotate(360deg); }
+}
+
+#refresh-projects-btn.spinning svg {
+  animation: pl-spin 0.7s linear infinite;
+  transform-origin: center;
+}
+
+#refresh-projects-btn:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
 .sidebar-tab {
   font-family: var(--font-mono);
   font-size: 11px;
