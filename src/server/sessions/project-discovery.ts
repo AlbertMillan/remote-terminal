@@ -1,9 +1,10 @@
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { homedir } from 'os';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getRecentCwds } from '../db/queries.js';
+import { parseLogEntries, type LogEntryMeta, type ParsedLogEntry } from './session-log-format.js';
 
 const logger = createLogger('project-discovery');
 
@@ -168,4 +169,42 @@ function scanProjects(): DiscoveredProject[] {
 export function findProjectByCwd(cwd: string): DiscoveredProject | undefined {
   const key = pathKey(cwd);
   return discoverProjects().find((p) => pathKey(p.cwd) === key);
+}
+
+export interface ProjectBoardItem {
+  cwd: string;
+  name: string;
+  hasLog: boolean;
+  lastActivity: string | null;
+  transcriptCount: number;
+  entries: ParsedLogEntry[]; // parsed SESSION-LOG.md entries, newest first ([] if no log)
+  latest: LogEntryMeta | null; // marker of the newest entry, for at-a-glance status
+}
+
+/**
+ * Discovery enriched with each project's parsed SESSION-LOG.md — the payload the
+ * dashboard renders. Log files are small, so reading them all per request is
+ * cheap; an unreadable/missing log yields an empty entry list.
+ */
+export function getProjectBoard(): ProjectBoardItem[] {
+  const fileName = getConfig().projectLog.fileName;
+  return discoverProjects().map((p) => {
+    let entries: ParsedLogEntry[] = [];
+    if (p.hasLog) {
+      try {
+        entries = parseLogEntries(readFileSync(join(p.cwd, fileName), 'utf-8'));
+      } catch {
+        // unreadable log — surface as having no entries
+      }
+    }
+    return {
+      cwd: p.cwd,
+      name: p.name,
+      hasLog: p.hasLog,
+      lastActivity: p.lastActivity,
+      transcriptCount: p.transcriptCount,
+      entries,
+      latest: entries[0]?.meta ?? null,
+    };
+  });
 }

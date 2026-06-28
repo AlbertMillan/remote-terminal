@@ -72,6 +72,58 @@ body {
   flex-direction: column;
   border-right: 1px solid var(--border);
   position: relative;
+  flex-shrink: 0;
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Collapsed (desktop) sidebar */
+#app.sidebar-collapsed #sidebar {
+  width: 0;
+  border-right-color: transparent;
+  overflow: hidden;
+}
+
+/* Floating handle to collapse/expand the sidebar on desktop */
+.sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  left: 280px;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  width: 24px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition:
+    left 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    color var(--transition-smooth),
+    background var(--transition-smooth);
+}
+
+.sidebar-toggle:hover {
+  color: var(--accent);
+  background: var(--bg-tertiary);
+}
+
+.sidebar-toggle svg {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#app.sidebar-collapsed .sidebar-toggle {
+  left: 0;
+  transform: translate(0, -50%);
+}
+
+#app.sidebar-collapsed .sidebar-toggle svg {
+  transform: rotate(180deg);
 }
 
 #sidebar::after {
@@ -1139,7 +1191,13 @@ body {
     display: block;
   }
 
-  #sidebar {
+  /* The off-canvas mobile menu replaces the desktop collapse handle */
+  .sidebar-toggle {
+    display: none;
+  }
+
+  #sidebar,
+  #app.sidebar-collapsed #sidebar {
     width: 300px;
     max-width: 85vw;
     position: fixed;
@@ -1149,6 +1207,8 @@ body {
     transition: left 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     height: 100vh;
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+    border-right-color: var(--border);
+    overflow: visible;
   }
 
   #sidebar::after {
@@ -1864,3 +1924,223 @@ body {
     height: calc(100dvh - 72px - 45px);
   }
 }
+
+/* ── Project Log board ──────────────────────────────────────────────── */
+
+.sidebar-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.sidebar-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.sidebar-tab:hover {
+  color: var(--text-secondary);
+}
+
+.sidebar-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Project rows reuse .session-item spacing but are non-selectable blocks. */
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.project-item:hover {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-subtle);
+}
+
+.project-item.active {
+  border-color: var(--accent);
+  background-color: var(--bg-tertiary);
+}
+
+.project-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.project-status-dot.fresh { background: var(--success); box-shadow: 0 0 6px var(--success-glow); }
+.project-status-dot.recent { background: var(--warning); box-shadow: 0 0 6px var(--warning-glow); }
+.project-status-dot.stale { background: var(--text-muted); }
+.project-status-dot.nolog { background: transparent; border: 1px dashed var(--border); box-shadow: none; }
+
+.project-item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-badges {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.project-badge {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 10px;
+  line-height: 1.6;
+}
+
+.project-badge.blockers { color: var(--danger); background: rgba(247, 118, 142, 0.14); }
+.project-badge.open { color: var(--warning); background: rgba(224, 175, 104, 0.14); }
+
+.project-generate-btn {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  background: rgba(122, 162, 247, 0.12);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.project-generate-btn:hover { background: rgba(122, 162, 247, 0.22); }
+.project-generate-btn:disabled { opacity: 0.6; cursor: progress; }
+
+.project-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Detail view in the main content area */
+.project-log-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.project-log-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.project-log-titles { min-width: 0; }
+
+.project-log-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.project-log-path {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.project-log-entries {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px 24px 40px;
+}
+
+.log-entry {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  background: var(--bg-elevated);
+}
+
+.log-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.log-entry-date {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.log-entry-session { font-size: 13px; color: var(--text-secondary); }
+
+.log-entry-branch {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.log-entry-body { font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+.log-entry-body strong { color: var(--text-primary); font-weight: 600; }
+.log-entry-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.log-entry-body p { margin: 4px 0; }

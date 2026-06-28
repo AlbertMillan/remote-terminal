@@ -34,6 +34,29 @@ interface CategoryInfo {
   collapsed: boolean;
 }
 
+// Project-log board (mirrors server's ProjectBoardItem / ParsedLogEntry / LogEntryMeta)
+interface LogEntryMeta {
+  date: string;
+  session: string;
+  branch: string;
+  claudeSessionId: string;
+  blockers: number;
+  openItems: number;
+}
+interface ParsedLogEntry {
+  meta: LogEntryMeta | null;
+  body: string;
+}
+interface ProjectBoardItem {
+  cwd: string;
+  name: string;
+  hasLog: boolean;
+  lastActivity: string | null;
+  transcriptCount: number;
+  entries: ParsedLogEntry[];
+  latest: LogEntryMeta | null;
+}
+
 // Type-safe server message definitions (issue #14)
 interface AuthSuccessPayload {
   userId: string;
@@ -200,6 +223,12 @@ class SessionManager {
   private recentPaths: string[] = [];
   private cwdSuggestionIndex = -1;
 
+  // Project-log board state
+  private activeTab: 'sessions' | 'projects' = 'sessions';
+  private projectBoard: ProjectBoardItem[] = [];
+  private selectedProjectCwd: string | null = null;
+  private backfillPollTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
     this.setupEventListeners();
@@ -275,9 +304,22 @@ class SessionManager {
       mobileMenuBtn?.classList.remove('hidden');
     });
 
+    // Desktop sidebar collapse toggle (restores persisted state on load)
+    if (localStorage.getItem('sidebarCollapsed') === 'true') {
+      document.getElementById('app')?.classList.add('sidebar-collapsed');
+      document.getElementById('sidebar-toggle')?.setAttribute('aria-expanded', 'false');
+    }
+    document.getElementById('sidebar-toggle')?.addEventListener('click', () => this.toggleSidebar());
+
     // New session buttons
     document.getElementById('new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
     document.getElementById('welcome-new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
+
+    // Sidebar tabs (Sessions / Projects board)
+    document.getElementById('tab-sessions')?.addEventListener('click', () => this.switchTab('sessions'));
+    document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
+    document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
+    document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
 
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
@@ -369,6 +411,9 @@ class SessionManager {
           } else if (e.key === 'e' || e.key === 'E') {
             e.preventDefault();
             this.navigateToSession('next');
+          } else if (e.key === 'b' || e.key === 'B') {
+            e.preventDefault();
+            this.toggleSidebar();
           }
         }
       }
@@ -463,6 +508,18 @@ class SessionManager {
   private openPip(): void {
     if (!this.currentSessionId) return;
     this.pipManager.open(this.currentSessionId, this.sessions, this.sessionNotifications);
+  }
+
+  private toggleSidebar(): void {
+    const app = document.getElementById('app');
+    if (!app) return;
+    const collapsed = app.classList.toggle('sidebar-collapsed');
+    localStorage.setItem('sidebarCollapsed', String(collapsed));
+    const toggle = document.getElementById('sidebar-toggle');
+    toggle?.setAttribute('aria-expanded', String(!collapsed));
+    toggle?.setAttribute('title', collapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)');
+    // Refit the terminal once the width transition has finished.
+    setTimeout(() => this.terminalMgr?.fit(), 300);
   }
 
   private toggleMobileNav(): void {
@@ -1443,6 +1500,8 @@ class SessionManager {
   }
 
   private showTerminal(session: SessionInfo): void {
+    this.selectedProjectCwd = null;
+    document.getElementById('project-log-view')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
     document.getElementById('terminal-container')?.classList.remove('hidden');
     document.getElementById('terminal-header')?.classList.remove('hidden');
@@ -1472,9 +1531,237 @@ class SessionManager {
 
     document.getElementById('terminal-container')?.classList.add('hidden');
     document.getElementById('terminal-header')?.classList.add('hidden');
-    document.getElementById('welcome-screen')?.classList.remove('hidden');
+    // Only reveal the welcome screen if the project-log view isn't taking over.
+    if (this.selectedProjectCwd === null) {
+      document.getElementById('welcome-screen')?.classList.remove('hidden');
+    }
 
     this.renderSessionList();
+  }
+
+  // ── Project-log board ──────────────────────────────────────────────
+
+  private switchTab(tab: 'sessions' | 'projects'): void {
+    this.activeTab = tab;
+    const onProjects = tab === 'projects';
+
+    document.getElementById('tab-sessions')?.classList.toggle('active', !onProjects);
+    document.getElementById('tab-projects')?.classList.toggle('active', onProjects);
+    document.getElementById('tab-sessions')?.setAttribute('aria-selected', String(!onProjects));
+    document.getElementById('tab-projects')?.setAttribute('aria-selected', String(onProjects));
+
+    document.getElementById('session-list')?.classList.toggle('hidden', onProjects);
+    document.getElementById('project-list')?.classList.toggle('hidden', !onProjects);
+    document.getElementById('new-session-btn')?.classList.toggle('hidden', onProjects);
+    document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
+
+    if (onProjects) this.loadProjectBoard();
+  }
+
+  private async loadProjectBoard(): Promise<void> {
+    const listEl = document.getElementById('project-list');
+    try {
+      const res = await fetch('/api/project-logs');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { projects: ProjectBoardItem[] };
+      this.projectBoard = data.projects || [];
+      this.renderProjectList();
+    } catch (err) {
+      if (listEl) {
+        listEl.innerHTML = `<li class="project-empty">Couldn't load projects: ${escapeHtml(
+          err instanceof Error ? err.message : String(err)
+        )}</li>`;
+      }
+    }
+  }
+
+  private renderProjectList(): void {
+    const listEl = document.getElementById('project-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+
+    if (this.projectBoard.length === 0) {
+      listEl.innerHTML = '<li class="project-empty">No projects found.</li>';
+      return;
+    }
+
+    for (const project of this.projectBoard) {
+      const li = document.createElement('li');
+      li.className = 'project-item';
+      if (this.selectedProjectCwd && this.selectedProjectCwd === project.cwd) {
+        li.classList.add('active');
+      }
+
+      const dot = document.createElement('span');
+      dot.className = `project-status-dot ${this.projectStatusClass(project)}`;
+
+      const body = document.createElement('div');
+      body.className = 'project-item-body';
+      const metaBits: string[] = [];
+      if (project.lastActivity) metaBits.push(this.relativeTime(project.lastActivity));
+      if (project.latest?.branch) metaBits.push(project.latest.branch);
+      if (!project.hasLog) metaBits.push('no log');
+      body.innerHTML = `
+        <div class="project-item-name">${escapeHtml(project.name)}</div>
+        <div class="project-item-meta">${escapeHtml(metaBits.join(' · '))}</div>
+      `;
+
+      li.appendChild(dot);
+      li.appendChild(body);
+
+      if (project.hasLog) {
+        const badges = document.createElement('div');
+        badges.className = 'project-badges';
+        const blockers = project.latest?.blockers ?? 0;
+        const open = project.latest?.openItems ?? 0;
+        if (blockers > 0) badges.innerHTML += `<span class="project-badge blockers" title="Blockers">⚠ ${blockers}</span>`;
+        if (open > 0) badges.innerHTML += `<span class="project-badge open" title="Open items">◷ ${open}</span>`;
+        li.appendChild(badges);
+        li.addEventListener('click', () => this.showProjectLog(project.cwd));
+      } else {
+        const gen = document.createElement('button');
+        gen.className = 'project-generate-btn';
+        gen.textContent = 'Generate';
+        gen.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.backfillProject(project.cwd, gen);
+        });
+        li.appendChild(gen);
+      }
+
+      listEl.appendChild(li);
+    }
+  }
+
+  /** Staleness bucket for the status dot, based on last activity. */
+  private projectStatusClass(project: ProjectBoardItem): string {
+    if (!project.hasLog) return 'nolog';
+    if (!project.lastActivity) return 'stale';
+    const days = (Date.now() - new Date(project.lastActivity).getTime()) / 86400000;
+    if (days < 2) return 'fresh';
+    if (days < 14) return 'recent';
+    return 'stale';
+  }
+
+  private relativeTime(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const secs = Math.max(0, (Date.now() - then) / 1000);
+    if (secs < 60) return 'just now';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d ago`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}mo ago`;
+    return `${Math.floor(months / 12)}y ago`;
+  }
+
+  private showProjectLog(cwd: string): void {
+    const project = this.projectBoard.find((p) => p.cwd === cwd);
+    if (!project) return;
+    this.selectedProjectCwd = cwd;
+
+    // Detach any live session view so the log takes over the main area.
+    if (this.currentSessionId) {
+      this.send('session.detach', { sessionId: this.currentSessionId });
+      this.terminalMgr?.dispose();
+      this.currentSessionId = null;
+    }
+    document.getElementById('terminal-container')?.classList.add('hidden');
+    document.getElementById('terminal-header')?.classList.add('hidden');
+    document.getElementById('welcome-screen')?.classList.add('hidden');
+    document.getElementById('project-log-view')?.classList.remove('hidden');
+
+    const titleEl = document.getElementById('project-log-title');
+    if (titleEl) titleEl.textContent = project.name;
+    const pathEl = document.getElementById('project-log-path');
+    if (pathEl) pathEl.textContent = project.cwd;
+
+    const entriesEl = document.getElementById('project-log-entries');
+    if (entriesEl) {
+      if (project.entries.length === 0) {
+        entriesEl.innerHTML = '<div class="project-empty">No entries yet.</div>';
+      } else {
+        entriesEl.innerHTML = project.entries.map((e) => this.renderLogEntry(e)).join('');
+      }
+    }
+    this.renderProjectList(); // refresh active highlight
+  }
+
+  private renderLogEntry(entry: ParsedLogEntry): string {
+    const meta = entry.meta;
+    const date = meta?.date ? new Date(meta.date) : null;
+    const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
+    // Strip the marker comment and the "## heading" line; render the rest as the body.
+    const lines = entry.body.split('\n');
+    const bodyLines = lines.filter((l) => !l.startsWith('<!--') && !l.startsWith('## '));
+    const head = `
+      <div class="log-entry-head">
+        ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
+        ${meta?.session ? `<span class="log-entry-session">${escapeHtml(meta.session)}</span>` : ''}
+        ${meta?.branch ? `<span class="log-entry-branch">${escapeHtml(meta.branch)}</span>` : ''}
+      </div>`;
+    return `<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;
+  }
+
+  /** Minimal, safe markdown: escape first, then bold + inline code + paragraphs. */
+  private renderMarkdownInline(md: string): string {
+    const escaped = escapeHtml(md);
+    return escaped
+      .split(/\n{2,}/)
+      .map((para) => {
+        const withInline = para
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\n/g, '<br>');
+        return `<p>${withInline}</p>`;
+      })
+      .join('');
+  }
+
+  private openSessionForSelectedProject(): void {
+    const cwd = this.selectedProjectCwd;
+    if (!cwd) return;
+    this.selectedProjectCwd = null;
+    document.getElementById('project-log-view')?.classList.add('hidden');
+    document.getElementById('welcome-screen')?.classList.remove('hidden');
+    this.showNewSessionModal(cwd);
+  }
+
+  private async backfillProject(cwd: string, btn: HTMLButtonElement): Promise<void> {
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    try {
+      const res = await fetch('/api/project-logs/backfill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwds: [cwd] }),
+      });
+      if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
+      // Backfill is async on the server; poll the board until this project's log appears.
+      this.pollBackfill(cwd, 0);
+    } catch {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  }
+
+  private pollBackfill(cwd: string, attempt: number): void {
+    if (this.backfillPollTimer) clearTimeout(this.backfillPollTimer);
+    if (attempt > 40) {
+      void this.loadProjectBoard();
+      return;
+    }
+    this.backfillPollTimer = setTimeout(async () => {
+      await this.loadProjectBoard();
+      const project = this.projectBoard.find((p) => p.cwd === cwd);
+      if (this.activeTab === 'projects' && !project?.hasLog) {
+        this.pollBackfill(cwd, attempt + 1);
+      }
+    }, 3000);
   }
 
   private handleSessionForked(payload: { session: SessionInfo }): void {
@@ -1644,12 +1931,12 @@ class SessionManager {
 
   // Modal handlers
 
-  private showNewSessionModal(): void {
+  private showNewSessionModal(prefillCwd?: string): void {
     const modal = document.getElementById('new-session-modal');
     if (modal) {
       modal.classList.remove('hidden');
       (document.getElementById('session-name-input') as HTMLInputElement).value = '';
-      (document.getElementById('session-cwd-input') as HTMLInputElement).value = '';
+      (document.getElementById('session-cwd-input') as HTMLInputElement).value = prefillCwd ?? '';
       this.hideCwdSuggestions();
       void this.loadRecentPaths();
       document.getElementById('session-name-input')?.focus();

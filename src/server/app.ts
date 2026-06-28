@@ -15,7 +15,7 @@ import { notificationService, type NotificationType } from './notifications/serv
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
 import { generateSessionLogForced, generateProjectBackfill } from './sessions/project-log.js';
-import { discoverProjects, pathKey } from './sessions/project-discovery.js';
+import { discoverProjects, getProjectBoard, pathKey } from './sessions/project-discovery.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -114,9 +114,9 @@ export async function createApp(): Promise<FastifyInstance> {
     return { paths: getRecentPaths().map((p) => p.cwd) };
   });
 
-  // Project logs: cross-project discovery for the dashboard (step 5 consumes this)
+  // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {
-    return { projects: discoverProjects() };
+    return { projects: getProjectBoard() };
   });
 
   // Backfill SESSION-LOG.md for projects that don't have one yet. Body is

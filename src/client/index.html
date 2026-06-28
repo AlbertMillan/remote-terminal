@@ -47,16 +47,28 @@
 
       <div class="sidebar-section">
         <div class="section-header">
-          <h2>Sessions</h2>
+          <div class="sidebar-tabs" role="tablist">
+            <button id="tab-sessions" class="sidebar-tab active" data-tab="sessions" role="tab" aria-selected="true">Sessions</button>
+            <button id="tab-projects" class="sidebar-tab" data-tab="projects" role="tab" aria-selected="false">Projects</button>
+          </div>
           <button id="new-session-btn" class="btn-icon" title="New Session">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
           </button>
+          <button id="refresh-projects-btn" class="btn-icon hidden" title="Refresh projects">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+          </button>
         </div>
         <ul id="session-list" class="session-list">
           <!-- Sessions will be populated here -->
+        </ul>
+        <ul id="project-list" class="session-list hidden">
+          <!-- Projects board will be populated here -->
         </ul>
       </div>
 
@@ -66,6 +78,12 @@
         </div>
       </div>
     </aside>
+
+    <button id="sidebar-toggle" class="sidebar-toggle" title="Collapse sidebar (Ctrl+B)" aria-label="Toggle sidebar" aria-expanded="true">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 18 9 12 15 6"></polyline>
+      </svg>
+    </button>
 
     <main id="main-content">
       <div id="terminal-header" class="terminal-header hidden">
@@ -149,6 +167,22 @@
             <span class="footer-dot"></span>
             <span>Secure connection via Tailscale</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Project Log View -->
+      <div id="project-log-view" class="project-log-view hidden">
+        <div class="project-log-header">
+          <div class="project-log-titles">
+            <h2 id="project-log-title">Project</h2>
+            <span id="project-log-path" class="project-log-path"></span>
+          </div>
+          <div class="project-log-actions">
+            <button id="project-log-open-btn" class="btn-secondary" title="Start a session here">Open session</button>
+          </div>
+        </div>
+        <div id="project-log-entries" class="project-log-entries">
+          <!-- Parsed SESSION-LOG.md entries render here -->
         </div>
       </div>
 

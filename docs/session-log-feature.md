@@ -275,4 +275,7 @@ and progress-reported — never automatic on startup.
 3. ✅ Global `~/.claude/CLAUDE.md` convention block.
 4. ✅ Backfill endpoint + discovery (`GET /api/project-logs`,
    `POST /api/project-logs/backfill`, `project-discovery.ts`).
-5. Dashboard UI.
+5. ✅ Dashboard UI — sidebar "Projects" tab (board with status dots + blocker/
+   open-item badges) and a main-area detail view rendering parsed
+   `SESSION-LOG.md` entries; per-project Generate (backfill) + refresh.
+   Server `getProjectBoard()` returns discovery enriched with parsed entries.
