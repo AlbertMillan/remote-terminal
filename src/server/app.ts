@@ -14,7 +14,8 @@ import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
-import { generateSessionLogForced } from './sessions/project-log.js';
+import { generateSessionLogForced, generateProjectBackfill } from './sessions/project-log.js';
+import { discoverProjects, pathKey } from './sessions/project-discovery.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -111,6 +112,34 @@ export async function createApp(): Promise<FastifyInstance> {
   // Recent working directories (for the new-session path dropdown)
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };
+  });
+
+  // Project logs: cross-project discovery for the dashboard (step 5 consumes this)
+  app.get('/api/project-logs', async () => {
+    return { projects: discoverProjects() };
+  });
+
+  // Backfill SESSION-LOG.md for projects that don't have one yet. Body is
+  // optional: { cwds?: string[] } targets specific projects; default is every
+  // discovered project without a log. Runs claude-per-project sequentially
+  // (queue-bounded) and returns each outcome. Projects with an existing log are
+  // never overwritten.
+  app.post<{ Body?: { cwds?: string[] } }>('/api/project-logs/backfill', async (request) => {
+    const body = (request.body || {}) as { cwds?: string[] };
+    const wanted =
+      Array.isArray(body.cwds) && body.cwds.length > 0 ? new Set(body.cwds.map(pathKey)) : null;
+
+    const targets = discoverProjects().filter((p) => {
+      if (p.hasLog) return false;
+      return wanted ? wanted.has(pathKey(p.cwd)) : true;
+    });
+
+    const results: { cwd: string; outcome: string }[] = [];
+    for (const p of targets) {
+      const outcome = await generateProjectBackfill({ cwd: p.cwd, transcriptPaths: p.transcriptPaths });
+      results.push({ cwd: p.cwd, outcome });
+    }
+    return { requested: targets.length, results };
   });
 
   // Claude session ID registration (called by the Stop hook)

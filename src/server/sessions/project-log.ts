@@ -153,7 +153,7 @@ ${log || '(none)'}
 // ---------------------------------------------------------------------------
 // Headless generation
 // ---------------------------------------------------------------------------
-function runClaude(ctx: SessionLogContext, prompt: string): Promise<void> {
+function runClaude(cwd: string, prompt: string): Promise<void> {
   const cfg = getConfig().projectLog;
   return runQueued(
     () =>
@@ -164,7 +164,7 @@ function runClaude(ctx: SessionLogContext, prompt: string): Promise<void> {
         const child = spawn(
           cfg.claudeCommand,
           ['-p', '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Glob,Grep,Edit,Write', '--output-format', 'json'],
-          { cwd: ctx.cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+          { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
         );
 
         let stderr = '';
@@ -274,13 +274,118 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     });
 
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
-    await runClaude(ctx, prompt);
+    await runClaude(ctx.cwd, prompt);
     stampSessionLogged(ctx.sessionId, new Date().toISOString());
     logger.info({ sessionId: ctx.sessionId }, 'project-log: entry generated');
     return 'generated';
   } catch (err) {
     // Leave logged_at unset so the startup sweep can retry.
     logger.warn({ sessionId: ctx.sessionId, err: err instanceof Error ? err.message : err }, 'project-log: generation failed');
+    return 'error';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backfill — seed a SESSION-LOG.md for an existing project with no log yet.
+// Collapses the whole project history into one "state of the project" entry.
+// ---------------------------------------------------------------------------
+function buildBackfillPrompt(opts: {
+  cwd: string;
+  fileName: string;
+  branch: string;
+  nowIso: string;
+  diff: string;
+  log: string;
+  transcriptPaths: string[];
+}): string {
+  const { cwd, fileName, branch, nowIso, diff, log, transcriptPaths } = opts;
+  const transcripts = transcriptPaths.length
+    ? transcriptPaths.map((p) => `  - ${p}`).join('\n')
+    : '  (none on disk)';
+
+  return `You are seeding a project changelog for a project that has no ${fileName} yet.
+Write ONE summary entry capturing the CURRENT STATE of the project — what has been
+built so far and what appears in progress — by collapsing its whole history.
+
+Project: ${cwd}
+Branch: ${branch}
+Date (use this exact value in the marker): ${nowIso}
+
+How to gather context:
+1. Read CLAUDE.md and any README for what the project is.
+2. Use the recent commit history and uncommitted diff below as ground truth for what exists.
+3. The most recent session transcripts are listed below — skim a few (newest first)
+   for intent and recent direction. They may be large.
+${transcripts}
+
+Then create ${fileName} at the project root with a "# Session Log" header followed by
+ONE entry in EXACTLY this format (fill the marker JSON's blockers/openItems with integer counts):
+
+<!-- claude-remote-log {"date":"${nowIso}","session":"(backfill)","branch":${JSON.stringify(branch)},"claudeSessionId":"backfill","blockers":0,"openItems":0} -->
+## ${nowIso.slice(0, 10)} · (backfill) · ${branch}
+**Done:** <what the project currently provides / major features built>
+**Changed:** <key areas/modules of the codebase>
+**Plan progress:** <completed vs outstanding objectives if a plan exists, else "n/a">
+**Open / next:** <what appears in progress or unfinished>
+**Blockers:** <known blockers, or "none">
+
+STRICT CONSTRAINTS:
+- Create/modify ONLY ${fileName}. Touch no other file.
+- Be factual and concise. This is a current-state snapshot, not per-session detail.
+
+=== RECENT COMMITS ===
+${log || '(none)'}
+
+=== UNCOMMITTED DIFF (truncated) ===
+${diff || '(no diff)'}
+`;
+}
+
+/**
+ * Seed a whole-history SESSION-LOG.md for a project that doesn't have one. User-
+ * initiated (via the backfill endpoint), so it runs regardless of the enabled
+ * flag. No session row is involved, so nothing is stamped. Never throws.
+ */
+export async function generateProjectBackfill(opts: { cwd: string; transcriptPaths: string[] }): Promise<LogOutcome> {
+  const cfg = getConfig().projectLog;
+  const { cwd, transcriptPaths } = opts;
+
+  try {
+    if (existsSync(join(cwd, cfg.fileName))) {
+      return 'skipped'; // already has a log
+    }
+
+    const repo = await isGitRepo(cwd);
+    let diff = '';
+    let log = '';
+    let branch = 'no-branch';
+    if (repo) {
+      const [branchOut, logOut, diffOut] = await Promise.all([
+        git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+        git(cwd, ['log', '-n', '40', '--oneline']),
+        git(cwd, ['diff']),
+      ]);
+      branch = branchOut?.trim() || 'no-branch';
+      log = (logOut || '').slice(0, MAX_LOG_CHARS);
+      diff = (diffOut || '').slice(0, MAX_DIFF_CHARS);
+    }
+
+    const prompt = buildBackfillPrompt({
+      cwd,
+      fileName: cfg.fileName,
+      branch,
+      nowIso: new Date().toISOString(),
+      diff,
+      log,
+      transcriptPaths: transcriptPaths.slice(0, 5),
+    });
+
+    logger.info({ cwd }, 'project-log: backfilling project');
+    await runClaude(cwd, prompt);
+    logger.info({ cwd }, 'project-log: backfill generated');
+    return 'generated';
+  } catch (err) {
+    logger.warn({ cwd, err: err instanceof Error ? err.message : err }, 'project-log: backfill failed');
     return 'error';
   }
 }

@@ -261,5 +261,6 @@ and progress-reported — never automatic on startup.
 2. ✅ Backend: config block, `logged_at` migration, `maybeLogSession` + trigger
    wiring, skip-gate, generator, startup sweep. (commit `ae2edf1`)
 3. ✅ Global `~/.claude/CLAUDE.md` convention block.
-4. Backfill endpoint + discovery.
+4. ✅ Backfill endpoint + discovery (`GET /api/project-logs`,
+   `POST /api/project-logs/backfill`, `project-discovery.ts`).
 5. Dashboard UI.
