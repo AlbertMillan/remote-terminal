@@ -257,9 +257,9 @@ and progress-reported — never automatic on startup.
 
 ## 12. Build order
 
-1. Plan (this doc).
-2. Backend: config block, `logged_at` migration, `maybeLogSession` + trigger
-   wiring, skip-gate, generator, startup sweep.
-3. Global `~/.claude/CLAUDE.md` convention block.
+1. ✅ Plan (this doc).
+2. ✅ Backend: config block, `logged_at` migration, `maybeLogSession` + trigger
+   wiring, skip-gate, generator, startup sweep. (commit `ae2edf1`)
+3. ✅ Global `~/.claude/CLAUDE.md` convention block.
 4. Backfill endpoint + discovery.
 5. Dashboard UI.
