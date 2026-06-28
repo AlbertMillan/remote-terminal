@@ -333,14 +333,28 @@ class SessionManager {
     document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
     document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
-    // Copy session ids from the phases table (event delegation)
-    document.getElementById('project-log-entries')?.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('[data-copy]') as HTMLElement | null;
-      if (!btn) return;
-      const sid = btn.getAttribute('data-copy') || '';
-      navigator.clipboard?.writeText(sid);
-      btn.classList.add('copied');
-      setTimeout(() => btn.classList.remove('copied'), 1000);
+    // Phases table interactions (event delegation): copy session ids + collapse groups
+    const phasesContainer = document.getElementById('project-log-entries');
+    phasesContainer?.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const copyBtn = target.closest('[data-copy]') as HTMLElement | null;
+      if (copyBtn) {
+        const sid = copyBtn.getAttribute('data-copy') || '';
+        navigator.clipboard?.writeText(sid);
+        copyBtn.classList.add('copied');
+        setTimeout(() => copyBtn.classList.remove('copied'), 1000);
+        return;
+      }
+      const head = target.closest('.phase-group-head') as HTMLElement | null;
+      if (head) this.togglePhaseGroup(head);
+    });
+    phasesContainer?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const head = (e.target as HTMLElement).closest('.phase-group-head') as HTMLElement | null;
+      if (head) {
+        e.preventDefault();
+        this.togglePhaseGroup(head);
+      }
     });
 
     // New session modal
@@ -1717,6 +1731,13 @@ class SessionManager {
     this.renderProjectList(); // refresh active highlight
   }
 
+  private togglePhaseGroup(head: HTMLElement): void {
+    const group = head.closest('.phase-group');
+    if (!group) return;
+    const collapsed = group.classList.toggle('collapsed');
+    head.setAttribute('aria-expanded', String(!collapsed));
+  }
+
   private renderPhaseGroups(groups: PhaseGroup[]): string {
     if (!groups || groups.length === 0) return '';
     const icon = (s: string): string =>
@@ -1741,7 +1762,8 @@ class SessionManager {
         .join('');
       return `
         <div class="phase-group">
-          <div class="phase-group-head">
+          <div class="phase-group-head" role="button" tabindex="0" aria-expanded="true">
+            <span class="phase-chevron" aria-hidden="true">▾</span>
             <span class="phase-group-name">${escapeHtml(g.group)}</span>
             ${g.source ? `<span class="phase-group-src">${escapeHtml(g.source)}</span>` : ''}
             <span class="phase-progress">${done}/${g.items.length}</span>

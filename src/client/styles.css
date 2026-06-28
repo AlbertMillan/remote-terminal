@@ -2170,7 +2170,21 @@ body {
   padding: 10px 14px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  user-select: none;
 }
+.phase-group-head:hover { background: var(--bg-tertiary); }
+.phase-group-head:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.phase-chevron {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+  align-self: center;
+}
+.phase-group.collapsed .phase-chevron { transform: rotate(-90deg); }
+.phase-group.collapsed .phase-list { display: none; }
+.phase-group.collapsed .phase-group-head { border-bottom: none; }
 .phase-group-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
 .phase-group-src {
   font-family: var(--font-mono);
