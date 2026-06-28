@@ -239,7 +239,7 @@ class SessionManager {
   private activeTab: 'sessions' | 'projects' = 'sessions';
   private projectBoard: ProjectBoardItem[] = [];
   private selectedProjectCwd: string | null = null;
-  private backfillPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private backfillPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private failedBackfills = new Set<string>();
 
   constructor(terminal: TerminalManager = terminalManager) {
@@ -1866,20 +1866,26 @@ class SessionManager {
   }
 
   private pollBackfill(cwd: string, attempt: number): void {
-    if (this.backfillPollTimer) clearTimeout(this.backfillPollTimer);
+    // Timers are keyed by cwd so concurrent backfills each poll independently.
+    const existing = this.backfillPollTimers.get(cwd);
+    if (existing) clearTimeout(existing);
     if (attempt > 40) {
       // Gave up waiting — the run never produced a log. Surface a Retry affordance.
+      this.backfillPollTimers.delete(cwd);
       this.failedBackfills.add(cwd);
       void this.loadProjectBoard();
       return;
     }
-    this.backfillPollTimer = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       await this.loadProjectBoard();
       const project = this.projectBoard.find((p) => p.cwd === cwd);
       if (this.activeTab === 'projects' && !project?.hasLog) {
         this.pollBackfill(cwd, attempt + 1);
+      } else {
+        this.backfillPollTimers.delete(cwd);
       }
     }, 3000);
+    this.backfillPollTimers.set(cwd, timer);
   }
 
   private handleSessionForked(payload: { session: SessionInfo }): void {

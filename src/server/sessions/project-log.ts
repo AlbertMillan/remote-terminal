@@ -125,6 +125,15 @@ Rules:
 - The block MUST be valid JSON.`;
 }
 
+/** Trailing git-context section shared by the per-session and backfill prompts. */
+function gitContextBlock(log: string, diff: string): string {
+  return `=== RECENT COMMITS ===
+${log || '(none)'}
+
+=== GIT DIFF (truncated) ===
+${diff || '(no diff)'}`;
+}
+
 function buildPrompt(opts: {
   ctx: SessionLogContext;
   fileName: string;
@@ -188,11 +197,7 @@ Use EXACTLY this entry format (fill the marker JSON's blockers/openItems with in
 
 ${skeleton}
 
-=== GIT DIFF (truncated) ===
-${diff || '(no diff)'}
-
-=== RECENT COMMITS ===
-${log || '(none)'}
+${gitContextBlock(log, diff)}
 `;
 }
 
@@ -214,11 +219,35 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
-function runClaude(cwd: string, prompt: string): Promise<void> {
+interface ClaudeRunResult {
+  isError: boolean; // claude's own `is_error` flag
+  result: string; // claude's final result text
+  permissionDenials: number; // count of denied tool calls (out-of-scope attempts)
+}
+
+/** Parse the `--output-format json` envelope; tolerant of unexpected shapes. */
+function parseClaudeResult(stdout: string): ClaudeRunResult {
+  try {
+    const j = JSON.parse(stdout) as {
+      is_error?: unknown;
+      result?: unknown;
+      permission_denials?: unknown;
+    };
+    return {
+      isError: j.is_error === true,
+      result: typeof j.result === 'string' ? j.result : '',
+      permissionDenials: Array.isArray(j.permission_denials) ? j.permission_denials.length : 0,
+    };
+  } catch {
+    return { isError: false, result: '', permissionDenials: 0 };
+  }
+}
+
+function runClaude(cwd: string, prompt: string): Promise<ClaudeRunResult> {
   const cfg = getConfig().projectLog;
   return runQueued(
     () =>
-      new Promise<void>((resolve, reject) => {
+      new Promise<ClaudeRunResult>((resolve, reject) => {
         // Prompt is delivered via stdin (not argv) so shell quoting can't mangle
         // it; the static flag args are space-free, safe under shell:true (needed
         // to resolve `claude`/`claude.cmd` from PATH on Windows).
@@ -228,6 +257,7 @@ function runClaude(cwd: string, prompt: string): Promise<void> {
           { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
         );
 
+        let stdout = '';
         let stderr = '';
         let settled = false;
         const finish = (fn: () => void) => {
@@ -242,13 +272,15 @@ function runClaude(cwd: string, prompt: string): Promise<void> {
           finish(() => reject(new Error(`generation timed out after ${cfg.timeoutMs}ms`)));
         }, cfg.timeoutMs);
 
-        child.stdout?.on('data', () => {});
+        child.stdout?.on('data', (d) => {
+          stdout += String(d);
+        });
         child.stderr?.on('data', (d) => {
           stderr += String(d);
         });
         child.on('error', (err) => finish(() => reject(err)));
         child.on('close', (code) => {
-          if (code === 0) finish(() => resolve());
+          if (code === 0) finish(() => resolve(parseClaudeResult(stdout)));
           else finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
         });
 
@@ -259,6 +291,16 @@ function runClaude(cwd: string, prompt: string): Promise<void> {
         child.stdin?.end(prompt);
       })
   );
+}
+
+/** Log claude's self-reported failure / out-of-scope signals from a run. */
+function logRunSignals(scope: Record<string, unknown>, r: ClaudeRunResult): void {
+  if (r.permissionDenials > 0) {
+    logger.warn({ ...scope, permissionDenials: r.permissionDenials }, 'project-log: run had denied tool calls (possible out-of-scope edit attempt)');
+  }
+  if (r.isError) {
+    logger.warn({ ...scope, result: r.result.slice(0, 200) }, 'project-log: claude reported an error result');
+  }
 }
 
 /**
@@ -348,7 +390,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     });
 
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
-    await runClaude(ctx.cwd, prompt);
+    logRunSignals({ sessionId: ctx.sessionId, cwd: ctx.cwd }, await runClaude(ctx.cwd, prompt));
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —
@@ -425,11 +467,7 @@ STRICT CONSTRAINTS:
 - Create/modify ONLY ${fileName}. Touch no other file.
 - Be factual and concise. This is a current-state snapshot, not per-session detail.
 
-=== RECENT COMMITS ===
-${log || '(none)'}
-
-=== UNCOMMITTED DIFF (truncated) ===
-${diff || '(no diff)'}
+${gitContextBlock(log, diff)}
 `;
 }
 
@@ -483,7 +521,7 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');
-    await runClaude(cwd, prompt);
+    logRunSignals({ cwd }, await runClaude(cwd, prompt));
 
     // A run can exit 0 without writing the file (derailed); report error so the
     // dashboard surfaces it instead of silently flipping to "done".
@@ -529,7 +567,7 @@ export async function resyncProjectPhases(cwd: string): Promise<LogOutcome> {
       return 'skipped';
     }
     logger.info({ cwd }, 'project-log: re-syncing phases');
-    await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs));
+    logRunSignals({ cwd }, await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs)));
     // A no-op re-sync (already current) is still success; just confirm the file survived.
     if (!existsSync(logPath)) {
       logger.warn({ cwd }, 'project-log: re-sync left no log file');

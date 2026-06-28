@@ -192,19 +192,22 @@ export function getProjectBoard(): ProjectBoardItem[] {
   return discoverProjects().map((p) => {
     let entries: ParsedLogEntry[] = [];
     let phaseGroups: PhaseGroup[] = [];
-    if (p.hasLog) {
-      try {
-        const md = readFileSync(join(p.cwd, fileName), 'utf-8');
-        entries = parseLogEntries(md);
-        phaseGroups = parsePhasesBlock(md);
-      } catch {
-        // unreadable log — surface as having no entries/phases
-      }
+    // Recompute hasLog fresh rather than trusting the (cached) discovery flag —
+    // a log created moments ago (e.g. a just-finished backfill) must show up on
+    // the very next poll, not after the discovery cache TTL expires.
+    let hasLog = false;
+    try {
+      const md = readFileSync(join(p.cwd, fileName), 'utf-8');
+      hasLog = true;
+      entries = parseLogEntries(md);
+      phaseGroups = parsePhasesBlock(md);
+    } catch {
+      // missing/unreadable log — no entries/phases
     }
     return {
       cwd: p.cwd,
       name: p.name,
-      hasLog: p.hasLog,
+      hasLog,
       lastActivity: p.lastActivity,
       transcriptCount: p.transcriptCount,
       entries,

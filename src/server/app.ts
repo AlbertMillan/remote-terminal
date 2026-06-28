@@ -15,7 +15,7 @@ import { notificationService, type NotificationType } from './notifications/serv
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
 import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
-import { discoverProjects, getProjectBoard, pathKey } from './sessions/project-discovery.js';
+import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -150,8 +150,14 @@ export async function createApp(): Promise<FastifyInstance> {
     if (!cwd || typeof cwd !== 'string') {
       return reply.status(400).send({ error: 'cwd required' });
     }
-    const outcome = await resyncProjectPhases(cwd);
-    return { cwd, outcome };
+    // Only run the write-capable agent in a directory we actually discovered —
+    // never an arbitrary path supplied by the request.
+    const project = findProjectByCwd(cwd);
+    if (!project) {
+      return reply.status(404).send({ error: 'Unknown project' });
+    }
+    const outcome = await resyncProjectPhases(project.cwd);
+    return { cwd: project.cwd, outcome };
   });
 
   // Claude session ID registration (called by the Stop hook)
