@@ -153,6 +153,21 @@ ${log || '(none)'}
 // ---------------------------------------------------------------------------
 // Headless generation
 // ---------------------------------------------------------------------------
+
+/**
+ * Kill the spawned process tree. With shell:true the direct child is the shell
+ * (cmd.exe on Windows); a plain kill() would leave the real `claude` grandchild
+ * orphaned (and still burning quota), so on Windows we taskkill the whole tree.
+ */
+function killTree(child: ReturnType<typeof spawn>): void {
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+    killer.on('error', () => child.kill());
+  } else {
+    child.kill();
+  }
+}
+
 function runClaude(cwd: string, prompt: string): Promise<void> {
   const cfg = getConfig().projectLog;
   return runQueued(
@@ -177,7 +192,7 @@ function runClaude(cwd: string, prompt: string): Promise<void> {
         };
 
         const timer = setTimeout(() => {
-          child.kill();
+          killTree(child);
           finish(() => reject(new Error(`generation timed out after ${cfg.timeoutMs}ms`)));
         }, cfg.timeoutMs);
 
@@ -191,6 +206,10 @@ function runClaude(cwd: string, prompt: string): Promise<void> {
           else finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
         });
 
+        // claude may close stdin before we finish writing (fast failure / auth
+        // prompt). Without this listener the resulting EPIPE becomes an
+        // uncaughtException, which the server's handler turns into process.exit.
+        child.stdin?.on('error', () => {});
         child.stdin?.end(prompt);
       })
   );
@@ -224,10 +243,6 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       return 'skipped';
     }
 
-    const transcript = readTranscript(transcriptPath);
-    const hasEdits = transcriptHasEdits(transcript);
-    const userTurns = countUserTurns(transcript);
-
     const repo = await isGitRepo(ctx.cwd);
     let gitChanges = false;
     let diff = '';
@@ -248,9 +263,19 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       diff = `${diffOut || ''}\n${diffCachedOut || ''}`.trim().slice(0, MAX_DIFF_CHARS);
     }
 
+    // Read the transcript only when git can't already decide — it can be many MB
+    // and for a git repo with changes the edit-scan/turn-count are unused.
+    let hasEdits = false;
+    let userTurns = 0;
+    if (!repo || !gitChanges) {
+      const transcript = readTranscript(transcriptPath);
+      hasEdits = transcriptHasEdits(transcript);
+      userTurns = countUserTurns(transcript);
+    }
+
     // Skip-gate: primary signal is evidence of change. For non-git projects we
     // fall back to edit tool-calls plus a turn-count floor (lower fidelity).
-    const shouldLog = repo ? hasEdits || gitChanges : hasEdits && userTurns >= cfg.minTurnsToLog;
+    const shouldLog = repo ? gitChanges || hasEdits : hasEdits && userTurns >= cfg.minTurnsToLog;
 
     if (!shouldLog) {
       logger.info({ sessionId: ctx.sessionId, repo, hasEdits, gitChanges, userTurns }, 'project-log: skip-gate skipped session');
