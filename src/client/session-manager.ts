@@ -333,6 +333,7 @@ class SessionManager {
     document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
     document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
+    document.getElementById('project-log-resync-btn')?.addEventListener('click', () => this.resyncSelectedProject());
     // Phases table interactions (event delegation): copy session ids + collapse groups
     const phasesContainer = document.getElementById('project-log-entries');
     phasesContainer?.addEventListener('click', (e) => {
@@ -1805,6 +1806,37 @@ class SessionManager {
         return `<p>${withInline}</p>`;
       })
       .join('');
+  }
+
+  private async resyncSelectedProject(): Promise<void> {
+    const cwd = this.selectedProjectCwd;
+    if (!cwd) return;
+    const btn = document.getElementById('project-log-resync-btn') as HTMLButtonElement | null;
+    const original = btn?.textContent ?? 'Re-sync plan';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Re-syncing…';
+    }
+    try {
+      const res = await fetch('/api/project-logs/resync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await this.loadProjectBoard();
+      // Re-render the detail view with the refreshed phases (still on this project).
+      if (this.selectedProjectCwd === cwd) this.showProjectLog(cwd);
+    } catch {
+      if (btn) btn.textContent = 'Re-sync failed';
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        setTimeout(() => {
+          if (btn) btn.textContent = original;
+        }, 1500);
+      }
+    }
   }
 
   private openSessionForSelectedProject(): void {

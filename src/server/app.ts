@@ -14,7 +14,7 @@ import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
-import { generateSessionLogForced, generateProjectBackfill } from './sessions/project-log.js';
+import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
 import { discoverProjects, getProjectBoard, pathKey } from './sessions/project-discovery.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
@@ -141,6 +141,17 @@ export async function createApp(): Promise<FastifyInstance> {
     }
     logger.info({ accepted: targets.length }, 'project-log: backfill accepted');
     return reply.status(202).send({ accepted: targets.length, cwds: targets.map((p) => p.cwd) });
+  });
+
+  // Re-sync a single project's phases manifest from its current plan docs (no
+  // session entry written). Synchronous: the client awaits and reloads the board.
+  app.post<{ Body?: { cwd?: string } }>('/api/project-logs/resync', async (request, reply) => {
+    const cwd = (request.body as { cwd?: string } | undefined)?.cwd;
+    if (!cwd || typeof cwd !== 'string') {
+      return reply.status(400).send({ error: 'cwd required' });
+    }
+    const outcome = await resyncProjectPhases(cwd);
+    return { cwd, outcome };
   });
 
   // Claude session ID registration (called by the Stop hook)

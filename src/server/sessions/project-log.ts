@@ -498,3 +498,47 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
     return 'error';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Re-sync — refresh ONLY the phases manifest from the current plan docs, without
+// adding a session entry. For when the plan changed but no session has closed.
+// ---------------------------------------------------------------------------
+function buildResyncPrompt(cwd: string, fileName: string, planGlobs: string[]): string {
+  return `You are RE-SYNCING the plan-phases manifest in an existing ${fileName} at ${cwd}.
+Your ONLY job is to update the phases manifest block to reflect the CURRENT plan docs.
+Do NOT add, edit, reorder, or remove any dated log entries.
+
+${phasesInstruction(planGlobs, null)}
+
+STRICT CONSTRAINTS:
+- Modify ONLY the <!-- claude-remote-phases ... --> block inside ${fileName}. Touch no other file and no log entry.
+- Preserve every existing sessionId; only add ids you can attribute with confidence.`;
+}
+
+/**
+ * Re-derive the phases manifest from the current plan docs and update it in place.
+ * User-initiated (dashboard "Re-sync"); requires an existing log. No session entry
+ * is written. Never throws.
+ */
+export async function resyncProjectPhases(cwd: string): Promise<LogOutcome> {
+  const cfg = getConfig().projectLog;
+  try {
+    const logPath = join(cwd, cfg.fileName);
+    if (!existsSync(logPath)) {
+      // Nothing to update — the project has no log yet; use Generate (backfill).
+      return 'skipped';
+    }
+    logger.info({ cwd }, 'project-log: re-syncing phases');
+    await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs));
+    // A no-op re-sync (already current) is still success; just confirm the file survived.
+    if (!existsSync(logPath)) {
+      logger.warn({ cwd }, 'project-log: re-sync left no log file');
+      return 'error';
+    }
+    logger.info({ cwd }, 'project-log: phases re-synced');
+    return 'generated';
+  } catch (err) {
+    logger.warn({ cwd, err: err instanceof Error ? err.message : err }, 'project-log: re-sync failed');
+    return 'error';
+  }
+}
