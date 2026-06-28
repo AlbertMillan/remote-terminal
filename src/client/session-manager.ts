@@ -228,6 +228,7 @@ class SessionManager {
   private projectBoard: ProjectBoardItem[] = [];
   private selectedProjectCwd: string | null = null;
   private backfillPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private failedBackfills = new Set<string>();
 
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
@@ -1560,19 +1561,6 @@ class SessionManager {
 
   private async loadProjectBoard(): Promise<void> {
     const listEl = document.getElementById('project-list');
-    const refreshBtn = document.getElementById('refresh-projects-btn') as HTMLButtonElement | null;
-
-    // Visible feedback: spin + disable the refresh control, and show a loading
-    // placeholder on the first load (when there's nothing to keep on screen).
-    refreshBtn?.classList.add('spinning');
-    if (refreshBtn) refreshBtn.disabled = true;
-    if (listEl && this.projectBoard.length === 0) {
-      listEl.innerHTML = '<li class="project-empty">Loading projects…</li>';
-    }
-
-    // Guarantee the spinner is visible long enough to read as "it did something",
-    // even when the fetch returns almost instantly.
-    const startedAt = Date.now();
     try {
       const res = await fetch('/api/project-logs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1585,14 +1573,6 @@ class SessionManager {
           err instanceof Error ? err.message : String(err)
         )}</li>`;
       }
-    } finally {
-      const elapsed = Date.now() - startedAt;
-      const settle = () => {
-        refreshBtn?.classList.remove('spinning');
-        if (refreshBtn) refreshBtn.disabled = false;
-      };
-      if (elapsed < 400) setTimeout(settle, 400 - elapsed);
-      else settle();
     }
   }
 
@@ -1642,7 +1622,9 @@ class SessionManager {
       } else {
         const gen = document.createElement('button');
         gen.className = 'project-generate-btn';
-        gen.textContent = 'Generate';
+        const failed = this.failedBackfills.has(project.cwd);
+        gen.textContent = failed ? 'Retry' : 'Generate';
+        if (failed) gen.title = 'Generation finished without writing a log — try again';
         gen.addEventListener('click', (e) => {
           e.stopPropagation();
           this.backfillProject(project.cwd, gen);
@@ -1753,6 +1735,7 @@ class SessionManager {
   }
 
   private async backfillProject(cwd: string, btn: HTMLButtonElement): Promise<void> {
+    this.failedBackfills.delete(cwd);
     btn.disabled = true;
     btn.textContent = 'Generating…';
     try {
@@ -1773,6 +1756,8 @@ class SessionManager {
   private pollBackfill(cwd: string, attempt: number): void {
     if (this.backfillPollTimer) clearTimeout(this.backfillPollTimer);
     if (attempt > 40) {
+      // Gave up waiting — the run never produced a log. Surface a Retry affordance.
+      this.failedBackfills.add(cwd);
       void this.loadProjectBoard();
       return;
     }

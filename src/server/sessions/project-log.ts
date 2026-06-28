@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
@@ -15,6 +15,26 @@ const execFileAsync = promisify(execFile);
 // Bounds on how much git context we inline into the generation prompt.
 const MAX_DIFF_CHARS = 12000;
 const MAX_LOG_CHARS = 2000;
+// Transcripts above this size are not handed to the model: reading them can
+// exhaust the run's turn/context budget before it writes the log (an 8MB
+// transcript routinely derails generation). Git context is used instead.
+const MAX_TRANSCRIPT_BYTES = 1_000_000;
+
+function fileSizeBytes(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+function fileMtimeMs(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 export interface SessionLogContext {
   sessionId: string; // claude-remote session id (DB primary key)
@@ -81,10 +101,17 @@ function buildPrompt(opts: {
   diff: string;
   log: string;
   transcriptPath: string;
+  transcriptLarge: boolean;
   editPlanFiles: boolean;
   planGlobs: string[];
 }): string {
-  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, editPlanFiles, planGlobs } = opts;
+  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, transcriptLarge, editPlanFiles, planGlobs } = opts;
+
+  // A very large transcript can exhaust the run before it writes the file, so
+  // tell the model to skip it and lean on the git diff instead.
+  const transcriptInstruction = transcriptLarge
+    ? 'Read CLAUDE.md (if present) for project context. The session transcript is very large — do NOT read it; rely on the git diff below for what changed.'
+    : `Read CLAUDE.md (if present) for project context, and the session transcript at ${transcriptPath} if you need to understand intent.`;
 
   const planInstruction = editPlanFiles
     ? `4. Find plan/design docs (glob patterns: ${planGlobs.join(', ')}) with Glob, and for objectives this session completed, tick their checkboxes ("- [ ]" -> "- [x]"). Only flip boxes you are confident are done.`
@@ -112,8 +139,7 @@ Session name: ${ctx.name}
 Claude session id: ${ctx.claudeSessionId}
 
 Your job:
-1. Read CLAUDE.md (if present) for project context, and the session transcript at
-   ${transcriptPath} if you need to understand intent (it may be large — skim it).
+1. ${transcriptInstruction}
 2. Use the git diff and recent commits below as the ground truth for what actually changed.
 3. Prepend ONE new entry to the top of ${fileName} at the project root${fileExists ? ' (the file already exists — keep all existing entries unchanged, newest first)' : ' (create the file with a short "# Session Log" header, then the entry)'}.
 ${planInstruction}
@@ -269,7 +295,9 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     }
 
     const fileName = cfg.fileName;
-    const fileExists = existsSync(join(ctx.cwd, fileName));
+    const logPath = join(ctx.cwd, fileName);
+    const fileExists = existsSync(logPath);
+    const mtimeBefore = fileMtimeMs(logPath);
     const prompt = buildPrompt({
       ctx,
       fileName,
@@ -279,12 +307,21 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       diff,
       log,
       transcriptPath,
+      transcriptLarge: fileSizeBytes(transcriptPath) > MAX_TRANSCRIPT_BYTES,
       editPlanFiles: cfg.editPlanFiles,
       planGlobs: cfg.planGlobs,
     });
 
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
     await runClaude(ctx.cwd, prompt);
+
+    // Verify the run actually wrote the log. A run can exit 0 without writing
+    // (e.g. it got derailed), so don't report success or stamp on a no-write —
+    // leaving logged_at unset lets the startup sweep retry it later.
+    if (!(existsSync(logPath) && fileMtimeMs(logPath) > mtimeBefore)) {
+      logger.warn({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: run completed but no entry was written');
+      return 'error';
+    }
     stampSessionLogged(ctx.sessionId, new Date().toISOString());
     logger.info({ sessionId: ctx.sessionId }, 'project-log: entry generated');
     return 'generated';
@@ -311,7 +348,7 @@ function buildBackfillPrompt(opts: {
   const { cwd, fileName, branch, nowIso, diff, log, transcriptPaths } = opts;
   const transcripts = transcriptPaths.length
     ? transcriptPaths.map((p) => `  - ${p}`).join('\n')
-    : '  (none on disk)';
+    : '  (none small enough to read — rely on git context)';
 
   const skeleton = buildEntrySkeleton({
     meta: { date: nowIso, session: '(backfill)', branch, claudeSessionId: 'backfill', blockers: 0, openItems: 0 },
@@ -337,8 +374,8 @@ Date (use this exact value in the marker): ${nowIso}
 How to gather context:
 1. Read CLAUDE.md and any README for what the project is.
 2. Use the recent commit history and uncommitted diff below as ground truth for what exists.
-3. The most recent session transcripts are listed below — skim a few (newest first)
-   for intent and recent direction. They may be large.
+3. Optionally skim a transcript or two below for recent direction — but the git
+   context above is sufficient; prioritise writing the file over reading these.
 ${transcripts}
 
 Then create ${fileName} at the project root with a "# Session Log" header followed by
@@ -368,7 +405,8 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
   const { cwd, transcriptPaths } = opts;
 
   try {
-    if (existsSync(join(cwd, cfg.fileName))) {
+    const logPath = join(cwd, cfg.fileName);
+    if (existsSync(logPath)) {
       return 'skipped'; // already has a log
     }
 
@@ -387,6 +425,14 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
       diff = (diffOut || '').slice(0, MAX_DIFF_CHARS);
     }
 
+    // Drop oversized transcripts — handing the model an 8MB file derails the run.
+    const usableTranscripts = transcriptPaths
+      .filter((p) => {
+        const size = fileSizeBytes(p);
+        return size > 0 && size <= MAX_TRANSCRIPT_BYTES;
+      })
+      .slice(0, 5);
+
     const prompt = buildBackfillPrompt({
       cwd,
       fileName: cfg.fileName,
@@ -394,11 +440,18 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
       nowIso: new Date().toISOString(),
       diff,
       log,
-      transcriptPaths: transcriptPaths.slice(0, 5),
+      transcriptPaths: usableTranscripts,
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');
     await runClaude(cwd, prompt);
+
+    // A run can exit 0 without writing the file (derailed); report error so the
+    // dashboard surfaces it instead of silently flipping to "done".
+    if (!existsSync(logPath)) {
+      logger.warn({ cwd }, 'project-log: backfill run completed but no log was written');
+      return 'error';
+    }
     logger.info({ cwd }, 'project-log: backfill generated');
     return 'generated';
   } catch (err) {
