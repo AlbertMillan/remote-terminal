@@ -119,21 +119,19 @@ export async function createApp(): Promise<FastifyInstance> {
     return { projects: getProjectBoard() };
   });
 
-  // Backfill SESSION-LOG.md for projects that don't have one yet. Body is
-  // optional: { cwds?: string[] } targets specific projects; default is every
-  // discovered project without a log. Jobs are fired into the bounded generation
-  // queue and the request returns 202 immediately — progress is observable via
-  // GET /api/project-logs as each project's `hasLog` flips. Projects with an
-  // existing log are never overwritten.
+  // Backfill SESSION-LOG.md for specific projects without one. Body REQUIRES
+  // { cwds: string[] } — there is intentionally no "all projects" mode, so a
+  // single request can't quietly queue a paid claude run for every repo on disk.
+  // Jobs fire into the bounded generation queue; the request returns 202 and
+  // progress is observable via GET /api/project-logs as each `hasLog` flips.
+  // Projects with an existing log are never overwritten.
   app.post<{ Body?: { cwds?: string[] } }>('/api/project-logs/backfill', async (request, reply) => {
     const body = (request.body || {}) as { cwds?: string[] };
-    const wanted =
-      Array.isArray(body.cwds) && body.cwds.length > 0 ? new Set(body.cwds.map(pathKey)) : null;
-
-    const targets = discoverProjects().filter((p) => {
-      if (p.hasLog) return false;
-      return wanted ? wanted.has(pathKey(p.cwd)) : true;
-    });
+    if (!Array.isArray(body.cwds) || body.cwds.length === 0) {
+      return reply.status(400).send({ error: 'cwds required (per-project backfill only)' });
+    }
+    const wanted = new Set(body.cwds.map(pathKey));
+    const targets = discoverProjects().filter((p) => !p.hasLog && wanted.has(pathKey(p.cwd)));
 
     // Fire-and-forget: generateProjectBackfill is queue-bounded and never throws.
     for (const p of targets) {

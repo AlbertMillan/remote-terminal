@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'child_process';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
@@ -243,64 +243,149 @@ function parseClaudeResult(stdout: string): ClaudeRunResult {
   }
 }
 
-function runClaude(cwd: string, prompt: string): Promise<ClaudeRunResult> {
+// One headless `claude -p` invocation (no queue, no scope checks). Resolves with
+// the parsed result on a clean exit; rejects on non-zero exit / spawn error / timeout.
+function spawnClaude(cwd: string, prompt: string): Promise<ClaudeRunResult> {
   const cfg = getConfig().projectLog;
-  return runQueued(
-    () =>
-      new Promise<ClaudeRunResult>((resolve, reject) => {
-        // Prompt is delivered via stdin (not argv) so shell quoting can't mangle
-        // it; the static flag args are space-free, safe under shell:true (needed
-        // to resolve `claude`/`claude.cmd` from PATH on Windows).
-        const child = spawn(
-          cfg.claudeCommand,
-          ['-p', '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Glob,Grep,Edit,Write', '--output-format', 'json'],
-          { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
-        );
+  return new Promise<ClaudeRunResult>((resolve, reject) => {
+    // Prompt is delivered via stdin (not argv) so shell quoting can't mangle it;
+    // the static flag args are space-free, safe under shell:true (needed to
+    // resolve `claude`/`claude.cmd` from PATH on Windows).
+    const child = spawn(
+      cfg.claudeCommand,
+      ['-p', '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Glob,Grep,Edit,Write', '--output-format', 'json'],
+      { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
 
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-        const finish = (fn: () => void) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          fn();
-        };
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
 
-        const timer = setTimeout(() => {
-          killTree(child);
-          finish(() => reject(new Error(`generation timed out after ${cfg.timeoutMs}ms`)));
-        }, cfg.timeoutMs);
+    const timer = setTimeout(() => {
+      killTree(child);
+      finish(() => reject(new Error(`generation timed out after ${cfg.timeoutMs}ms`)));
+    }, cfg.timeoutMs);
 
-        child.stdout?.on('data', (d) => {
-          stdout += String(d);
-        });
-        child.stderr?.on('data', (d) => {
-          stderr += String(d);
-        });
-        child.on('error', (err) => finish(() => reject(err)));
-        child.on('close', (code) => {
-          if (code === 0) finish(() => resolve(parseClaudeResult(stdout)));
-          else finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
-        });
+    child.stdout?.on('data', (d) => {
+      stdout += String(d);
+    });
+    child.stderr?.on('data', (d) => {
+      stderr += String(d);
+    });
+    child.on('error', (err) => finish(() => reject(err)));
+    child.on('close', (code) => {
+      if (code === 0) finish(() => resolve(parseClaudeResult(stdout)));
+      else finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
+    });
 
-        // claude may close stdin before we finish writing (fast failure / auth
-        // prompt). Without this listener the resulting EPIPE becomes an
-        // uncaughtException, which the server's handler turns into process.exit.
-        child.stdin?.on('error', () => {});
-        child.stdin?.end(prompt);
-      })
-  );
+    // claude may close stdin before we finish writing (fast failure / auth
+    // prompt). Without this listener the resulting EPIPE becomes an
+    // uncaughtException, which the server's handler turns into process.exit.
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(prompt);
+  });
 }
 
-/** Log claude's self-reported failure / out-of-scope signals from a run. */
-function logRunSignals(scope: Record<string, unknown>, r: ClaudeRunResult): void {
-  if (r.permissionDenials > 0) {
-    logger.warn({ ...scope, permissionDenials: r.permissionDenials }, 'project-log: run had denied tool calls (possible out-of-scope edit attempt)');
+// --- Post-run edit-scope enforcement --------------------------------------
+// acceptEdits auto-approves writes and the "only touch X" rule is prompt-only, so
+// after the run we diff the working tree and revert anything the run changed
+// outside the allowed set (turning prompt-only scoping into enforced scoping).
+
+interface GitStatusEntry {
+  path: string;
+  untracked: boolean;
+}
+
+async function gitStatusEntries(cwd: string): Promise<GitStatusEntry[] | null> {
+  const out = await git(cwd, ['status', '--porcelain']);
+  if (out === null) return null; // not a git repo / git unavailable
+  const entries: GitStatusEntry[] = [];
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    const untracked = line.startsWith('??');
+    let p = line.slice(3).trim();
+    const arrow = p.indexOf(' -> '); // rename: keep the new path
+    if (arrow !== -1) p = p.slice(arrow + 4);
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1); // git quotes odd paths
+    entries.push({ path: p, untracked });
   }
-  if (r.isError) {
-    logger.warn({ ...scope, result: r.result.slice(0, 200) }, 'project-log: claude reported an error result');
+  return entries;
+}
+
+function globToRegExp(glob: string): RegExp {
+  let s = glob.replace(/\\/g, '/').replace(/[.+^${}()|[\]]/g, '\\$&');
+  // `**/` => zero or more dir segments; `**` => anything; `*` => within-segment.
+  s = s
+    .replace(/\*\*\//g, 'GS_SLASH')
+    .replace(/\*\*/g, 'GS_ANY')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/GS_SLASH/g, '(?:[^/]+/)*')
+    .replace(/GS_ANY/g, '.*');
+  return new RegExp(`^${s}$`, 'i');
+}
+
+export function isAllowedPath(relPath: string, allowedGlobs: string[]): boolean {
+  const norm = relPath.replace(/\\/g, '/');
+  return allowedGlobs.some((g) => globToRegExp(g).test(norm));
+}
+
+/**
+ * Revert files the run changed outside `allowedGlobs`. `prePaths` are the paths
+ * already dirty before the run (left untouched — they predate it). Returns the
+ * list reverted. No-op for non-git projects (preEntries === null).
+ */
+async function revertOutOfScope(
+  cwd: string,
+  preEntries: GitStatusEntry[] | null,
+  allowedGlobs: string[]
+): Promise<string[]> {
+  if (preEntries === null) return [];
+  const prePaths = new Set(preEntries.map((e) => e.path));
+  const post = await gitStatusEntries(cwd);
+  if (post === null) return [];
+  const reverted: string[] = [];
+  for (const { path: rel, untracked } of post) {
+    if (prePaths.has(rel)) continue; // predates the run
+    if (isAllowedPath(rel, allowedGlobs)) continue; // in scope
+    try {
+      if (untracked) unlinkSync(join(cwd, rel));
+      else await git(cwd, ['checkout', '--', rel]);
+      reverted.push(rel);
+    } catch {
+      reverted.push(`${rel} (revert failed)`);
+    }
   }
+  return reverted;
+}
+
+/**
+ * Queued `claude -p` run with two safety layers:
+ *  - hard-fail if claude reports an error or any denied tool call, and
+ *  - revert any file the run touched outside `allowedGlobs` (git projects).
+ */
+async function runClaude(cwd: string, prompt: string, allowedGlobs: string[]): Promise<ClaudeRunResult> {
+  return runQueued(async () => {
+    const preEntries = await gitStatusEntries(cwd);
+    const result = await spawnClaude(cwd, prompt);
+    if (result.isError || result.permissionDenials > 0) {
+      throw new Error(
+        `claude run rejected (isError=${result.isError}, permissionDenials=${result.permissionDenials})` +
+          (result.result ? `: ${result.result.slice(0, 200)}` : '')
+      );
+    }
+    const reverted = await revertOutOfScope(cwd, preEntries, allowedGlobs);
+    if (reverted.length > 0) {
+      logger.warn({ cwd, reverted }, 'project-log: reverted out-of-scope edits made by the generation run');
+    }
+    return result;
+  });
 }
 
 /**
@@ -390,7 +475,9 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     });
 
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
-    logRunSignals({ sessionId: ctx.sessionId, cwd: ctx.cwd }, await runClaude(ctx.cwd, prompt));
+    // Edits allowed only to the log file (+ plan files when checkbox-ticking is on).
+    const allowedWrites = cfg.editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
+    await runClaude(ctx.cwd, prompt, allowedWrites);
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —
@@ -521,7 +608,7 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');
-    logRunSignals({ cwd }, await runClaude(cwd, prompt));
+    await runClaude(cwd, prompt, [cfg.fileName]);
 
     // A run can exit 0 without writing the file (derailed); report error so the
     // dashboard surfaces it instead of silently flipping to "done".
@@ -567,7 +654,7 @@ export async function resyncProjectPhases(cwd: string): Promise<LogOutcome> {
       return 'skipped';
     }
     logger.info({ cwd }, 'project-log: re-syncing phases');
-    logRunSignals({ cwd }, await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs)));
+    await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs), [cfg.fileName]);
     // A no-op re-sync (already current) is still success; just confirm the file survived.
     if (!existsSync(logPath)) {
       logger.warn({ cwd }, 'project-log: re-sync left no log file');
