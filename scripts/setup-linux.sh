@@ -83,11 +83,11 @@ echo "  npm run dev    (development mode)"
 echo "  npm start      (production mode)"
 echo ""
 echo "The server will be available at:"
-echo "  http://localhost:3000"
+echo "  http://localhost:4220"
 if command -v tailscale &> /dev/null && tailscale status &> /dev/null; then
     HOSTNAME=$(tailscale status --json | jq -r '.Self.HostName // empty')
     TAILNET=$(tailscale status --json | jq -r '.MagicDNSSuffix // empty' | sed 's/^\.//')
     if [ -n "$HOSTNAME" ] && [ -n "$TAILNET" ]; then
-        echo "  https://$HOSTNAME.$TAILNET:3000 (Tailscale)"
+        echo "  https://$HOSTNAME.$TAILNET:4220 (Tailscale)"
     fi
 fi

@@ -96,6 +96,30 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Optional: install auto-start on login
+Write-Host ""
+Write-Host "Auto-start on login" -ForegroundColor Cyan
+Write-Host "Copies start-server-hidden.vbs to your Startup folder so the server"
+Write-Host "launches (hidden) in your user session every time you log in."
+$reply = Read-Host "Enable auto-start on login? (y/N)"
+if ($reply -match '^[Yy]') {
+    $startupDir = [Environment]::GetFolderPath('Startup')
+    $vbsSource = Join-Path $PSScriptRoot '..\start-server-hidden.vbs'
+    $vbsSource = [System.IO.Path]::GetFullPath($vbsSource)
+    if (Test-Path $vbsSource) {
+        $vbsTarget = Join-Path $startupDir 'claude-remote.vbs'
+        Copy-Item -Path $vbsSource -Destination $vbsTarget -Force
+        Write-Host "✓ Auto-start installed: $vbsTarget" -ForegroundColor Green
+        Write-Host "  To disable later, delete that file." -ForegroundColor Gray
+    } else {
+        Write-Host "WARNING: Could not find start-server-hidden.vbs at $vbsSource" -ForegroundColor Yellow
+        Write-Host "Auto-start was not installed." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "Skipped. You can enable it later by copying start-server-hidden.vbs" -ForegroundColor Gray
+    Write-Host "into: $([Environment]::GetFolderPath('Startup'))" -ForegroundColor Gray
+}
+
 Write-Host ""
 Write-Host "=======================================" -ForegroundColor Cyan
 Write-Host "Setup complete!" -ForegroundColor Green
@@ -105,7 +129,7 @@ Write-Host "  npm run dev    (development mode)"
 Write-Host "  npm start      (production mode)"
 Write-Host ""
 Write-Host "The server will be available at:" -ForegroundColor Cyan
-Write-Host "  http://localhost:3000"
+Write-Host "  http://localhost:4220"
 
 if ($tailscaleInstalled) {
     try {
@@ -113,7 +137,7 @@ if ($tailscaleInstalled) {
         if ($status.Self.HostName) {
             $hostname = $status.Self.HostName
             $tailnet = $status.MagicDNSSuffix -replace '^\.'
-            Write-Host "  https://$hostname.$($tailnet):3000 (Tailscale)"
+            Write-Host "  https://$hostname.$($tailnet):4220 (Tailscale)"
         }
     } catch {}
 }

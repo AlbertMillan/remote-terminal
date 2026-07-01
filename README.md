@@ -69,6 +69,20 @@ When Tailscale is installed and connected:
 2. Enable TLS in the config for HTTPS support
 3. Authentication is automatic via Tailscale identity
 
+### Auto-start on login (Windows)
+
+The Windows setup script offers to install auto-start for you (answer `y` at the prompt). To do it manually — or to remove it — copy `start-server-hidden.vbs` into your Startup folder:
+
+```powershell
+# Enable: copy the launcher into the Startup folder
+Copy-Item start-server-hidden.vbs "$([Environment]::GetFolderPath('Startup'))\claude-remote.vbs"
+
+# Disable: delete it
+Remove-Item "$([Environment]::GetFolderPath('Startup'))\claude-remote.vbs"
+```
+
+Windows runs everything in the Startup folder at **user logon**; the VBS launches `start-server.bat` with a hidden console window, so the server starts in your user session (where Tailscale identity, Claude auth, and shells live) with no visible window. This requires no administrator rights. For a boot-before-login service you would instead register a Scheduled Task or Windows service, but that runs outside your user profile and is not needed for typical use.
+
 ## Configuration
 
 Configuration is stored in `~/.claude-remote/config.json`:
@@ -76,7 +90,7 @@ Configuration is stored in `~/.claude-remote/config.json`:
 ```json
 {
   "server": {
-    "port": 3000,
+    "port": 4220,
     "host": "0.0.0.0"
   },
   "tls": {
@@ -158,23 +172,45 @@ Connect to `/ws` for the WebSocket endpoint.
 - **Authorization**: Optional user allowlist
 - **Isolation**: Separate PTY processes per session
 
+## Session Fork
+
+The fork button in the terminal header branches the current Claude Code conversation into an independent new session: it copies the JSONL transcript to a new UUID and runs `claude --resume <new-uuid>`. The fork is ephemeral — its transcript is deleted when the session is closed. Click **Keep** to make it permanent.
+
+Fork relies on the `SessionStart` hook (and the `claude-session` command in `Stop`) so the server knows the current Claude session ID — see the hook configuration in [Notifications](#setup-all-platforms) below, which wires up both features in one block.
+
 ## Notifications (Claude Code Integration)
 
 Get notified when Claude Code needs input or completes a task. A visual badge appears in the session list, and browser notifications are sent when the tab is not focused.
 
-### Setup (Windows)
+### Setup (all platforms)
 
-Add the following to your Claude Code settings file (`~/.claude/settings.json`):
+Add the following to your Claude Code settings file (`~/.claude/settings.json`). Claude Code runs hooks via bash (`/usr/bin/bash`) on Windows too, so **the same bash `$VAR` syntax works on every platform** — there is no separate Windows configuration. The `[ -n "$CLAUDE_REMOTE_SESSION_ID" ]` guard makes each hook a no-op when Claude is not running inside a claude-remote session.
+
+The block below wires up **both** notifications (`completed` / `needs-input`) **and** the [Session Fork feature](#session-fork) (the `SessionStart` hook plus the `claude-session` command in `Stop`):
 
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/session/$CLAUDE_REMOTE_SESSION_ID/claude-session\" -H \"Content-Type: application/json\" -d \"{\\\"claudeSessionId\\\": \\\"$CLAUDE_CODE_SESSION_ID\\\"}\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/completed"
+            "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/completed\""
+          },
+          {
+            "type": "command",
+            "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/session/$CLAUDE_REMOTE_SESSION_ID/claude-session\" -H \"Content-Type: application/json\" -d \"{\\\"claudeSessionId\\\": \\\"$CLAUDE_CODE_SESSION_ID\\\"}\""
           }
         ]
       }
@@ -185,7 +221,7 @@ Add the following to your Claude Code settings file (`~/.claude/settings.json`):
         "hooks": [
           {
             "type": "command",
-            "command": "cmd /c curl -s -X POST http://localhost:4220/api/notify/%CLAUDE_REMOTE_SESSION_ID%/needs-input"
+            "command": "[ -n \"$CLAUDE_REMOTE_SESSION_ID\" ] && curl -s -X POST \"http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/needs-input\""
           }
         ]
       }
@@ -194,35 +230,7 @@ Add the following to your Claude Code settings file (`~/.claude/settings.json`):
 }
 ```
 
-### Setup (Linux/macOS)
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/completed"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "permission_prompt|idle_prompt|elicitation_dialog",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST http://localhost:4220/api/notify/$CLAUDE_REMOTE_SESSION_ID/needs-input"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+If you only want notifications and not the fork feature, omit the `SessionStart` hook and the second `claude-session` command inside `Stop`.
 
 ### How It Works
 
