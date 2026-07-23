@@ -12,6 +12,7 @@ export type ClientMessageType =
   | 'session.reorder'
   | 'session.list'
   | 'session.fork'
+  | 'session.open'
   | 'session.keep'
   | 'terminal.data'
   | 'terminal.resize'
@@ -163,6 +164,16 @@ export interface SessionInfo {
 
 export interface SessionForkPayload {
   sessionId: string;
+}
+
+// Open a historical Claude session (from a project's session history) directly.
+// `resume` continues the original transcript; `fork` copies it to a new id first.
+export interface SessionOpenPayload {
+  claudeSessionId: string;
+  cwd: string;
+  mode: 'resume' | 'fork';
+  cols?: number;
+  rows?: number;
 }
 
 export interface SessionKeepPayload {

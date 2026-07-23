@@ -565,29 +565,140 @@ class SessionManager {
     this.activeSessions.set(id, session);
     logSessionEvent(id, 'forked', JSON.stringify({ sourceId, claudeSessionId: newClaudeSessionId }));
 
-    // C4: Inject resume command after the shell produces first output (= ready for input).
-    // Debounced 100ms so rc-file output settles; 5s hard fallback if shell stays silent.
+    this._injectResumeCommand(session, newClaudeSessionId);
+
+    logger.info({ id, name, pid: ptyProcess.pid }, 'Fork session created successfully');
+    return session;
+  }
+
+  // C4: Inject `claude --resume <id>` once the shell produces its first output (= ready for
+  // input). Debounced 100ms so rc-file output settles; 5s hard fallback if the shell stays
+  // silent. Shared by forkSession and openClaudeSession.
+  private _injectResumeCommand(session: ActiveSession, resumeId: string): void {
     let commandSent = false;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    const startupDisposable = ptyProcess.onData(() => {
+    const startupDisposable = session.pty.onData(() => {
       if (commandSent) return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         if (!commandSent) {
           commandSent = true;
           startupDisposable.dispose();
-          writeToPty(session.pty, `claude --resume ${newClaudeSessionId}\r`);
+          writeToPty(session.pty, `claude --resume ${resumeId}\r`);
         }
       }, 100);
     });
     setTimeout(() => {
       if (!commandSent) {
         commandSent = true;
-        writeToPty(session.pty, `claude --resume ${newClaudeSessionId}\r`);
+        writeToPty(session.pty, `claude --resume ${resumeId}\r`);
       }
     }, 5000);
+  }
 
-    logger.info({ id, name, pid: ptyProcess.pid }, 'Fork session created successfully');
+  /**
+   * Open a Claude session recorded in a project's session history, without needing a live
+   * source session. `resume` continues the original transcript in place; `fork` first copies
+   * the transcript to a fresh id (ephemeral, isFork) exactly like forkSession. In both cases a
+   * new PTY is created in `cwd` and `claude --resume` is injected once the shell is ready.
+   */
+  async openClaudeSession(options: {
+    claudeSessionId: string;
+    cwd: string;
+    mode: 'resume' | 'fork';
+    name?: string;
+    ownerId?: string;
+    cols?: number;
+    rows?: number;
+  }): Promise<ActiveSession> {
+    const { claudeSessionId, cwd, mode } = options;
+
+    const config = getConfig();
+    const activeCount = countActiveSessions();
+    if (activeCount >= config.sessions.maxSessions) {
+      throw new Error(`Maximum session limit (${config.sessions.maxSessions}) reached`);
+    }
+
+    const shell = config.sessions.defaultShell || getDefaultShell();
+    const cols = options.cols || 80;
+    const rows = options.rows || 24;
+    const now = new Date();
+    const id = randomUUID();
+    const sortOrder = getMaxSessionSortOrder(null) + 1;
+
+    // In fork mode we must locate and copy the source transcript. In resume mode we run against
+    // the original id directly and let `claude --resume` surface any missing-transcript error.
+    let resumeId = claudeSessionId;
+    let isFork = false;
+    let forkJsonlPath: string | null = null;
+    let sourceJsonlPath: string | null = null;
+    if (mode === 'fork') {
+      const projectDir = findClaudeProjectDir(homedir(), cwd, claudeSessionId);
+      sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
+      resumeId = randomUUID();
+      forkJsonlPath = join(projectDir, `${resumeId}.jsonl`);
+      isFork = true;
+    }
+
+    const shortId = claudeSessionId.slice(0, 8);
+    const name = options.name || (mode === 'fork' ? `Fork: ${shortId}` : `Resume: ${shortId}`);
+
+    logger.info({ id, claudeSessionId, cwd, mode }, 'Opening historical Claude session');
+
+    // Insert DB record FIRST so forkJsonlPath is tracked before any file operations (matches
+    // forkSession: cleanupOrphanedForkFiles() can recover if the server crashes mid-open).
+    const metadata: SessionMetadata = {
+      id, name, shell, cwd,
+      createdAt: now.toISOString(),
+      lastAccessedAt: now.toISOString(),
+      ownerId: options.ownerId || null,
+      status: 'active',
+      cols, rows,
+      tmuxSession: null,
+      categoryId: null,
+      sortOrder,
+      claudeSessionId: resumeId,
+      isFork,
+      forkJsonlPath,
+    };
+    insertSession(metadata);
+
+    if (mode === 'fork') {
+      try {
+        copyFileSync(sourceJsonlPath as string, forkJsonlPath as string);
+      } catch (error) {
+        updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
+        throw new Error(`Failed to copy session transcript: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+
+    let ptyProcess;
+    try {
+      ptyProcess = createPty({ shell, cwd, cols, rows, env: { CLAUDE_REMOTE_SESSION_ID: id } });
+    } catch (error) {
+      if (forkJsonlPath) { try { unlinkSync(forkJsonlPath); } catch { /* best-effort cleanup */ } }
+      updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
+      throw error;
+    }
+
+    const session: ActiveSession = {
+      id, name, shell, cwd,
+      createdAt: now, lastAccessedAt: now,
+      ownerId: options.ownerId,
+      status: 'active',
+      cols, rows,
+      pty: ptyProcess,
+      scrollback: [],
+      connectedClients: new Set(),
+    };
+
+    this._initSessionPty(session);
+    this.activeSessions.set(id, session);
+    logSessionEvent(id, mode === 'fork' ? 'forked' : 'resumed', JSON.stringify({ claudeSessionId, resumeId }));
+
+    this._injectResumeCommand(session, resumeId);
+
+    logger.info({ id, name, pid: ptyProcess.pid }, 'Historical session opened successfully');
     return session;
   }
 

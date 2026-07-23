@@ -18,6 +18,7 @@ import {
   type SessionMovePayload,
   type SessionReorderPayload,
   type SessionForkPayload,
+  type SessionOpenPayload,
   type SessionKeepPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
@@ -217,6 +218,10 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
     case 'session.fork':
       handleSessionFork(connection, message);
+      break;
+
+    case 'session.open':
+      handleSessionOpen(connection, message);
       break;
 
     case 'session.keep':
@@ -670,6 +675,64 @@ async function handleSessionFork(connection: ClientConnection, message: ClientMe
     attachToSession(connection, forkedSession.id);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to fork session';
+    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+  }
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Open a historical Claude session directly (resume the original transcript or fork a copy).
+// Mirrors handleSessionCreate's response + auto-attach path so the client's existing
+// isFork -> Keep-button flow works for the fork case without any special handling.
+async function handleSessionOpen(connection: ClientConnection, message: ClientMessage): Promise<void> {
+  const payload = message.payload as SessionOpenPayload | undefined;
+
+  try {
+    if (!payload || typeof payload.claudeSessionId !== 'string' || !UUID_PATTERN.test(payload.claudeSessionId)) {
+      throw new Error('A valid Claude session ID is required');
+    }
+    if (payload.mode !== 'resume' && payload.mode !== 'fork') {
+      throw new Error('Mode must be "resume" or "fork"');
+    }
+    if (typeof payload.cwd !== 'string' || !payload.cwd) {
+      throw new Error('Working directory is required');
+    }
+    if (payload.cwd.length > MAX_CWD_LENGTH || payload.cwd.includes('..')) {
+      throw new Error('Invalid working directory path');
+    }
+
+    const session = await sessionManager.openClaudeSession({
+      claudeSessionId: payload.claudeSessionId,
+      cwd: payload.cwd,
+      mode: payload.mode,
+      ownerId: connection.identity?.userId,
+      cols: payload.cols,
+      rows: payload.rows,
+    });
+
+    const sessionMetadata = getSessionFromDb(session.id);
+
+    connection.ws.send(
+      createMessage(
+        'session.created',
+        {
+          session: sessionToInfo({
+            ...session,
+            categoryId: sessionMetadata?.categoryId ?? null,
+            sortOrder: sessionMetadata?.sortOrder ?? 0,
+            isFork: payload.mode === 'fork',
+          }),
+        },
+        message.id
+      )
+    );
+
+    if (connection.attachedSession) {
+      detachFromSession(connection);
+    }
+    attachToSession(connection, session.id);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to open session';
     connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
   }
 }

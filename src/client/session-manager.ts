@@ -338,6 +338,14 @@ class SessionManager {
     const phasesContainer = document.getElementById('project-log-entries');
     phasesContainer?.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+      const openBtn = target.closest('[data-open-session]') as HTMLElement | null;
+      if (openBtn) {
+        const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
+        const cwd = openBtn.getAttribute('data-open-cwd') || '';
+        const mode = openBtn.getAttribute('data-open-mode') === 'fork' ? 'fork' : 'resume';
+        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode);
+        return;
+      }
       const copyBtn = target.closest('[data-copy]') as HTMLElement | null;
       if (copyBtn) {
         const sid = copyBtn.getAttribute('data-copy') || '';
@@ -1726,7 +1734,7 @@ class SessionManager {
         project.entries.length === 0
           ? '<div class="project-empty">No entries yet.</div>'
           : `<h3 class="project-log-subhead">Session history</h3>` +
-            project.entries.map((e) => this.renderLogEntry(e)).join('');
+            project.entries.map((e) => this.renderLogEntry(e, project.cwd)).join('');
       entriesEl.innerHTML = phasesHtml + entriesHtml;
     }
     this.renderProjectList(); // refresh active highlight
@@ -1777,18 +1785,28 @@ class SessionManager {
       .join('')}</div>`;
   }
 
-  private renderLogEntry(entry: ParsedLogEntry): string {
+  private renderLogEntry(entry: ParsedLogEntry, cwd: string): string {
     const meta = entry.meta;
     const date = meta?.date ? new Date(meta.date) : null;
     const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
     // Strip the marker comment and the "## heading" line; render the rest as the body.
     const lines = entry.body.split('\n');
     const bodyLines = lines.filter((l) => !l.startsWith('<!--') && !l.startsWith('## '));
+    // Resume/Fork controls only make sense when the entry carries a real Claude session id.
+    const sid = meta?.claudeSessionId;
+    const hasSid = !!sid && sid !== 'backfill' && sid !== 'unknown';
+    const actions = hasSid
+      ? `<span class="log-entry-actions">
+          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" title="Resume this Claude session">Resume</button>
+          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" title="Fork this Claude session into a new branch">Fork</button>
+        </span>`
+      : '';
     const head = `
       <div class="log-entry-head">
         ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
         ${meta?.session ? `<span class="log-entry-session">${escapeHtml(meta.session)}</span>` : ''}
         ${meta?.branch ? `<span class="log-entry-branch">${escapeHtml(meta.branch)}</span>` : ''}
+        ${actions}
       </div>`;
     return `<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;
   }
@@ -1937,6 +1955,12 @@ class SessionManager {
 
   createSession(name?: string, cwd?: string): void {
     this.send('session.create', { name, cwd });
+  }
+
+  // Open a Claude session from a project's session history: `resume` continues the original
+  // transcript, `fork` branches a copy. The server auto-attaches, so showTerminal() takes over.
+  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork'): void {
+    this.send('session.open', { claudeSessionId, cwd, mode });
   }
 
   attachToSession(sessionId: string): void {

@@ -2134,6 +2134,28 @@ body {
   border-radius: 6px;
 }
 
+.log-entry-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.log-entry-open {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.log-entry-open:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .log-entry-body { font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
 .log-entry-body strong { color: var(--text-primary); font-weight: 600; }
 .log-entry-body code {
