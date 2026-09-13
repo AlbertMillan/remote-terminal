@@ -147,6 +147,43 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN logged_at TEXT;
       `,
     },
+    {
+      // Pipeline jobs: one feature carried through design -> ... -> merge in an
+      // isolated worktree, parking at gates for approval.
+      name: '009_create_jobs',
+      sql: `
+        CREATE TABLE IF NOT EXISTS jobs (
+          id TEXT PRIMARY KEY,
+          project_cwd TEXT NOT NULL,
+          feature_id TEXT,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          stage TEXT,
+          gate TEXT,
+          park_reason TEXT,
+          detail TEXT,
+          worktree_path TEXT,
+          branch TEXT,
+          claude_session_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_cwd);
+        CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+        CREATE TABLE IF NOT EXISTS job_stages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          detail TEXT,
+          started_at TEXT,
+          finished_at TEXT,
+          FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_stages_job ON job_stages(job_id);
+      `,
+    },
   ];
 
   const appliedMigrations = database

@@ -19,6 +19,8 @@ import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './
 import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
+import { registerJobRoutes } from './jobs/routes.js';
+import { reconcileJobsOnStartup } from './jobs/runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,6 +37,8 @@ export async function createApp(): Promise<FastifyInstance> {
   cleanupOrphanedForkFiles();
   // Retroactively log sessions that ended via crash/OS-shutdown (no-op if disabled)
   sweepUnloggedSessions();
+  // A job marked running cannot have survived the restart — re-queue it.
+  reconcileJobsOnStartup();
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -123,6 +127,8 @@ export async function createApp(): Promise<FastifyInstance> {
 
   // Project workspace: canonical PROJECT.md board, registry and feature edits.
   registerProjectRoutes(app);
+  // Pipeline jobs: worktree-isolated stages with approval gates.
+  registerJobRoutes(app);
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {
