@@ -91,6 +91,33 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
+/**
+ * What one run consumed, as the envelope reports it.
+ *
+ * Deliberately a flat, provider-neutral shape rather than the raw `usage`
+ * object: the CLI's envelope carries a dozen fields that change between
+ * versions, and everything downstream only needs these five.
+ */
+export interface RunUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** `total_cost_usd` — API list price for the tokens, not a subscription charge. */
+  costUsd: number;
+}
+
+export const NO_USAGE: RunUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  costUsd: 0,
+};
+
+/** Called with each completed run's usage, for callers that account for spend. */
+export type UsageSink = (usage: RunUsage) => void;
+
 export interface ClaudeRunResult {
   isError: boolean; // claude's own `is_error` flag
   result: string; // claude's final result text
@@ -101,6 +128,64 @@ export interface ClaudeRunResult {
    * escape hatch when a run needs a human decision.
    */
   sessionId: string | null;
+  /** Tokens and list-price cost this run reported; zeros when it reported none. */
+  usage: RunUsage;
+}
+
+/** Finite numbers only — a missing or malformed field reads as zero, never NaN. */
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Pull usage out of the envelope.
+ *
+ * `modelUsage` is the source of truth, not the top-level `usage` block: on a
+ * multi-turn run — which every pipeline stage is — `usage` reports only the
+ * final turn's input, while `modelUsage` accumulates the whole run. A measured
+ * two-turn run reported usage.input_tokens=19 against modelUsage 967, so
+ * reading `usage` would under-report input by an order of magnitude. The
+ * top-level block is kept only as the fallback for a shape that lacks
+ * modelUsage.
+ *
+ * Tolerant by design throughout: a CLI version that renames or drops these
+ * keys must degrade to zeros, not break the pipeline that merely reports them.
+ */
+function parseUsage(envelope: {
+  usage?: unknown;
+  modelUsage?: unknown;
+  total_cost_usd?: unknown;
+}): RunUsage {
+  const perModel = Object.values((envelope.modelUsage ?? {}) as Record<string, unknown>).filter(
+    (m): m is Record<string, unknown> => !!m && typeof m === 'object'
+  );
+
+  const totalled = perModel.reduce<RunUsage>(
+    (acc, m) => ({
+      inputTokens: acc.inputTokens + num(m.inputTokens),
+      outputTokens: acc.outputTokens + num(m.outputTokens),
+      cacheReadTokens: acc.cacheReadTokens + num(m.cacheReadInputTokens),
+      cacheCreationTokens: acc.cacheCreationTokens + num(m.cacheCreationInputTokens),
+      // Falls back to the per-model costs when the envelope omits the total.
+      costUsd: acc.costUsd + num(m.costUSD),
+    }),
+    { ...NO_USAGE }
+  );
+
+  const u = (envelope.usage ?? {}) as Record<string, unknown>;
+  const fallback: RunUsage = {
+    inputTokens: num(u.input_tokens),
+    outputTokens: num(u.output_tokens),
+    cacheReadTokens: num(u.cache_read_input_tokens),
+    cacheCreationTokens: num(u.cache_creation_input_tokens),
+    costUsd: 0,
+  };
+
+  const tokens = perModel.length > 0 ? totalled : fallback;
+  return {
+    ...tokens,
+    costUsd: num(envelope.total_cost_usd) || totalled.costUsd,
+  };
 }
 
 /** Parse the `--output-format json` envelope; tolerant of unexpected shapes. */
@@ -111,15 +196,18 @@ export function parseClaudeResult(stdout: string): ClaudeRunResult {
       result?: unknown;
       permission_denials?: unknown;
       session_id?: unknown;
+      usage?: unknown;
+      total_cost_usd?: unknown;
     };
     return {
       isError: j.is_error === true,
       result: typeof j.result === 'string' ? j.result : '',
       permissionDenials: Array.isArray(j.permission_denials) ? j.permission_denials.length : 0,
       sessionId: typeof j.session_id === 'string' && j.session_id ? j.session_id : null,
+      usage: parseUsage(j),
     };
   } catch {
-    return { isError: false, result: '', permissionDenials: 0, sessionId: null };
+    return { isError: false, result: '', permissionDenials: 0, sessionId: null, usage: NO_USAGE };
   }
 }
 
@@ -142,6 +230,14 @@ export interface RunOptions extends SpawnOptions {
    * false and rely on the scope-revert below for file safety.
    */
   failOnDenial?: boolean;
+  /**
+   * Receives this run's usage as soon as the envelope is parsed — BEFORE the
+   * error and denial checks below. A run that produced an envelope has already
+   * spent its tokens whether or not we accept its output, so recording after
+   * the checks would under-report exactly the runs worth knowing about: the
+   * rejected ones.
+   */
+  onUsage?: UsageSink;
 }
 
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
@@ -290,6 +386,14 @@ export async function runClaude(
   return runQueued(async () => {
     const preEntries = await gitStatusEntries(cwd);
     const result = await spawnClaude(cwd, prompt, options);
+    if (options.onUsage) {
+      // Accounting must never be able to fail a run.
+      try {
+        options.onUsage(result.usage);
+      } catch (error) {
+        logger.warn({ cwd, error }, 'claude-run: usage sink threw');
+      }
+    }
     if (result.isError || (failOnDenial && result.permissionDenials > 0)) {
       throw new Error(
         `claude run rejected (isError=${result.isError}, permissionDenials=${result.permissionDenials})` +

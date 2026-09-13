@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude } from '../../agent/claude-run.js';
+import { runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { COMPANION_DIR } from '../../projects/project-store.js';
 import type { Job } from '../types.js';
 
@@ -114,8 +114,10 @@ export async function runDesignStage(opts: {
   worktreePath: string;
   /** Answer to the previous pass's open question, when re-running after one. */
   answer?: string | null;
+  /** Records what the run consumed; see runner.ts. */
+  onUsage?: UsageSink;
 }): Promise<DesignResult> {
-  const { job, worktreePath, answer = null } = opts;
+  const { job, worktreePath, answer = null, onUsage } = opts;
 
   const slug = specSlugFor(job.title, job.featureId);
   const specRel = `${COMPANION_DIR}/${slug}.md`;
@@ -136,6 +138,7 @@ export async function runDesignStage(opts: {
     allowedTools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
     timeoutMs: getConfig().projectLog.timeoutMs,
     failOnDenial: false,
+    onUsage,
   });
 
   if (!existsSync(specAbs)) {

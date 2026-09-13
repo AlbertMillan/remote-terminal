@@ -2,7 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude } from '../../agent/claude-run.js';
+import { runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { readProjectDoc } from '../../projects/project-store.js';
 import { checkDriver, readQaDoc, qaDocRelPath, type ProcessProbe } from '../qa-doc.js';
 
@@ -137,8 +137,9 @@ export async function runQaStage(opts: {
   jobId: string;
   worktreePath: string;
   isProcessRunning?: ProcessProbe;
+  onUsage?: UsageSink;
 }): Promise<QaResult> {
-  const { jobId, worktreePath, isProcessRunning } = opts;
+  const { jobId, worktreePath, isProcessRunning, onUsage } = opts;
 
   const qa = readQaDoc(worktreePath);
   // PROJECT.md's verify list is the other source of declared commands, so a
@@ -166,6 +167,7 @@ export async function runQaStage(opts: {
         allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
         timeoutMs: getConfig().projectLog.timeoutMs,
         failOnDenial: false,
+        onUsage,
       });
       claudeSessionId = result.sessionId;
 

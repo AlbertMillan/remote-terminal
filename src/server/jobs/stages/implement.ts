@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude } from '../../agent/claude-run.js';
+import { runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { COMPANION_DIR } from '../../projects/project-store.js';
 import { commitAll, diffStat } from '../worktree.js';
 import type { Job } from '../types.js';
@@ -82,8 +82,9 @@ export async function runImplementStage(opts: {
   worktreePath: string;
   specPath: string;
   baseBranch: string;
+  onUsage?: UsageSink;
 }): Promise<ImplementResult> {
-  const { job, worktreePath, specPath, baseBranch } = opts;
+  const { job, worktreePath, specPath, baseBranch, onUsage } = opts;
 
   const specAbs = join(worktreePath, specPath);
   if (!existsSync(specAbs)) {
@@ -101,6 +102,7 @@ export async function runImplementStage(opts: {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
     timeoutMs: getConfig().projectLog.timeoutMs,
     failOnDenial: false,
+    onUsage,
   });
 
   const updatedSpec = existsSync(specAbs) ? readFileSync(specAbs, 'utf-8') : spec;

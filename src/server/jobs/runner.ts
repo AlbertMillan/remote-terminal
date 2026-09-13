@@ -3,6 +3,7 @@ import { findWorkspaceProject } from '../projects/workspace.js';
 import { capabilitiesFor, detectVcs } from '../projects/vcs.js';
 import { admit } from './scheduler.js';
 import {
+  addStageUsage,
   createJob,
   finishStage,
   getJob,
@@ -28,6 +29,7 @@ import { runFixStage } from './stages/fix.js';
 import { runQaStage } from './stages/qa.js';
 import { runRebuildStage } from './stages/rebuild.js';
 import { isProcessRunning } from '../utils/platform.js';
+import type { UsageSink } from '../agent/claude-run.js';
 import { readFindings, selectedFindings } from './findings.js';
 import {
   GATE_AFTER,
@@ -41,6 +43,19 @@ import {
 } from './types.js';
 
 const logger = createLogger('job-runner');
+
+/**
+ * Attribute an agent run's spend to the stage that made it.
+ *
+ * Handed to the stage rather than recorded from its return value on purpose: a
+ * stage that parks, fails, or has its output rejected still burned the tokens,
+ * and a return value never arrives in those cases. The sink fires the moment a
+ * run reports an envelope, and adds — so the several runs qa and fix make each
+ * land on the same row.
+ */
+function usageFor(jobId: string, stage: StageName): UsageSink {
+  return (usage) => addStageUsage(jobId, stage, usage);
+}
 
 export class JobError extends Error {
   constructor(
@@ -231,7 +246,12 @@ async function executeDesign(job: Job): Promise<void> {
   const answer = job.pendingAnswer;
   if (answer) updateJob(job.id, { pendingAnswer: null });
 
-  const result = await runDesignStage({ job, worktreePath, answer });
+  const result = await runDesignStage({
+    job,
+    worktreePath,
+    answer,
+    onUsage: usageFor(job.id, 'design'),
+  });
 
   if (result.claudeSessionId) {
     updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -310,6 +330,7 @@ async function executeImplement(job: Job): Promise<void> {
     worktreePath,
     specPath,
     baseBranch: await baseBranchOf(job),
+    onUsage: usageFor(job.id, 'implement'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -369,6 +390,7 @@ async function executeReview(job: Job): Promise<void> {
     worktreePath,
     baseBranch: await baseBranchOf(job),
     specPath: specPathOf(job.id),
+    onUsage: usageFor(job.id, 'review'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -424,6 +446,7 @@ async function executeFix(job: Job): Promise<void> {
     selected,
     skipped,
     title: job.title,
+    onUsage: usageFor(job.id, 'fix'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -453,7 +476,12 @@ async function executeFix(job: Job): Promise<void> {
  */
 async function executeQa(job: Job): Promise<void> {
   const worktreePath = requireWorktree(job);
-  const result = await runQaStage({ jobId: job.id, worktreePath, isProcessRunning });
+  const result = await runQaStage({
+    jobId: job.id,
+    worktreePath,
+    isProcessRunning,
+    onUsage: usageFor(job.id, 'qa'),
+  });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
 

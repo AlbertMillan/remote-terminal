@@ -13,6 +13,7 @@ import {
   retryJob,
 } from './runner.js';
 import { getJobWithStages, listJobs, listJobsForProject } from './store.js';
+import { sumUsage } from './types.js';
 import { diffAgainst, diffStat, hasRemote } from './worktree.js';
 import { applySelection, readFindings, writeFindings } from './findings.js';
 
@@ -22,10 +23,12 @@ const logger = createLogger('job-routes');
 const MAX_DIFF_CHARS = 200_000;
 
 export function registerJobRoutes(app: FastifyInstance): void {
-  // All jobs, or one project's.
+  // All jobs, or one project's. `usage` is the total across the jobs returned,
+  // summed here so the board and any other caller cannot disagree about it.
   app.get<{ Querystring: { cwd?: string } }>('/api/jobs', async (request) => {
     const cwd = request.query?.cwd;
-    return { jobs: cwd ? listJobsForProject(cwd) : listJobs() };
+    const jobs = cwd ? listJobsForProject(cwd) : listJobs();
+    return { jobs, usage: sumUsage(jobs) };
   });
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {

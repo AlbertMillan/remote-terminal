@@ -206,6 +206,22 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE jobs ADD COLUMN pending_answer TEXT;
       `,
     },
+    {
+      // What each stage's agent runs consumed, accumulated per run. Token
+      // counts stay split because a single total is dominated by cache reads.
+      // run_count distinguishes "this stage ran nothing" from "it ran and
+      // reported zeros" — which matters for jobs that predate this migration:
+      // their zeros are unknown, not free.
+      name: '012_add_stage_token_usage',
+      sql: `
+        ALTER TABLE job_stages ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE job_stages ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE job_stages ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE job_stages ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE job_stages ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0;
+        ALTER TABLE job_stages ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;
+      `,
+    },
   ];
 
   const appliedMigrations = database

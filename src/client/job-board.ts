@@ -29,12 +29,70 @@ export type StageStatus =
   | 'needs_decision';
 export type ParkReason = 'gate' | 'question';
 
+/** Mirrors StageUsage in src/server/jobs/types.ts. */
+export interface StageUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+  runCount: number;
+}
+
+const ZERO_USAGE: StageUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  costUsd: 0,
+  runCount: 0,
+};
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * Cost is the headline because a token total is not a meaningful one: cache
+ * reads dwarf real input and output, so "31k tokens" reads as effort when it
+ * is mostly the cache doing its job.
+ */
+export function formatCost(usd: number): string {
+  if (usd <= 0) return '$0.00';
+  if (usd < 0.01) return '<$0.01';
+  return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * The breakdown behind the headline. Says "est." and names list price on
+ * purpose: these runs bill against the Pro/Max subscription, so the figure is
+ * what the tokens would cost at API rates, not a charge anyone made.
+ */
+export function usageTooltip(usage: StageUsage): string {
+  if (usage.runCount === 0) return 'no agent runs';
+  const cached = usage.cacheReadTokens + usage.cacheCreationTokens;
+  return (
+    `est. ${formatCost(usage.costUsd)} at API list price · ` +
+    `in ${formatTokens(usage.inputTokens)} · out ${formatTokens(usage.outputTokens)} · ` +
+    `cached ${formatTokens(cached)} · ` +
+    `${usage.runCount} run${usage.runCount === 1 ? '' : 's'}`
+  );
+}
+
+/** Tolerates jobs and stages that predate usage accounting. */
+export function usageOf(item: { usage?: StageUsage | null }): StageUsage {
+  return item.usage ?? ZERO_USAGE;
+}
+
 export interface JobStage {
   name: StageName;
   status: StageStatus;
   detail: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  usage?: StageUsage;
 }
 
 export interface Job {
@@ -54,6 +112,8 @@ export interface Job {
   createdAt: string;
   updatedAt: string;
   stages: JobStage[];
+  /** Sum over this job's stages; absent on jobs served by an older server. */
+  usage?: StageUsage;
 }
 
 const STAGE_ICON: Record<StageStatus, string> = {
@@ -90,6 +150,8 @@ const POLL_MS = 4000;
 
 export class JobBoard {
   private jobs: Job[] = [];
+  /** Pipeline spend across the loaded jobs, as the server summed it. */
+  private usage: StageUsage | null = null;
   private cwd: string | null = null;
   private pollTimer: number | null = null;
   /** Spec text keyed by job id, fetched lazily when a gate is opened. */
@@ -124,17 +186,20 @@ export class JobBoard {
     this.cwd = cwd;
 
     let jobs: Job[] = [];
+    let usage: StageUsage | null = null;
     try {
       const res = await fetch(`/api/jobs?cwd=${encodeURIComponent(cwd)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { jobs: Job[] };
+      const data = (await res.json()) as { jobs: Job[]; usage?: StageUsage };
       jobs = data.jobs || [];
+      usage = data.usage ?? null;
     } catch {
       jobs = [];
     }
     if (token !== this.loadToken) return; // superseded by a newer load
 
     this.jobs = jobs;
+    this.usage = usage;
     await this.loadFindingsForGates();
     if (token !== this.loadToken) return;
 
@@ -196,9 +261,27 @@ export class JobBoard {
     }
     container.innerHTML = `
       <div class="jb-section">
-        <h3 class="project-log-subhead">Jobs</h3>
+        <h3 class="project-log-subhead">Jobs${this.renderProjectUsage()}</h3>
         ${this.jobs.map((job) => this.renderJob(job)).join('')}
       </div>`;
+  }
+
+  /**
+   * What the pipeline has spent on this project: every job's stages, including
+   * failed and cancelled ones, since abandoned work still cost something.
+   *
+   * Sits beside "Jobs" rather than in the project header because that is
+   * exactly its scope — it does not count interactive terminal sessions, and a
+   * figure in the project header would be read as if it did.
+   */
+  private renderProjectUsage(): string {
+    const total = this.usage;
+    if (!total || total.runCount === 0) return '';
+    const jobCount = this.jobs.length;
+    return `<span class="jb-usage project" title="${escapeAttr(
+      `${jobCount} job${jobCount === 1 ? '' : 's'} · ${usageTooltip(total)}` +
+        '\nPipeline runs only — terminal sessions in this project are not counted.'
+    )}">${escapeHtml(formatCost(total.costUsd))}</span>`;
   }
 
   private renderJob(job: Job): string {
@@ -209,6 +292,7 @@ export class JobBoard {
           <span class="jb-state ${job.status}">${this.stateLabel(job)}</span>
           <span class="jb-title">${escapeHtml(job.title)}</span>
           ${this.qaChip(job)}
+          ${this.usageChip(job)}
           ${job.branch ? `<code class="jb-branch">${escapeHtml(job.branch)}</code>` : ''}
           <span class="jb-chevron">${open ? '▾' : '▸'}</span>
         </div>
@@ -227,6 +311,15 @@ export class JobBoard {
     return '';
   }
 
+  /** What this job has cost so far. Absent until a run has reported usage. */
+  private usageChip(job: Job): string {
+    const usage = usageOf(job);
+    if (usage.runCount === 0) return '';
+    return `<span class="jb-usage" title="${escapeAttr(usageTooltip(usage))}">${escapeHtml(
+      formatCost(usage.costUsd)
+    )}</span>`;
+  }
+
   private stateLabel(job: Job): string {
     if (job.status === 'running') return `running · ${job.stage ?? ''}`;
     if (job.status === 'parked') {
@@ -241,7 +334,9 @@ export class JobBoard {
         ${job.stages
           .map(
             (s) => `<span class="jb-stage ${s.status}" title="${escapeAttr(
-              `${s.name}: ${s.status}${s.detail ? ` — ${s.detail}` : ''}`
+              `${s.name}: ${s.status}${s.detail ? ` — ${s.detail}` : ''}` +
+                (usageOf(s).runCount > 0 ? `
+${usageTooltip(usageOf(s))}` : '')
             )}">${STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`
           )
           .join('')}

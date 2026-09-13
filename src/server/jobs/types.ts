@@ -114,6 +114,52 @@ export interface Job {
   updatedAt: string;
 }
 
+/**
+ * What a stage (or a whole job) spent.
+ *
+ * Token counts are kept split rather than summed because a single total is
+ * dominated by cache traffic — a typical stage run reads tens of thousands of
+ * cached tokens against a few hundred of real input and output — so "N tokens"
+ * would measure the cache, not the work.
+ *
+ * `costUsd` is what the run reports as `total_cost_usd`: the API list price of
+ * those tokens. These runs bill against the Pro/Max subscription, so it is an
+ * estimate of value consumed, not money charged. The UI labels it as such.
+ */
+export interface StageUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+  /** Completed agent runs that reported usage. 0 means the stage ran none. */
+  runCount: number;
+}
+
+export const ZERO_USAGE: StageUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  costUsd: 0,
+  runCount: 0,
+};
+
+export function addUsage(a: StageUsage, b: StageUsage): StageUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
+    costUsd: a.costUsd + b.costUsd,
+    runCount: a.runCount + b.runCount,
+  };
+}
+
+export function sumUsage(items: { usage: StageUsage }[]): StageUsage {
+  return items.reduce((acc, item) => addUsage(acc, item.usage), ZERO_USAGE);
+}
+
 export interface JobStage {
   id: number;
   jobId: string;
@@ -122,11 +168,14 @@ export interface JobStage {
   detail: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  usage: StageUsage;
 }
 
 /** A job plus its per-stage rows, which is what the board renders. */
 export interface JobWithStages extends Job {
   stages: JobStage[];
+  /** Sum over this job's stages — derived, never stored. */
+  usage: StageUsage;
 }
 
 /** The next stage after `stage`, or null when the pipeline is complete. */

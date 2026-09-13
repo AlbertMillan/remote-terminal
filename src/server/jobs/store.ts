@@ -10,8 +10,9 @@ import type {
   ParkReason,
   StageName,
   StageStatus,
+  StageUsage,
 } from './types.js';
-import { STAGE_ORDER } from './types.js';
+import { STAGE_ORDER, sumUsage } from './types.js';
 
 /**
  * Persistence for pipeline jobs.
@@ -50,6 +51,12 @@ interface StageRow {
   detail: string | null;
   started_at: string | null;
   finished_at: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+  run_count: number;
 }
 
 function toJob(row: JobRow): Job {
@@ -83,6 +90,14 @@ function toStage(row: StageRow): JobStage {
     detail: row.detail,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    usage: {
+      inputTokens: row.input_tokens ?? 0,
+      outputTokens: row.output_tokens ?? 0,
+      cacheReadTokens: row.cache_read_tokens ?? 0,
+      cacheCreationTokens: row.cache_creation_tokens ?? 0,
+      costUsd: row.cost_usd ?? 0,
+      runCount: row.run_count ?? 0,
+    },
   };
 }
 
@@ -134,7 +149,9 @@ export function getJobStages(jobId: string): JobStage[] {
 
 export function getJobWithStages(id: string): JobWithStages | null {
   const job = getJob(id);
-  return job ? { ...job, stages: getJobStages(id) } : null;
+  if (!job) return null;
+  const stages = getJobStages(id);
+  return { ...job, stages, usage: sumUsage(stages) };
 }
 
 /**
@@ -160,7 +177,10 @@ export function listJobs(): JobWithStages[] {
     else byJob.set(row.job_id, [toStage(row)]);
   }
 
-  return rows.map((row) => ({ ...toJob(row), stages: byJob.get(row.id) ?? [] }));
+  return rows.map((row) => {
+    const stages = byJob.get(row.id) ?? [];
+    return { ...toJob(row), stages, usage: sumUsage(stages) };
+  });
 }
 
 /**
@@ -260,6 +280,48 @@ export function updateStage(jobId: string, name: StageName, patch: StagePatch): 
   getDatabase()
     .prepare(`UPDATE job_stages SET ${sets.join(', ')} WHERE job_id = ? AND name = ?`)
     .run(...values, jobId, name);
+}
+
+/**
+ * Add one completed run's usage to a stage.
+ *
+ * Adds rather than replaces: `qa` runs a pass per flow, `fix` can run more than
+ * once, and retrying a stage genuinely costs again — so every run that reported
+ * an envelope belongs in the total. `run_count` increments with it, which is
+ * what tells "no run" apart from "a run that cost nothing".
+ *
+ * Never throws: accounting must not be able to break a pipeline stage.
+ */
+export function addStageUsage(
+  jobId: string,
+  name: StageName,
+  usage: Omit<StageUsage, 'runCount'>
+): void {
+  try {
+    getDatabase()
+      .prepare(
+        `UPDATE job_stages
+            SET input_tokens = input_tokens + ?,
+                output_tokens = output_tokens + ?,
+                cache_read_tokens = cache_read_tokens + ?,
+                cache_creation_tokens = cache_creation_tokens + ?,
+                cost_usd = cost_usd + ?,
+                run_count = run_count + 1
+          WHERE job_id = ? AND name = ?`
+      )
+      .run(
+        Math.round(usage.inputTokens),
+        Math.round(usage.outputTokens),
+        Math.round(usage.cacheReadTokens),
+        Math.round(usage.cacheCreationTokens),
+        usage.costUsd,
+        jobId,
+        name
+      );
+  } catch {
+    // A job whose row has gone (cancelled and deleted mid-run) is the expected
+    // case here, and it is not worth failing the stage over.
+  }
 }
 
 /** Mark a stage running and stamp its start. */

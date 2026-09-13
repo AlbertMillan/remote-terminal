@@ -3,7 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude } from '../../agent/claude-run.js';
+import { runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { COMPANION_DIR, REVIEWS_DIR, ensureReviewsIgnored } from '../../projects/project-store.js';
 import { findingsRelPath, readFindings, summarize, type FindingsFile } from '../findings.js';
 import { diffAgainst } from '../worktree.js';
@@ -123,8 +123,9 @@ export async function runReviewStage(opts: {
   worktreePath: string;
   baseBranch: string;
   specPath: string | null;
+  onUsage?: UsageSink;
 }): Promise<ReviewResult> {
-  const { jobId, worktreePath, baseBranch, specPath } = opts;
+  const { jobId, worktreePath, baseBranch, specPath, onUsage } = opts;
 
   const fullDiff = await diffAgainst(worktreePath, baseBranch);
   if (!fullDiff.trim()) {
@@ -159,6 +160,7 @@ export async function runReviewStage(opts: {
       allowedTools: ['Read', 'Glob', 'Grep', 'Write'],
       timeoutMs: getConfig().projectLog.timeoutMs,
       failOnDenial: false,
+      onUsage,
     }
   );
 

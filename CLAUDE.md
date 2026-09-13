@@ -200,6 +200,12 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
   gate (see `tests/job-gates.test.ts`).
 - QA never reports unverified work as verified: precedence is failed > skipped > passed,
   so one trivial passing command cannot mask a driver that never ran.
+- Token/cost accounting hangs off `RunOptions.onUsage` in `agent/claude-run.ts`, which
+  fires **before** the error and denial checks — a rejected run still spent its tokens.
+  `addStageUsage()` adds rather than replaces (qa and fix run several passes per stage),
+  and totals are summed with `sumUsage()`, never stored. Read `modelUsage`, not the
+  envelope's `usage` block: on a multi-turn run `usage` reports only the final turn.
+  See `docs/token-usage-feature.md`.
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
 
 ## Keyboard Shortcuts Display

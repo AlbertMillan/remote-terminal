@@ -1,6 +1,6 @@
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude } from '../../agent/claude-run.js';
+import { runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { commitAll, diffStat } from '../worktree.js';
 import type { Finding } from '../findings.js';
 
@@ -84,8 +84,9 @@ export async function runFixStage(opts: {
   selected: Finding[];
   skipped: Finding[];
   title: string;
+  onUsage?: UsageSink;
 }): Promise<FixResult> {
-  const { jobId, worktreePath, baseBranch, selected, skipped, title } = opts;
+  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage } = opts;
 
   const prompt = buildFixPrompt({ selected, skipped });
 
@@ -94,6 +95,7 @@ export async function runFixStage(opts: {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
     timeoutMs: getConfig().projectLog.timeoutMs,
     failOnDenial: false,
+    onUsage,
   });
 
   await commitAll(worktreePath, `fix: review findings for ${title}`);

@@ -2901,6 +2901,23 @@ body {
 .jb-qa-chip.failed { color: var(--danger); background: rgba(247, 118, 142, 0.16); }
 .jb-qa-chip.skipped { color: var(--warning); background: rgba(224, 175, 104, 0.16); }
 
+/* Spend. Quiet by default — it is reference, not a warning. */
+.jb-usage {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  cursor: help;
+}
+.jb-usage.project {
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* ── Cross-project overview ──────────────────────────────────────────────── */
 
 .rv-tiles {
