@@ -1745,6 +1745,7 @@ class SessionManager {
 
     const featuresEl = document.getElementById('project-features');
     if (featuresEl) this.workspace.renderFeatures(featuresEl, cwd);
+    void this.workspace.loadQa(cwd);
     void this.jobBoard.load(cwd);
 
     const entriesEl = document.getElementById('project-log-entries');

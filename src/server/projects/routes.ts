@@ -3,6 +3,8 @@ import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject } from './workspace.js';
 import { loadRegistry, saveRegistry, normalizeRegistry } from './registry.js';
 import { migrateProject } from './migrate.js';
+import { generateQaDoc } from './qa-generate.js';
+import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readProjectDoc, readSpec } from './project-store.js';
 import {
   addFeature,
@@ -99,6 +101,29 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     const result = await migrateProject(project);
     return result;
   });
+
+  // --- QA contract -------------------------------------------------------
+  // The per-project definition of "verified". Read it, or draft one to edit.
+
+  app.get<{ Querystring: { cwd?: string } }>('/api/projects/qa', async (request, reply) => {
+    const cwd = request.query?.cwd;
+    if (!cwd) return reply.status(400).send({ error: 'cwd required' });
+    const project = findWorkspaceProject(cwd);
+    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const doc = readQaDoc(project.cwd);
+    return { path: qaDocRelPath(), doc };
+  });
+
+  app.post<{ Body?: { cwd?: string; force?: boolean } }>(
+    '/api/projects/qa/generate',
+    async (request, reply) => {
+      const cwd = request.body?.cwd;
+      if (!cwd) return reply.status(400).send({ error: 'cwd required' });
+      const project = findWorkspaceProject(cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      return generateQaDoc(project, { force: request.body?.force === true });
+    }
+  );
 
   // --- Feature mutations -------------------------------------------------
   // All three take a `revision` echoed from the board and return 409 when

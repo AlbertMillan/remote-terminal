@@ -2817,3 +2817,86 @@ body {
   .jb-findings { margin: 0 8px 12px; }
   .jb-finding-detail, .jb-finding-fix { padding-left: 0; }
 }
+
+/* QA contract card */
+
+.pw-qa {
+  margin: 4px 0 24px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+.pw-qa-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.pw-qa-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.pw-qa-driver {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+.pw-qa-driver.manual { color: var(--warning); }
+.pw-qa-none {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warning);
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(224, 175, 104, 0.14);
+}
+.pw-qa-path { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+.pw-qa-warn { font-size: 12px; color: var(--warning); margin: 0 0 8px; }
+.pw-qa-cmds { list-style: none; margin: 0; padding: 0; }
+.pw-qa-cmds li { font-size: 11px; padding: 2px 0; }
+.pw-qa-cmds code { color: var(--text-secondary); }
+.pw-qa .pw-hint { margin: 0 0 10px; }
+
+/* Unverified banner on a job */
+
+.jb-skips {
+  margin: 0 14px 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(224, 175, 104, 0.1);
+  border: 1px solid rgba(224, 175, 104, 0.28);
+}
+.jb-skips-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--warning);
+  margin-bottom: 6px;
+}
+.jb-skips ul { list-style: none; margin: 0; padding: 0; }
+.jb-skips li {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  padding: 2px 0;
+}
+.jb-skips code { color: var(--warning); font-size: 10px; }
+
+.jb-qa-chip {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+.jb-qa-chip.failed { color: var(--danger); background: rgba(247, 118, 142, 0.16); }
+.jb-qa-chip.skipped { color: var(--warning); background: rgba(224, 175, 104, 0.16); }

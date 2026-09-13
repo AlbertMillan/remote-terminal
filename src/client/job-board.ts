@@ -186,6 +186,7 @@ export class JobBoard {
         <div class="jb-head" data-toggle="${escapeAttr(job.id)}">
           <span class="jb-state ${job.status}">${this.stateLabel(job)}</span>
           <span class="jb-title">${escapeHtml(job.title)}</span>
+          ${this.qaChip(job)}
           ${job.branch ? `<code class="jb-branch">${escapeHtml(job.branch)}</code>` : ''}
           <span class="jb-chevron">${open ? '▾' : '▸'}</span>
         </div>
@@ -193,6 +194,15 @@ export class JobBoard {
         ${open ? this.renderBody(job) : ''}
         ${this.renderActions(job)}
       </div>`;
+  }
+
+  /** A short warning chip for the collapsed row when checks did not run. */
+  private qaChip(job: Job): string {
+    const qa = job.stages.find((s) => s.name === 'qa');
+    if (!qa) return '';
+    if (qa.status === 'failed') return '<span class="jb-qa-chip failed">QA failed</span>';
+    if (qa.status === 'skipped') return '<span class="jb-qa-chip skipped">QA not run</span>';
+    return '';
   }
 
   private stateLabel(job: Job): string {
@@ -241,6 +251,22 @@ export class JobBoard {
           ? `<pre class="jb-spec">${escapeHtml(spec)}</pre>`
           : '<div class="pw-hint">No spec written yet.</div>'
       );
+    }
+
+    const notRun = job.stages.filter((st) => st.status === 'skipped' && st.detail);
+    if (notRun.length > 0) {
+      // Skips must be visible before the merge gate, not buried in a tooltip:
+      // approving a merge means knowing which checks did not actually run.
+      parts.push(`
+        <div class="jb-skips">
+          <div class="jb-skips-label">Not verified</div>
+          <ul>${notRun
+            .map(
+              (st) =>
+                `<li><code>${escapeHtml(st.name)}</code> ${escapeHtml(st.detail as string)}</li>`
+            )
+            .join('')}</ul>
+        </div>`);
     }
 
     const findings = this.findings.get(job.id);

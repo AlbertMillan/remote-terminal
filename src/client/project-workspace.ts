@@ -39,6 +39,13 @@ export interface FeatureCounts {
   blocked: number;
 }
 
+export interface QaDoc {
+  driver: 'commands' | 'playwright' | 'unity' | 'manual';
+  commands: string[];
+  body: string;
+  exists: boolean;
+}
+
 export interface WorkspaceProject {
   cwd: string;
   name: string;
@@ -80,6 +87,9 @@ export class ProjectWorkspace {
   /** Projects whose migration run produced nothing, so the button offers Retry. */
   private failedMigrations = new Map<string, string>();
   private busy = new Set<string>();
+  /** QA contract per project, loaded with the detail view. */
+  private qaDocs = new Map<string, QaDoc | null>();
+  private qaBusy = new Set<string>();
 
   constructor(
     private readonly onSelect: (cwd: string) => void,
@@ -232,7 +242,106 @@ export class ProjectWorkspace {
         </div>
         ${tracks}${empty}
         ${this.renderAddRow(project)}
+        ${this.renderQaCard(project)}
       </div>`;
+  }
+
+  /**
+   * The project's QA contract. Shown even when absent, because "this project
+   * has no definition of verified" is the single most useful thing the card can
+   * tell you — a pipeline that skips QA silently is how unverified work reaches
+   * a merge gate looking finished.
+   */
+  private renderQaCard(project: WorkspaceProject): string {
+    const doc = this.qaDocs.get(project.cwd);
+    const busy = this.qaBusy.has(project.cwd);
+    const cwd = escapeAttr(project.cwd);
+
+    if (doc === undefined) return '';
+
+    if (!doc || !doc.exists) {
+      const verify = project.verify.length;
+      return `
+        <div class="pw-qa">
+          <div class="pw-qa-head">
+            <span class="pw-qa-title">QA</span>
+            <span class="pw-qa-none">no QA doc</span>
+          </div>
+          <p class="pw-hint">
+            ${
+              verify > 0
+                ? `Jobs will run the ${verify} verify command${verify === 1 ? '' : 's'} from PROJECT.md, but nothing else is checked.`
+                : 'Nothing is automatically verified for this project. Jobs will reach the merge gate with QA skipped.'
+            }
+          </p>
+          <button class="btn-secondary pw-qa-gen" data-cwd="${cwd}" ${busy ? 'disabled' : ''}>
+            ${busy ? 'Drafting…' : 'Draft QA doc'}
+          </button>
+        </div>`;
+    }
+
+    const commands = doc.commands.length
+      ? `<ul class="pw-qa-cmds">${doc.commands
+          .map((c) => `<li><code>${escapeHtml(c)}</code></li>`)
+          .join('')}</ul>`
+      : '<p class="pw-hint">No commands declared.</p>';
+
+    return `
+      <div class="pw-qa">
+        <div class="pw-qa-head">
+          <span class="pw-qa-title">QA</span>
+          <span class="pw-qa-driver ${doc.driver}">${escapeHtml(doc.driver)}</span>
+          <code class="pw-qa-path">project/QA.md</code>
+        </div>
+        ${
+          doc.driver === 'manual'
+            ? '<p class="pw-qa-warn">Declared manual — automated QA is skipped and you verify before merging.</p>'
+            : ''
+        }
+        ${commands}
+      </div>`;
+  }
+
+  /** Load a project's QA contract for the detail view. */
+  async loadQa(cwd: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/projects/qa?cwd=${encodeURIComponent(cwd)}`);
+      const data = (await res.json()) as { doc: QaDoc | null };
+      this.qaDocs.set(cwd, data.doc);
+    } catch {
+      this.qaDocs.set(cwd, null);
+    }
+    this.refreshDetail(cwd);
+  }
+
+  /** Draft a QA doc for the user to edit and approve. */
+  async generateQa(cwd: string): Promise<void> {
+    if (this.qaBusy.has(cwd)) return;
+    this.qaBusy.add(cwd);
+    this.refreshDetail(cwd);
+    try {
+      const res = await fetch('/api/projects/qa/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd }),
+      });
+      const data = (await res.json()) as {
+        outcome?: string;
+        detail?: string | null;
+        doc?: QaDoc | null;
+      };
+      if (data.outcome === 'error') {
+        this.flash(data.detail || 'Could not draft a QA doc.');
+      } else {
+        if (data.detail) this.flash(data.detail);
+        this.qaDocs.set(cwd, data.doc ?? null);
+      }
+    } catch (error) {
+      this.flash(error instanceof Error ? error.message : 'Could not draft a QA doc.');
+    } finally {
+      this.qaBusy.delete(cwd);
+      this.refreshDetail(cwd);
+    }
   }
 
   private renderProgress(project: WorkspaceProject): string {
@@ -506,6 +615,12 @@ export class ProjectWorkspace {
           dispatch.dataset.id || '',
           dispatch.dataset.title || ''
         );
+        return;
+      }
+
+      const qaGen = target.closest('.pw-qa-gen') as HTMLElement | null;
+      if (qaGen) {
+        void this.generateQa(qaGen.dataset.cwd || '');
         return;
       }
 

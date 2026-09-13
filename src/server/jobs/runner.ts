@@ -25,6 +25,8 @@ import { runIntegrateStage } from './stages/integrate.js';
 import { runMergeStage } from './stages/merge.js';
 import { runReviewStage } from './stages/review.js';
 import { runFixStage } from './stages/fix.js';
+import { runQaStage } from './stages/qa.js';
+import { isProcessRunning } from '../utils/platform.js';
 import { readFindings, selectedFindings } from './findings.js';
 import {
   GATE_AFTER,
@@ -133,11 +135,13 @@ async function runNextStage(jobId: string): Promise<void> {
   // parked, so nextStage() still resolves to the gated stage on approval.
   const gateBefore = GATE_BEFORE[stage];
   if (gateBefore && job.approvedGate !== gateBefore) {
+    // `detail` is deliberately NOT cleared: the previous stage may have left a
+    // warning here ("QA incomplete: the Unity Editor was not running"), and the
+    // merge gate is precisely where that needs to be read.
     updateJob(jobId, {
       status: 'parked',
       gate: gateBefore,
       parkReason: 'gate',
-      detail: null,
     });
     logger.info({ jobId, gate: gateBefore }, 'job: parked before a gated stage');
     return;
@@ -163,6 +167,9 @@ async function runNextStage(jobId: string): Promise<void> {
         break;
       case 'fix':
         await executeFix(job);
+        break;
+      case 'qa':
+        await executeQa(job);
         break;
       case 'merge':
         await executeMerge(job);
@@ -420,6 +427,45 @@ async function executeFix(job: Job): Promise<void> {
   // "something did not happen" rather than "everything was fine".
   finishStage(job.id, 'fix', result.unresolved.length > 0 ? 'skipped' : 'passed', detail);
   updateJob(job.id, { status: 'queued', stage: 'fix', detail: null });
+  void pump();
+}
+
+/**
+ * QA stage: run the project's declared checks.
+ *
+ * A QA failure does not fail the JOB. The merge gate is the next stop and the
+ * user decides there — so the right behaviour is to carry the red result
+ * forward where they will see it, not to bury the work in a failed job. What
+ * must never happen is the opposite: an unrun check reported as a pass.
+ */
+async function executeQa(job: Job): Promise<void> {
+  const worktreePath = requireWorktree(job);
+  const result = await runQaStage({ jobId: job.id, worktreePath, isProcessRunning });
+
+  if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
+
+  const skipped = result.checks.filter((c) => c.status === 'skipped');
+  const failed = result.checks.filter((c) => c.status === 'failed');
+
+  // Put the reason on the stage row itself, so the board can explain a skip
+  // rather than just showing a dash.
+  const detailParts = [result.summary];
+  for (const check of [...failed, ...skipped]) {
+    if (check.detail) detailParts.push(`${check.name}: ${check.detail.split('\n')[0]}`);
+  }
+
+  finishStage(job.id, 'qa', result.outcome, detailParts.join(' | ').slice(0, 500));
+  updateJob(job.id, {
+    status: 'queued',
+    stage: 'qa',
+    // Surfaced at the merge gate, which is where it matters.
+    detail:
+      failed.length > 0
+        ? `QA failed: ${result.summary}`
+        : skipped.length > 0
+          ? `QA incomplete: ${skipped.map((c) => c.detail).filter(Boolean).join(' ')}`
+          : null,
+  });
   void pump();
 }
 
