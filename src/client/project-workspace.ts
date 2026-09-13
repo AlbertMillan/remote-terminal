@@ -83,7 +83,9 @@ export class ProjectWorkspace {
 
   constructor(
     private readonly onSelect: (cwd: string) => void,
-    private readonly onOpenSession: (cwd: string) => void
+    private readonly onOpenSession: (cwd: string) => void,
+    /** Send a feature to the job pipeline. */
+    private readonly onDispatch: (cwd: string, featureId: string, title: string) => void
   ) {}
 
   getProject(cwd: string): WorkspaceProject | undefined {
@@ -299,6 +301,15 @@ export class ProjectWorkspace {
             ? `<span class="pw-spec" title="${escapeAttr(f.spec)}">spec</span>`
             : ''
         }
+        ${
+          project.vcs.canDispatch
+            ? `<button class="pw-dispatch" data-cwd="${cwd}" data-id="${id}"
+                       data-title="${escapeAttr(f.title)}"
+                       title="Dispatch this feature to the pipeline">▸</button>`
+            : `<span class="pw-dispatch disabled" title="${escapeAttr(
+                project.vcs.note || 'Dispatch unavailable'
+              )}">▸</span>`
+        }
         <button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
                 title="Remove this feature" aria-label="Remove">×</button>
       </li>`;
@@ -485,6 +496,16 @@ export class ProjectWorkspace {
         if (confirm(`Remove "${title}" from PROJECT.md?`)) {
           void this.deleteFeature(del.dataset.cwd || '', del.dataset.id || '');
         }
+        return;
+      }
+
+      const dispatch = target.closest('.pw-dispatch') as HTMLElement | null;
+      if (dispatch && dispatch.tagName === 'BUTTON') {
+        this.onDispatch(
+          dispatch.dataset.cwd || '',
+          dispatch.dataset.id || '',
+          dispatch.dataset.title || ''
+        );
         return;
       }
 

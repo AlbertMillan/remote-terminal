@@ -4,6 +4,7 @@ import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { discoverProjects, pathKey } from '../sessions/project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
+import { worktreeRoot } from '../jobs/worktree.js';
 import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } from './registry.js';
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
@@ -54,6 +55,22 @@ export interface WorkspaceProject {
   lastModified: string | null;
   transcriptCount: number;
 }
+
+/**
+ * Job worktrees are not projects.
+ *
+ * Pipeline stages run `claude -p` with the worktree as cwd, which makes Claude
+ * Code create a transcript directory for it — so without this filter every job
+ * would add a bogus project named after its own id to the board.
+ */
+function isJobWorktree(path: string): boolean {
+  const root = pathKey(worktreeRoot());
+  const key = pathKey(path);
+  return key === root || key.startsWith(root + SEP);
+}
+
+/** The separator pathKey() normalizes every path to. */
+const SEP = '\\';
 
 /** Dedupe paths case/separator-insensitively, keeping the first spelling seen. */
 function dedupeByKey(paths: string[]): string[] {
@@ -141,7 +158,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
     ...discovered.map((p) => p.cwd),
     ...registry.projects.map((p) => p.cwd),
     ...recoverCwdsFromSlugs(),
-  ]);
+  ]).filter((cwd) => !isJobWorktree(cwd));
 
   const rolled = rollUpProjects(cwds, registry);
   const board: WorkspaceProject[] = [];

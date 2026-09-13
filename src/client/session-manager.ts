@@ -3,6 +3,7 @@ import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager } from './pip-manager.js';
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { ProjectWorkspace } from './project-workspace.js';
+import { JobBoard } from './job-board.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 
 // Configuration constants
@@ -246,7 +247,16 @@ class SessionManager {
    */
   private workspace = new ProjectWorkspace(
     (cwd) => this.showProjectLog(cwd),
-    (cwd) => this.showNewSessionModal(cwd)
+    (cwd) => this.showNewSessionModal(cwd),
+    (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title)
+  );
+  /**
+   * The pipeline board. "Take over" resumes a background run's own conversation
+   * in a real terminal, inside its worktree — reusing the same resume path the
+   * session-history buttons use.
+   */
+  private jobBoard = new JobBoard((claudeSessionId, cwd) =>
+    this.openHistorySession(claudeSessionId, cwd, 'resume')
   );
   private selectedProjectCwd: string | null = null;
   // Entry targeted by the open delete-history-entry modal.
@@ -354,6 +364,8 @@ class SessionManager {
     // Feature board interactions (delegated inside the workspace client).
     const featuresContainer = document.getElementById('project-features');
     if (featuresContainer) this.workspace.attach(featuresContainer);
+    const jobsContainer = document.getElementById('project-jobs');
+    if (jobsContainer) this.jobBoard.attach(jobsContainer);
 
     // Phases table interactions (event delegation): copy session ids + collapse groups
     const phasesContainer = document.getElementById('project-log-entries');
@@ -1590,6 +1602,7 @@ class SessionManager {
 
   private showTerminal(session: SessionInfo): void {
     this.selectedProjectCwd = null;
+    this.jobBoard.stopPolling();
     document.getElementById('project-log-view')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
     document.getElementById('terminal-container')?.classList.remove('hidden');
@@ -1732,6 +1745,7 @@ class SessionManager {
 
     const featuresEl = document.getElementById('project-features');
     if (featuresEl) this.workspace.renderFeatures(featuresEl, cwd);
+    void this.jobBoard.load(cwd);
 
     const entriesEl = document.getElementById('project-log-entries');
     if (entriesEl) {

@@ -2537,3 +2537,169 @@ body {
   .pw-progress-bar { width: 72px; }
   .pw-delete { opacity: 1; }
 }
+
+/* ── Job pipeline board ──────────────────────────────────────────────────── */
+
+.pw-dispatch {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.pw-feature:hover .pw-dispatch { opacity: 1; }
+.pw-dispatch:hover { background: var(--bg-tertiary); border-color: var(--accent); }
+.pw-dispatch:focus-visible { opacity: 1; outline: 1px solid var(--accent); }
+.pw-dispatch.disabled { color: var(--text-muted); cursor: help; border-style: dashed; }
+
+.jb-section { padding: 0 24px 24px; }
+
+.jb-job {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.jb-job.failed { border-color: var(--danger); }
+.jb-job.parked { border-color: var(--warning); }
+.jb-job.done { opacity: 0.72; }
+.jb-job.cancelled { opacity: 0.55; }
+
+.jb-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.jb-head:hover { background: var(--bg-tertiary); }
+
+.jb-state {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.jb-state.running { color: var(--accent); }
+.jb-state.parked { color: var(--warning); }
+.jb-state.failed { color: var(--danger); }
+.jb-state.done { color: var(--success); }
+
+.jb-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jb-branch {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.jb-chevron { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; }
+
+.jb-pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 14px 10px;
+}
+.jb-stage {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: help;
+  white-space: nowrap;
+}
+.jb-stage.running { color: var(--accent); }
+.jb-stage.passed { color: var(--success); }
+.jb-stage.failed { color: var(--danger); }
+.jb-stage.skipped { color: var(--warning); }
+
+.jb-detail {
+  padding: 0 14px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.jb-question {
+  margin: 0 14px 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: rgba(224, 175, 104, 0.1);
+  border: 1px solid rgba(224, 175, 104, 0.28);
+}
+.jb-question-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--warning);
+  margin-bottom: 6px;
+}
+.jb-question-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+.jb-answer { display: flex; gap: 8px; flex-wrap: wrap; }
+.jb-answer-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+.jb-answer-input:focus { outline: none; border-color: var(--accent); }
+
+.jb-spec {
+  margin: 0 14px 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.jb-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 14px 12px;
+}
+
+@media (max-width: 640px) {
+  .jb-section { padding: 0 14px 20px; }
+  .pw-dispatch { opacity: 1; }
+  .jb-branch { display: none; }
+}

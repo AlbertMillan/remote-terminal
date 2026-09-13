@@ -128,9 +128,14 @@ export async function runDesignStage(opts: {
   const prompt = buildDesignPrompt({ job, specPath: specRel, existingSpec, answer });
 
   logger.info({ jobId: job.id, specRel }, 'design: running');
+  // Deliberately no Bash: a design pass reads code, it does not execute it. The
+  // model will reach for a shell anyway and be refused, which is fine — the
+  // stage's contract is "a spec exists", verified below, so denials are not
+  // treated as failure.
   const result = await runClaude(worktreePath, prompt, [`${COMPANION_DIR}/**`], {
     allowedTools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
     timeoutMs: getConfig().projectLog.timeoutMs,
+    failOnDenial: false,
   });
 
   if (!existsSync(specAbs)) {

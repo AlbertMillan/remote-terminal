@@ -130,6 +130,20 @@ export interface SpawnOptions {
   timeoutMs?: number;
 }
 
+export interface RunOptions extends SpawnOptions {
+  /**
+   * Treat any denied tool call as a hard failure. Default true.
+   *
+   * For the session-log generator a denial signals an attempted out-of-scope
+   * WRITE, which is exactly the thing worth aborting over. For a read-only
+   * pipeline stage it usually means the model reached for a shell command that
+   * simply isn't in its allowlist, was refused, and carried on — the sandbox
+   * working as designed. Stages that verify their own output contract set this
+   * false and rely on the scope-revert below for file safety.
+   */
+  failOnDenial?: boolean;
+}
+
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
 
 /**
@@ -270,15 +284,24 @@ export async function runClaude(
   cwd: string,
   prompt: string,
   allowedGlobs: string[],
-  options: SpawnOptions = {}
+  options: RunOptions = {}
 ): Promise<ClaudeRunResult> {
+  const failOnDenial = options.failOnDenial !== false;
   return runQueued(async () => {
     const preEntries = await gitStatusEntries(cwd);
     const result = await spawnClaude(cwd, prompt, options);
-    if (result.isError || result.permissionDenials > 0) {
+    if (result.isError || (failOnDenial && result.permissionDenials > 0)) {
       throw new Error(
         `claude run rejected (isError=${result.isError}, permissionDenials=${result.permissionDenials})` +
           (result.result ? `: ${result.result.slice(0, 200)}` : '')
+      );
+    }
+    if (result.permissionDenials > 0) {
+      // Still worth surfacing: a run repeatedly reaching for a tool it lacks may
+      // mean the stage's allowlist is wrong, even when the output was fine.
+      logger.warn(
+        { cwd, denials: result.permissionDenials },
+        'claude-run: tool calls were denied by the allowlist'
       );
     }
     const reverted = await revertOutOfScope(cwd, preEntries, allowedGlobs);
