@@ -4,6 +4,7 @@ import { PipManager } from './pip-manager.js';
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
+import { RollupView } from './rollup-view.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 
 // Configuration constants
@@ -258,6 +259,8 @@ class SessionManager {
   private jobBoard = new JobBoard((claudeSessionId, cwd) =>
     this.openHistorySession(claudeSessionId, cwd, 'resume')
   );
+  /** Cross-project overview; clicking a row opens that project. */
+  private rollup = new RollupView((cwd) => this.showProjectLog(cwd));
   private selectedProjectCwd: string | null = null;
   // Entry targeted by the open delete-history-entry modal.
   private pendingHistoryDelete: {
@@ -359,6 +362,10 @@ class SessionManager {
     document.getElementById('tab-sessions')?.addEventListener('click', () => this.switchTab('sessions'));
     document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
+    document.getElementById('overview-btn')?.addEventListener('click', () => void this.rollup.show());
+    document.getElementById('rollup-refresh-btn')?.addEventListener('click', () => void this.rollup.load());
+    const rollupBody = document.getElementById('rollup-body');
+    if (rollupBody) this.rollup.attach(rollupBody);
     document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
     document.getElementById('project-log-resync-btn')?.addEventListener('click', () => this.resyncSelectedProject());
     // Feature board interactions (delegated inside the workspace client).
@@ -1656,6 +1663,8 @@ class SessionManager {
     document.getElementById('project-list')?.classList.toggle('hidden', !onProjects);
     document.getElementById('new-session-btn')?.classList.toggle('hidden', onProjects);
     document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
+    document.getElementById('overview-btn')?.classList.toggle('hidden', !onProjects);
+    if (!onProjects) this.rollup.hide();
 
     if (onProjects) this.loadProjectBoard();
   }
@@ -1729,6 +1738,7 @@ class SessionManager {
     document.getElementById('terminal-container')?.classList.add('hidden');
     document.getElementById('terminal-header')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
+    this.rollup.hide();
     document.getElementById('project-log-view')?.classList.remove('hidden');
 
     const titleEl = document.getElementById('project-log-title');

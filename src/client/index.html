@@ -57,6 +57,14 @@
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
           </button>
+          <button id="overview-btn" class="btn-icon hidden" title="Cross-project overview">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+          </button>
           <button id="refresh-projects-btn" class="btn-icon hidden" title="Refresh projects">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="23 4 23 10 17 10"></polyline>
@@ -193,6 +201,20 @@
         <div id="project-log-entries" class="project-log-entries">
           <!-- Parsed SESSION-LOG.md entries render here -->
         </div>
+      </div>
+
+      <!-- Cross-project overview -->
+      <div id="rollup-view" class="project-log-view hidden">
+        <div class="project-log-header">
+          <div class="project-log-titles">
+            <h2>Overview</h2>
+            <span class="project-log-path">every project, and what is waiting on you</span>
+          </div>
+          <div class="project-log-actions">
+            <button id="rollup-refresh-btn" class="btn-secondary">Refresh</button>
+          </div>
+        </div>
+        <div id="rollup-body" class="project-log-entries"></div>
       </div>
 
       <!-- Mobile Navigation Overlay -->

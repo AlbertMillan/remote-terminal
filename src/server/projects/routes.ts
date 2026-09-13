@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject } from './workspace.js';
+import { getRollup } from './rollup.js';
 import { loadRegistry, saveRegistry, normalizeRegistry } from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
@@ -42,6 +43,11 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   // --- Board -------------------------------------------------------------
   app.get('/api/projects', async () => {
     return { projects: getWorkspaceBoard() };
+  });
+
+  // Cross-project roll-up: what is in flight and what is waiting on you.
+  app.get('/api/projects/rollup', async () => {
+    return getRollup();
   });
 
   // One project's full detail, including the resolved spec of a named feature.

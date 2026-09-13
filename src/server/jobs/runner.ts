@@ -26,6 +26,7 @@ import { runMergeStage } from './stages/merge.js';
 import { runReviewStage } from './stages/review.js';
 import { runFixStage } from './stages/fix.js';
 import { runQaStage } from './stages/qa.js';
+import { runRebuildStage } from './stages/rebuild.js';
 import { isProcessRunning } from '../utils/platform.js';
 import { readFindings, selectedFindings } from './findings.js';
 import {
@@ -173,6 +174,9 @@ async function runNextStage(jobId: string): Promise<void> {
         break;
       case 'merge':
         await executeMerge(job);
+        break;
+      case 'rebuild':
+        await executeRebuild(job);
         break;
       default:
         // Stages that land in later commits are skipped rather than parked on,
@@ -497,6 +501,33 @@ async function executeMerge(job: Job): Promise<void> {
     gate: null,
     detail: result.detail,
   });
+  void pump();
+}
+
+/**
+ * Rebuild stage: tick the feature off in PROJECT.md now the work has landed.
+ *
+ * Runs after the merge, so it writes to the project directory rather than the
+ * worktree — which no longer exists by this point.
+ */
+async function executeRebuild(job: Job): Promise<void> {
+  const project = findWorkspaceProject(job.projectCwd);
+  if (!project) {
+    finishStage(job.id, 'rebuild', 'skipped', 'project is no longer on the board');
+    updateJob(job.id, { status: 'queued', stage: 'rebuild' });
+    void pump();
+    return;
+  }
+
+  const result = await runRebuildStage({
+    project,
+    featureId: job.featureId,
+    specPath: specPathOf(job.id),
+    title: job.title,
+  });
+
+  finishStage(job.id, 'rebuild', result.updated ? 'passed' : 'skipped', result.detail);
+  updateJob(job.id, { status: 'queued', stage: 'rebuild' });
   void pump();
 }
 
