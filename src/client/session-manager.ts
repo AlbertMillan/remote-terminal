@@ -2,6 +2,7 @@
 import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager } from './pip-manager.js';
 import { escapeHtml, escapeAttr } from './html-utils.js';
+import { ProjectWorkspace } from './project-workspace.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 
 // Configuration constants
@@ -238,6 +239,15 @@ class SessionManager {
   // Project-log board state
   private activeTab: 'sessions' | 'projects' = 'sessions';
   private projectBoard: ProjectBoardItem[] = [];
+  /**
+   * The canonical PROJECT.md board. Owns the sidebar list and the feature
+   * editor; this class keeps the session-history half of the detail view,
+   * which still reads SESSION-LOG.md.
+   */
+  private workspace = new ProjectWorkspace(
+    (cwd) => this.showProjectLog(cwd),
+    (cwd) => this.showNewSessionModal(cwd)
+  );
   private selectedProjectCwd: string | null = null;
   // Entry targeted by the open delete-history-entry modal.
   private pendingHistoryDelete: {
@@ -341,10 +351,19 @@ class SessionManager {
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
     document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
     document.getElementById('project-log-resync-btn')?.addEventListener('click', () => this.resyncSelectedProject());
+    // Feature board interactions (delegated inside the workspace client).
+    const featuresContainer = document.getElementById('project-features');
+    if (featuresContainer) this.workspace.attach(featuresContainer);
+
     // Phases table interactions (event delegation): copy session ids + collapse groups
     const phasesContainer = document.getElementById('project-log-entries');
     phasesContainer?.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+      const backfillBtn = target.closest('[data-backfill-cwd]') as HTMLButtonElement | null;
+      if (backfillBtn) {
+        void this.backfillProject(backfillBtn.getAttribute('data-backfill-cwd') || '', backfillBtn);
+        return;
+      }
       const openBtn = target.closest('[data-open-session]') as HTMLElement | null;
       if (openBtn) {
         const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
@@ -1628,91 +1647,31 @@ class SessionManager {
     if (onProjects) this.loadProjectBoard();
   }
 
+  /** Load both halves of the board: the PROJECT.md workspace and the session logs. */
   private async loadProjectBoard(): Promise<void> {
-    const listEl = document.getElementById('project-list');
+    await Promise.all([this.workspace.loadBoard(), this.loadProjectLogData()]);
+  }
+
+  /**
+   * Session-log data for the detail view's history section. Unlike the
+   * workspace board this is best-effort: SESSION-LOG.md is a changelog, not a
+   * status source, so a failure here must not blank the projects list.
+   */
+  private async loadProjectLogData(): Promise<void> {
     try {
       const res = await fetch('/api/project-logs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { projects: ProjectBoardItem[] };
       this.projectBoard = data.projects || [];
-      this.renderProjectList();
-    } catch (err) {
-      if (listEl) {
-        listEl.innerHTML = `<li class="project-empty">Couldn't load projects: ${escapeHtml(
-          err instanceof Error ? err.message : String(err)
-        )}</li>`;
-      }
+    } catch {
+      this.projectBoard = [];
     }
   }
 
+  /** The sidebar list belongs to the workspace board now; keep the selection in sync. */
   private renderProjectList(): void {
-    const listEl = document.getElementById('project-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-
-    if (this.projectBoard.length === 0) {
-      listEl.innerHTML = '<li class="project-empty">No projects found.</li>';
-      return;
-    }
-
-    for (const project of this.projectBoard) {
-      const li = document.createElement('li');
-      li.className = 'project-item';
-      if (this.selectedProjectCwd && this.selectedProjectCwd === project.cwd) {
-        li.classList.add('active');
-      }
-
-      const dot = document.createElement('span');
-      dot.className = `project-status-dot ${this.projectStatusClass(project)}`;
-
-      const body = document.createElement('div');
-      body.className = 'project-item-body';
-      const metaBits: string[] = [];
-      if (project.lastActivity) metaBits.push(this.relativeTime(project.lastActivity));
-      if (project.latest?.branch) metaBits.push(project.latest.branch);
-      if (!project.hasLog) metaBits.push('no log');
-      body.innerHTML = `
-        <div class="project-item-name">${escapeHtml(project.name)}</div>
-        <div class="project-item-meta">${escapeHtml(metaBits.join(' · '))}</div>
-      `;
-
-      li.appendChild(dot);
-      li.appendChild(body);
-
-      if (project.hasLog) {
-        const badges = document.createElement('div');
-        badges.className = 'project-badges';
-        const blockers = project.latest?.blockers ?? 0;
-        const open = project.latest?.openItems ?? 0;
-        if (blockers > 0) badges.innerHTML += `<span class="project-badge blockers" title="Blockers">⚠ ${blockers}</span>`;
-        if (open > 0) badges.innerHTML += `<span class="project-badge open" title="Open items">◷ ${open}</span>`;
-        li.appendChild(badges);
-        li.addEventListener('click', () => this.showProjectLog(project.cwd));
-      } else {
-        const gen = document.createElement('button');
-        gen.className = 'project-generate-btn';
-        const failed = this.failedBackfills.has(project.cwd);
-        gen.textContent = failed ? 'Retry' : 'Generate';
-        if (failed) gen.title = 'Generation finished without writing a log — try again';
-        gen.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.backfillProject(project.cwd, gen);
-        });
-        li.appendChild(gen);
-      }
-
-      listEl.appendChild(li);
-    }
-  }
-
-  /** Staleness bucket for the status dot, based on last activity. */
-  private projectStatusClass(project: ProjectBoardItem): string {
-    if (!project.hasLog) return 'nolog';
-    if (!project.lastActivity) return 'stale';
-    const days = (Date.now() - new Date(project.lastActivity).getTime()) / 86400000;
-    if (days < 2) return 'fresh';
-    if (days < 14) return 'recent';
-    return 'stale';
+    this.workspace.setSelected(this.selectedProjectCwd);
+    this.workspace.renderList();
   }
 
   private relativeTime(iso: string): string {
@@ -1731,12 +1690,24 @@ class SessionManager {
     return `${Math.floor(months / 12)}y ago`;
   }
 
+  /**
+   * Open a project in the main area. The top half is the canonical PROJECT.md
+   * feature board (owned by the workspace client); the bottom half is the
+   * SESSION-LOG.md history, which remains a changelog view rather than a
+   * status source.
+   *
+   * A project only needs to exist on the workspace board to be shown — it may
+   * well have no session log at all, which is the common case now that the
+   * board lists every project on disk rather than only those with transcripts.
+   */
   private showProjectLog(cwd: string): void {
-    const project = this.projectBoard.find((p) => p.cwd === cwd);
-    if (!project) return;
+    const wsProject = this.workspace.getProject(cwd);
+    if (!wsProject) return;
+    const logProject = this.projectBoard.find((p) => p.cwd === cwd);
     this.selectedProjectCwd = cwd;
+    this.workspace.setSelected(cwd);
 
-    // Detach any live session view so the log takes over the main area.
+    // Detach any live session view so the project takes over the main area.
     if (this.currentSessionId) {
       this.send('session.detach', { sessionId: this.currentSessionId });
       this.terminalMgr?.dispose();
@@ -1748,23 +1719,49 @@ class SessionManager {
     document.getElementById('project-log-view')?.classList.remove('hidden');
 
     const titleEl = document.getElementById('project-log-title');
-    if (titleEl) titleEl.textContent = project.name;
+    if (titleEl) titleEl.textContent = wsProject.name;
     const pathEl = document.getElementById('project-log-path');
-    if (pathEl) pathEl.textContent = project.cwd;
+    if (pathEl) pathEl.textContent = wsProject.cwd;
+    const badgesEl = document.getElementById('project-badges-row');
+    if (badgesEl) badgesEl.innerHTML = this.workspace.renderHeaderBadges(wsProject);
+    document.getElementById('project-flash')?.classList.add('hidden');
+
+    // Re-sync only makes sense against an existing session log.
+    const resyncBtn = document.getElementById('project-log-resync-btn');
+    resyncBtn?.classList.toggle('hidden', !logProject?.hasLog);
+
+    const featuresEl = document.getElementById('project-features');
+    if (featuresEl) this.workspace.renderFeatures(featuresEl, cwd);
 
     const entriesEl = document.getElementById('project-log-entries');
     if (entriesEl) {
-      const phasesHtml = this.renderPhaseGroups(project.phaseGroups);
-      const entriesHtml =
-        project.entries.length === 0
-          ? '<div class="project-empty">No entries yet.</div>'
-          : `<h3 class="project-log-subhead">Session history</h3>` +
-            project.entries
-              .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
-              .join('');
-      entriesEl.innerHTML = phasesHtml + entriesHtml;
+      entriesEl.innerHTML = logProject
+        ? this.renderPhaseGroups(logProject.phaseGroups) + this.renderHistorySection(logProject)
+        : '';
     }
     this.renderProjectList(); // refresh active highlight
+  }
+
+  /** The SESSION-LOG.md history section of the detail view. */
+  private renderHistorySection(project: ProjectBoardItem): string {
+    if (!project.hasLog) {
+      return `<div class="project-history-empty">
+          <h3 class="project-log-subhead">Session history</h3>
+          <p class="pw-hint">No session log for this project yet.</p>
+          <button class="btn-secondary project-generate-btn" data-backfill-cwd="${escapeAttr(
+            project.cwd
+          )}">Generate session log</button>
+        </div>`;
+    }
+    if (project.entries.length === 0) {
+      return '<h3 class="project-log-subhead">Session history</h3><div class="project-empty">No entries yet.</div>';
+    }
+    return (
+      '<h3 class="project-log-subhead">Session history</h3>' +
+      project.entries
+        .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
+        .join('')
+    );
   }
 
   private togglePhaseGroup(head: HTMLElement): void {
