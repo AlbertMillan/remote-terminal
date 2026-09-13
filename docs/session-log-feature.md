@@ -51,7 +51,11 @@ top of the file (§11). Everything else is human-readable prose.
 ```
 
 - Newest entry on top.
-- `claudeSessionId` in the marker is the idempotency key (prevents duplicates).
+- **One entry per conversation.** `claudeSessionId` in the marker is the idempotency
+  key, and it is now enforced: when a conversation that already has an entry is
+  logged again, the generator is handed that entry and told to rewrite it in place
+  rather than append a second. A conversation resumed over five days is one entry
+  that grows, not five that repeat.
 - If the file doesn't exist, the generator creates it with a short header.
 
 ---
@@ -78,7 +82,9 @@ any session that:
 - is **not** a fork,
 - has a `claudeSessionId`,
 - has no `logged_at` stamp,
-- and has no live PTY (true for all sessions after a restart)
+- and is **not `idle`** — a graceful shutdown deliberately parks live sessions as
+  idle so they resume on the next boot, and sweeping those logged still-running
+  sessions as if they had ended, once per machine start.
 
 …is run through the skip-gate + generator. This retroactively logs sessions that
 ended because the machine shut down or the server crashed.
@@ -94,23 +100,35 @@ No double-logging across clean-close, crash, and shutdown.
 
 ## 4. Skip-gate (avoid noise)
 
-The gate is driven by **evidence of actual change**, not conversation length, so
-Q&A / exploration sessions are ignored. Before spawning a (relatively expensive)
-`claude -p` run, `maybeLogSession` evaluates, in order:
+The gate is driven by **evidence of actual change during this session**, not by
+conversation length, so Q&A / exploration sessions are ignored. It is also the
+*only* relevance filter — nothing downstream can decline to write an entry — so
+every signal it uses must be bounded to the session's own window:
 
-1. **Did the session edit files?** Scan the transcript JSONL for any `Edit` /
-   `Write` / `MultiEdit` / `NotebookEdit` tool calls — the strongest "real work"
-   signal. (Creating/updating a plan or design `.md` counts here, by design.)
-2. **Did anything land in git?** `git status --porcelain` (uncommitted *and*
-   untracked/new files) plus `git log` since the session's `createdAt` (commits
-   made during the session).
-3. **Turn-count floor** (`minTurnsToLog`) — secondary tiebreaker only.
+1. **Did the session edit files?** Scan only the slice of the transcript written
+   at or after `createdAt` for `Edit` / `Write` / `MultiEdit` / `NotebookEdit`
+   tool calls. A transcript belongs to the *conversation*, so a resumed one
+   carries every edit it ever made; scanning the whole file made every resume
+   look like it had done work.
+2. **Did anything land in git during the session?** `git log --since=createdAt`
+   for commits, plus any currently-dirty file whose **mtime is at or after**
+   `createdAt`. The mtime check is what makes the dirty tree session-scoped, and
+   it also catches edits made through Bash rather than the Edit tool.
+3. **Turn-count floor** (`minTurnsToLog`) — non-git projects only, where signal
+   (2) is unavailable.
 
 Decision:
 
-- **Any of (1) or (2) positive → generate an entry.**
+- **Any of (1) or (2) positive → generate (or amend) an entry.**
 - **None positive → skip** (a pure question/exploration session). Still stamp
   `logged_at` so the startup sweep won't retry it.
+
+> **Why not a bare `git status --porcelain`?** It answers "is the tree dirty",
+> which says nothing about *when*. Work left uncommitted last week keeps it true
+> forever, so the gate passed on every close regardless of what the session did —
+> and since nothing downstream can decline, the generator dutifully wrote
+> "nothing changed this session" each time. That is what produced five
+> consecutive near-identical entries for one conversation.
 
 Notes:
 

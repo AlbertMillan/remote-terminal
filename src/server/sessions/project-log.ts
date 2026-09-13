@@ -1,11 +1,20 @@
-import { existsSync, statSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { stampSessionLogged } from '../db/queries.js';
-import { tryGetTranscriptPath, readTranscript, transcriptHasEdits, countUserTurns } from './transcript.js';
-import { buildEntrySkeleton } from './session-log-format.js';
+import {
+  tryGetTranscriptPath,
+  readTranscript,
+  transcriptHasEditsSince,
+  countUserTurnsSince,
+} from './transcript.js';
+import {
+  buildEntrySkeleton,
+  entryBodyOnly,
+  findEntryForSession,
+} from './session-log-format.js';
 import { git, isGitRepo, runClaude } from '../agent/claude-run.js';
 
 const logger = createLogger('project-log');
@@ -36,6 +45,35 @@ function fileMtimeMs(path: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Did any currently-dirty file change during this session?
+ *
+ * `git status --porcelain` answers "is the tree dirty", which says nothing
+ * about WHEN it became dirty — work left uncommitted last week keeps it true
+ * forever. Checking each dirty file's mtime against the session start turns it
+ * into a session-scoped signal, and it catches edits the transcript scan
+ * misses (anything done through Bash rather than the Edit tool).
+ */
+export function anyDirtyFileTouchedSince(cwd: string, porcelain: string, sinceIso: string): boolean {
+  const cutoff = Date.parse(sinceIso);
+  if (Number.isNaN(cutoff)) return false;
+
+  for (const line of porcelain.split('\n')) {
+    if (!line.trim()) continue;
+    let rel = line.slice(3).trim();
+    const arrow = rel.indexOf(' -> '); // rename: the new path is the live one
+    if (arrow !== -1) rel = rel.slice(arrow + 4);
+    if (rel.startsWith('"') && rel.endsWith('"')) rel = rel.slice(1, -1);
+    if (!rel) continue;
+
+    // A deleted file has no mtime to read; git already told us it changed, but
+    // not when, so it cannot count as evidence for this session.
+    const mtime = fileMtimeMs(join(cwd, rel));
+    if (mtime > 0 && mtime >= cutoff) return true;
+  }
+  return false;
 }
 
 export interface SessionLogContext {
@@ -105,8 +143,10 @@ function buildPrompt(opts: {
   transcriptLarge: boolean;
   editPlanFiles: boolean;
   planGlobs: string[];
+  /** The entry this conversation already has, when it is being resumed. */
+  existingEntry: string | null;
 }): string {
-  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, transcriptLarge, editPlanFiles, planGlobs } = opts;
+  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, transcriptLarge, editPlanFiles, planGlobs, existingEntry } = opts;
 
   // A very large transcript can exhaust the run before it writes the file, so
   // tell the model to skip it and lean on the git diff instead.
@@ -131,7 +171,24 @@ function buildPrompt(opts: {
     },
   });
 
-  return `You are writing a single changelog entry for a development session that just ended.
+  // A conversation gets ONE entry, amended as it continues. Resuming used to
+  // append a second entry that mostly repeated the first; five consecutive
+  // "nothing changed" entries for one conversation is what that produced.
+  const writeInstruction = existingEntry
+    ? `3. This conversation ALREADY has an entry in ${fileName}, shown below. UPDATE THAT ENTRY IN
+   PLACE — do not add a second one, and do not move it. Keep its position in the file.
+   Set the marker's "date" to ${nowIso}. Fold this session's work into the existing text so the
+   entry describes the conversation as a whole: extend "Done" with what is genuinely new, and
+   refresh "Plan progress", "Open / next" and "Blockers" to the CURRENT state.
+   If this session changed nothing of substance, leave the entry's wording as it is and only
+   update the marker date.
+
+=== THE EXISTING ENTRY FOR THIS CONVERSATION (rewrite it in place) ===
+${existingEntry}
+=== END EXISTING ENTRY ===`
+    : `3. Prepend ONE new entry to the top of ${fileName} at the project root${fileExists ? ' (the file already exists — keep all existing entries unchanged, newest first)' : ' (create the file with a short "# Session Log" header, then the entry)'}.`;
+
+  return `You are recording what a development session accomplished, in a project changelog.
 
 Project: ${ctx.cwd}
 Branch: ${branch}
@@ -142,15 +199,17 @@ Claude session id: ${ctx.claudeSessionId}
 Your job:
 1. ${transcriptInstruction}
 2. Use the git diff and recent commits below as the ground truth for what actually changed.
-3. Prepend ONE new entry to the top of ${fileName} at the project root${fileExists ? ' (the file already exists — keep all existing entries unchanged, newest first)' : ' (create the file with a short "# Session Log" header, then the entry)'}.
+${writeInstruction}
 ${planInstruction}
 5. ${phasesInstruction(planGlobs, ctx.claudeSessionId)}
 
 STRICT CONSTRAINTS:
 - Modify ONLY ${fileName}${editPlanFiles ? ' and the plan/design files you tick checkboxes in' : ''}. Touch no other file.
-- Never rewrite, reorder, or delete existing dated log entries (the phases manifest block IS updated in place).
-- This is a per-session DELTA, not a project summary: keep "Done" to a single
-  sentence and each other field to one short line. Be factual; no speculation.
+- Never rewrite, reorder, or delete entries belonging to OTHER conversations. You may only
+  rewrite the one entry for claude session ${ctx.claudeSessionId}${existingEntry ? ' shown above' : ''}.
+  (The phases manifest block IS updated in place.)
+- Describe real work, not the act of looking: keep "Done" to a single sentence and each other
+  field to one short line. Be factual; no speculation. Never pad an entry to look productive.
 
 Use EXACTLY this entry format (fill the marker JSON's blockers/openItems with integer counts):
 
@@ -189,7 +248,8 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     }
 
     const repo = await isGitRepo(ctx.cwd);
-    let gitChanges = false;
+    let commitsDuringSession = false;
+    let dirtyDuringSession = false;
     let diff = '';
     let log = '';
     let branch = 'no-branch';
@@ -202,28 +262,42 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
         git(ctx.cwd, ['diff']),
         git(ctx.cwd, ['diff', '--cached']),
       ]);
-      gitChanges = Boolean(status?.trim()) || Boolean(committed?.trim());
+      commitsDuringSession = Boolean(committed?.trim());
+      // A dirty tree is only evidence about THIS session for the files it
+      // actually touched. Treating any dirty file as evidence made the gate
+      // permanently true once work sat uncommitted, which is what produced an
+      // entry on every single close.
+      dirtyDuringSession = anyDirtyFileTouchedSince(ctx.cwd, status || '', ctx.createdAt);
       log = (committed || '').slice(0, MAX_LOG_CHARS);
       branch = branchOut?.trim() || 'no-branch';
       diff = `${diffOut || ''}\n${diffCachedOut || ''}`.trim().slice(0, MAX_DIFF_CHARS);
     }
 
-    // Read the transcript only when git can't already decide — it can be many MB
-    // and for a git repo with changes the edit-scan/turn-count are unused.
-    let hasEdits = false;
-    let userTurns = 0;
-    if (!repo || !gitChanges) {
-      const transcript = readTranscript(transcriptPath);
-      hasEdits = transcriptHasEdits(transcript);
-      userTurns = countUserTurns(transcript);
-    }
+    // The transcript belongs to the CONVERSATION, not to this session: a
+    // resumed one carries every turn it has ever had. Scan only this session's
+    // slice, or a resume reports edits made days ago as its own.
+    const transcript = readTranscript(transcriptPath);
+    const hasEdits = transcriptHasEditsSince(transcript, ctx.createdAt);
+    const userTurns = countUserTurnsSince(transcript, ctx.createdAt);
 
-    // Skip-gate: primary signal is evidence of change. For non-git projects we
-    // fall back to edit tool-calls plus a turn-count floor (lower fidelity).
-    const shouldLog = repo ? gitChanges || hasEdits : hasEdits && userTurns >= cfg.minTurnsToLog;
+    // Skip-gate. Every signal is bounded to the session's own window, because
+    // this gate is the ONLY relevance filter — nothing downstream can decline.
+    // Non-git projects lose the commit signal, so they add a turn-count floor.
+    const changedSomething = hasEdits || commitsDuringSession || dirtyDuringSession;
+    const shouldLog = repo ? changedSomething : hasEdits && userTurns >= cfg.minTurnsToLog;
 
     if (!shouldLog) {
-      logger.info({ sessionId: ctx.sessionId, repo, hasEdits, gitChanges, userTurns }, 'project-log: skip-gate skipped session');
+      logger.info(
+        {
+          sessionId: ctx.sessionId,
+          repo,
+          hasEdits,
+          commitsDuringSession,
+          dirtyDuringSession,
+          userTurns,
+        },
+        'project-log: skip-gate skipped session'
+      );
       stampSessionLogged(ctx.sessionId, new Date().toISOString());
       return 'skipped';
     }
@@ -232,6 +306,20 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     const logPath = join(ctx.cwd, fileName);
     const fileExists = existsSync(logPath);
     const mtimeBefore = fileMtimeMs(logPath);
+
+    // One entry per conversation: if this one already has an entry, the run
+    // amends it rather than appending another. Enforces what the format has
+    // always claimed about claudeSessionId being the idempotency key.
+    const existing = fileExists
+      ? findEntryForSession(readFileSync(logPath, 'utf-8'), ctx.claudeSessionId)
+      : null;
+    if (existing) {
+      logger.info(
+        { sessionId: ctx.sessionId, claudeSessionId: ctx.claudeSessionId },
+        'project-log: amending the existing entry for this conversation'
+      );
+    }
+
     const prompt = buildPrompt({
       ctx,
       fileName,
@@ -244,6 +332,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       transcriptLarge: fileSizeBytes(transcriptPath) > MAX_TRANSCRIPT_BYTES,
       editPlanFiles: cfg.editPlanFiles,
       planGlobs: cfg.planGlobs,
+      existingEntry: existing ? entryBodyOnly(existing.entry) : null,
     });
 
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');

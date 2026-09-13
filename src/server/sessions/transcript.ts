@@ -68,3 +68,63 @@ export function tryGetTranscriptPath(homeDir: string, cwd: string, claudeSession
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Session-scoped scanning
+//
+// A transcript belongs to a CONVERSATION, not to one claude-remote session: a
+// resumed conversation carries every turn it has ever had. Scanning the whole
+// file therefore reports edits made days ago as if this session had made them,
+// which is how a session that did nothing ends up logged as if it had worked.
+// Every gate signal must be scoped to the window the session actually covers.
+// ---------------------------------------------------------------------------
+
+/** Most transcript lines carry an ISO timestamp; those that don't are ignored. */
+const TIMESTAMP_RE = /"timestamp"\s*:\s*"([^"]+)"/;
+
+export interface TranscriptWindow {
+  /** Lines written at or after `sinceIso`. */
+  lines: string[];
+  /** Lines that carried no timestamp at all, so could not be placed. */
+  undated: number;
+}
+
+/**
+ * The slice of a transcript written at or after `sinceIso`.
+ *
+ * Undated lines are excluded rather than assumed recent: counting them would
+ * reintroduce exactly the over-reporting this scoping exists to remove.
+ */
+export function transcriptSince(transcript: string, sinceIso: string): TranscriptWindow {
+  const cutoff = Date.parse(sinceIso);
+  if (Number.isNaN(cutoff)) {
+    // No usable session start — fall back to the whole transcript rather than
+    // silently reporting nothing, and let the caller's other signals decide.
+    return { lines: transcript.split('\n').filter(Boolean), undated: 0 };
+  }
+
+  const lines: string[] = [];
+  let undated = 0;
+  for (const line of transcript.split('\n')) {
+    if (!line) continue;
+    const match = line.match(TIMESTAMP_RE);
+    if (!match) {
+      undated++;
+      continue;
+    }
+    const at = Date.parse(match[1]);
+    if (!Number.isNaN(at) && at >= cutoff) lines.push(line);
+  }
+  return { lines, undated };
+}
+
+/** True if the session's own slice of the transcript contains a file edit. */
+export function transcriptHasEditsSince(transcript: string, sinceIso: string): boolean {
+  return transcriptSince(transcript, sinceIso).lines.some((l) => EDIT_TOOL_RE.test(l));
+}
+
+/** User turns within the session's own slice of the transcript. */
+export function countUserTurnsSince(transcript: string, sinceIso: string): number {
+  return transcriptSince(transcript, sinceIso).lines.filter((l) => /"type"\s*:\s*"user"/.test(l))
+    .length;
+}

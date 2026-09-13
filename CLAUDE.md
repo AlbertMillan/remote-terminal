@@ -157,6 +157,51 @@ Server-side logic lives in `src/server/sessions/history-delete.ts`; the log rewr
 `removeLogEntry()` in `session-log-format.ts`, which slices marker→next-marker so the file
 header and the `claude-remote-phases` manifest are always preserved.
 
+## Project Workspace & Job Pipeline
+
+The **Projects** tab is a workspace over a canonical, per-project `PROJECT.md`, not a
+view of `SESSION-LOG.md`. Server code lives in `src/server/projects/` and
+`src/server/jobs/`; the client in `src/client/{project-workspace,job-board,rollup-view}.ts`.
+
+**Canonical docs** (in each project, committed):
+
+```
+PROJECT.md              frontmatter (name/status/verify) + "## Track:" feature lines
+project/<slug>.md       one feature's spec
+project/QA.md           driver + commands + flows = what "verified" means here
+project/reviews/        per-job review findings (gitignored)
+```
+
+Feature lines are `- [x] \`f-ab12cd\` P1 Title → project/slug.md`. Ids are
+server-generated and **stable** — jobs and findings reference them.
+`project-doc-format.ts` is the single source of truth for the format; parsing never
+throws and unrecognized lines round-trip verbatim.
+
+**Reads are deterministic parsing; writes are plain server writes.** An agent authors
+`PROJECT.md` exactly once, at migration (`migrate.ts`), converting whatever plan docs a
+project already has. Every UI write carries a content-hash `revision` and returns **409**
+when the file changed underneath (same staleness contract as `history-delete.ts`).
+
+**Registry**: `~/.claude-remote/projects.json` stores paths only — roll-up rules fold
+nested dirs into a parent, `splitChildren` roots keep their children separate. Discovery
+also recovers projects whose transcripts were deleted, by decoding the
+`~/.claude/projects` slug against the filesystem (`slug-decode.ts`).
+
+**Job pipeline** (`src/server/jobs/`): dispatching a feature runs it through
+design → implement → integrate → review → fix → qa → merge → rebuild in its own git
+worktree under `~/.claude-remote/worktrees/`. Three gates stop for approval: after
+**design** (see the decisions before code), after **review** (tick which findings to fix),
+and before **merge**. A stage that hits a real decision parks with the question rather
+than guessing; **Take over** resumes that run's own Claude conversation in a terminal.
+
+- `scheduler.ts` is a swappable `SchedulePolicy` — `OneRunningJobPerProject` ships.
+- The merge gate is checked **before** its stage, so parked jobs keep `stage` on the last
+  *completed* stage and approval is recorded in `approved_gate`. Changing this breaks the
+  gate (see `tests/job-gates.test.ts`).
+- QA never reports unverified work as verified: precedence is failed > skipped > passed,
+  so one trivial passing command cannot mask a driver that never ran.
+- Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
+
 ## Keyboard Shortcuts Display
 
 All keyboard shortcuts are registered in a single source of truth: `src/client/shortcuts.ts` (`SHORTCUT_GROUPS`). Two surfaces render directly from this registry, so they never drift:

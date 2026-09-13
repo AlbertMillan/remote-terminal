@@ -143,6 +143,11 @@ export function stampSessionLogged(sessionId: string, loggedAt: string): void {
  * Sessions that ended without ever being processed by the project-log feature —
  * used by the startup reconciliation sweep to cover crash/OS-shutdown. Only real
  * (non-fork) sessions with a known Claude session id are eligible.
+ *
+ * `status != 'idle'` matters: a graceful shutdown deliberately parks live
+ * sessions as idle so they resume on the next boot. Without this filter the
+ * sweep logged those still-running sessions as if they had ended, producing an
+ * entry every single time the machine started.
  */
 export function getUnloggedSessionsForLog(): {
   id: string;
@@ -155,6 +160,7 @@ export function getUnloggedSessionsForLog(): {
     SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt
     FROM sessions
     WHERE logged_at IS NULL AND is_fork = 0 AND claude_session_id IS NOT NULL
+      AND status != 'idle'
   `, (stmt) => stmt.all() as {
     id: string;
     name: string;

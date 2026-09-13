@@ -162,3 +162,35 @@ export function removeLogEntry(markdown: string, index: number): string | null {
   const joined = before && after ? `${before}\n\n${after}` : before || after;
   return joined ? `${joined.replace(/\s+$/, '')}\n` : '';
 }
+
+/**
+ * Find the entry already written for a conversation, if any.
+ *
+ * The format has always documented `claudeSessionId` as "the idempotency key
+ * (prevents duplicates)", but nothing enforced it: resuming a conversation
+ * produced a second entry, then a third. One entry per conversation, amended,
+ * is what that promise actually means.
+ */
+export function findEntryForSession(
+  markdown: string,
+  claudeSessionId: string
+): { index: number; entry: ParsedLogEntry } | null {
+  if (!claudeSessionId || claudeSessionId === 'backfill' || claudeSessionId === 'unknown') {
+    return null;
+  }
+  const entries = parseLogEntries(markdown);
+  const index = entries.findIndex((e) => e.meta?.claudeSessionId === claudeSessionId);
+  return index === -1 ? null : { index, entry: entries[index] };
+}
+
+/**
+ * The human-readable body of an entry: marker and heading stripped.
+ * Used to show a generator what it previously wrote so it can extend it.
+ */
+export function entryBodyOnly(entry: ParsedLogEntry): string {
+  return entry.body
+    .split('\n')
+    .filter((l) => !l.startsWith('<!--') && !l.startsWith('## '))
+    .join('\n')
+    .trim();
+}
