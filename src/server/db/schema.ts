@@ -184,6 +184,16 @@ function runMigrations(database: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_job_stages_job ON job_stages(job_id);
       `,
     },
+    {
+      // Which gate the user has approved. Distinct from `gate` (the gate a job
+      // is waiting AT) because the merge gate precedes its stage: without a
+      // separate record, approving would clear the gate and the stage would
+      // simply park again.
+      name: '010_add_job_approved_gate',
+      sql: `
+        ALTER TABLE jobs ADD COLUMN approved_gate TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

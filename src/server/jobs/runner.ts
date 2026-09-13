@@ -11,9 +11,25 @@ import {
   startStage,
   updateJob,
 } from './store.js';
-import { commitAll, createWorktree, removeWorktree, WorktreeError } from './worktree.js';
+import {
+  commitAll,
+  createWorktree,
+  currentBranch,
+  removeWorktree,
+  WorktreeError,
+} from './worktree.js';
 import { runDesignStage } from './stages/design.js';
-import { GATE_AFTER, isLive, nextStage, type Job, type JobWithStages } from './types.js';
+import { runImplementStage } from './stages/implement.js';
+import { runIntegrateStage } from './stages/integrate.js';
+import { runMergeStage } from './stages/merge.js';
+import {
+  GATE_AFTER,
+  GATE_BEFORE,
+  isLive,
+  nextStage,
+  type Job,
+  type JobWithStages,
+} from './types.js';
 
 const logger = createLogger('job-runner');
 
@@ -107,6 +123,22 @@ async function runNextStage(jobId: string): Promise<void> {
     return;
   }
 
+  // Some gates precede their stage rather than follow it: approval is what
+  // authorises the merge, so it must be checked before anything is merged.
+  // `stage` is deliberately left pointing at the last COMPLETED stage while
+  // parked, so nextStage() still resolves to the gated stage on approval.
+  const gateBefore = GATE_BEFORE[stage];
+  if (gateBefore && job.approvedGate !== gateBefore) {
+    updateJob(jobId, {
+      status: 'parked',
+      gate: gateBefore,
+      parkReason: 'gate',
+      detail: null,
+    });
+    logger.info({ jobId, gate: gateBefore }, 'job: parked before a gated stage');
+    return;
+  }
+
   updateJob(jobId, { status: 'running', stage, detail: null });
   startStage(jobId, stage);
   logger.info({ jobId, stage }, 'job: stage starting');
@@ -116,18 +148,25 @@ async function runNextStage(jobId: string): Promise<void> {
       case 'design':
         await executeDesign(job);
         break;
+      case 'implement':
+        await executeImplement(job);
+        break;
+      case 'integrate':
+        await executeIntegrate(job);
+        break;
+      case 'merge':
+        await executeMerge(job);
+        break;
       default:
-        // Later stages land in subsequent commits. Rather than silently
-        // skipping them, park so the state is honest about where the pipeline
-        // actually stops today.
-        finishStage(jobId, stage, 'skipped', 'Stage not implemented yet');
-        updateJob(jobId, {
-          status: 'parked',
-          stage,
-          gate: null,
-          parkReason: 'gate',
-          detail: `Pipeline stops at "${stage}" — that stage is not implemented yet.`,
-        });
+        // Stages that land in later commits are skipped rather than parked on,
+        // so the merge gate stays reachable. This is NOT silent: the stage row
+        // reads "skipped — not implemented yet" in the pipeline strip, so the
+        // user can see exactly which checks did not run before they approve a
+        // merge. Skipping is deliberately never used for a stage that exists
+        // and failed.
+        finishStage(jobId, stage, 'skipped', 'Not implemented yet');
+        updateJob(jobId, { status: 'queued', stage, detail: null });
+        void pump();
         return;
     }
   } catch (error) {
@@ -203,6 +242,128 @@ async function executeDesign(job: Job): Promise<void> {
   logger.info({ jobId: job.id, branch }, 'job: parked at the design gate');
 }
 
+/** The spec path recorded by the design stage, needed by implement. */
+function specPathOf(jobId: string): string | null {
+  const stages = getJobWithStages(jobId)?.stages ?? [];
+  const design = stages.find((s) => s.name === 'design');
+  const path = design?.status === 'passed' ? design.detail : null;
+  return path && path !== 'Needs a decision' ? path : null;
+}
+
+/** Guard the stages that cannot run without a worktree. */
+function requireWorktree(job: Job): string {
+  if (!job.worktreePath) {
+    throw new Error('This job has no worktree — re-run it from the design stage.');
+  }
+  return job.worktreePath;
+}
+
+/** The branch this job's work is measured and merged against. */
+async function baseBranchOf(job: Job): Promise<string> {
+  return (await currentBranch(job.projectCwd)) || 'main';
+}
+
+/** Implement stage: build the approved spec, then continue to integrate. */
+async function executeImplement(job: Job): Promise<void> {
+  const worktreePath = requireWorktree(job);
+  const specPath = specPathOf(job.id);
+  if (!specPath) throw new Error('No approved spec found for this job');
+
+  const result = await runImplementStage({
+    job,
+    worktreePath,
+    specPath,
+    baseBranch: await baseBranchOf(job),
+  });
+
+  if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
+
+  if (result.openQuestion) {
+    // The spec turned out to be unworkable. Park rather than let the run
+    // improvise a design the user never approved.
+    finishStage(job.id, 'implement', 'failed', 'Blocked — the approved spec does not hold');
+    updateJob(job.id, {
+      status: 'parked',
+      stage: 'implement',
+      gate: null,
+      parkReason: 'question',
+      detail: result.openQuestion,
+    });
+    logger.info({ jobId: job.id }, 'job: implement blocked on the spec');
+    return;
+  }
+
+  const { files, insertions, deletions } = result.stat;
+  finishStage(job.id, 'implement', 'passed', `${files} files +${insertions}/-${deletions}`);
+  // No gate here: implement flows straight into integrate so the diff the user
+  // eventually reviews is already rebased onto current base.
+  updateJob(job.id, { status: 'queued', stage: 'implement', detail: null });
+  void pump();
+}
+
+/** Integrate stage: rebase onto the base branch so the diff reflects reality. */
+async function executeIntegrate(job: Job): Promise<void> {
+  const worktreePath = requireWorktree(job);
+  const baseBranch = await baseBranchOf(job);
+  const result = await runIntegrateStage({ worktreePath, baseBranch });
+
+  if (result.outcome === 'conflict') {
+    // Two changes disagree about the same lines. Deciding which wins is exactly
+    // the kind of call that should reach a person.
+    finishStage(job.id, 'integrate', 'failed', result.detail);
+    updateJob(job.id, {
+      status: 'parked',
+      stage: 'integrate',
+      gate: null,
+      parkReason: 'question',
+      detail:
+        `${result.detail}. Take over to resolve it in the worktree, ` +
+        `or cancel this job and re-dispatch it against the current base.`,
+    });
+    return;
+  }
+
+  finishStage(
+    job.id,
+    'integrate',
+    'passed',
+    result.outcome === 'already-current' ? `already current with ${baseBranch}` : `rebased onto ${baseBranch}`
+  );
+  updateJob(job.id, { status: 'queued', stage: 'integrate', detail: null });
+  void pump();
+}
+
+/** Merge stage: runs only after the merge gate; lands and pushes the work. */
+async function executeMerge(job: Job): Promise<void> {
+  if (!job.branch) throw new Error('This job has no branch to merge');
+  const baseBranch = await baseBranchOf(job);
+
+  const result = await runMergeStage({
+    projectCwd: job.projectCwd,
+    branch: job.branch,
+    baseBranch,
+    title: job.title,
+  });
+
+  finishStage(
+    job.id,
+    'merge',
+    'passed',
+    result.pushed ? `merged into ${baseBranch} and pushed` : `merged into ${baseBranch}`
+  );
+
+  // The work has landed, so the worktree and branch have served their purpose.
+  await removeWorktree(job.projectCwd, job.id, { deleteBranch: job.branch });
+  updateJob(job.id, {
+    status: 'queued',
+    stage: 'merge',
+    worktreePath: null,
+    gate: null,
+    detail: result.detail,
+  });
+  void pump();
+}
+
 /** Answers supplied for a parked question, consumed by the next design pass. */
 const pendingAnswers = new Map<string, string>();
 
@@ -217,7 +378,13 @@ export function approveGate(jobId: string): JobWithStages {
     throw new JobError('This job is waiting for an answer, not approval', 409);
   }
 
-  updateJob(jobId, { status: 'queued', gate: null, parkReason: null, detail: null });
+  updateJob(jobId, {
+    status: 'queued',
+    approvedGate: job.gate,
+    gate: null,
+    parkReason: null,
+    detail: null,
+  });
   logger.info({ jobId, gate: job.gate }, 'job: gate approved');
   void pump();
   return getJobWithStages(jobId) as JobWithStages;

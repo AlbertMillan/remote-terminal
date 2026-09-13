@@ -71,6 +71,12 @@ export interface Job {
   /** The stage currently running, or the one the job is parked before/after. */
   stage: StageName | null;
   gate: GateName | null;
+  /**
+   * The gate the user has already approved. Kept separate from `gate` because
+   * the merge gate is checked BEFORE its stage runs: clearing `gate` on
+   * approval would make the stage park again immediately.
+   */
+  approvedGate: GateName | null;
   parkReason: ParkReason | null;
   /** Free text shown on the board: skip reason, failure summary, open question. */
   detail: string | null;

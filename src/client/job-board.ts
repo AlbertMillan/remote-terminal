@@ -39,6 +39,7 @@ export interface Job {
   status: JobStatus;
   stage: StageName | null;
   gate: string | null;
+  approvedGate: string | null;
   parkReason: ParkReason | null;
   detail: string | null;
   worktreePath: string | null;
@@ -57,6 +58,12 @@ const STAGE_ICON: Record<StageStatus, string> = {
   failed: '✕',
 };
 
+export interface DiffStat {
+  files: number;
+  insertions: number;
+  deletions: number;
+}
+
 /** How often to re-poll while any job is still moving. */
 const POLL_MS = 4000;
 
@@ -66,6 +73,8 @@ export class JobBoard {
   private pollTimer: number | null = null;
   /** Spec text keyed by job id, fetched lazily when a gate is opened. */
   private specs = new Map<string, string>();
+  /** Diff text keyed by job id, fetched lazily at the merge gate. */
+  private diffs = new Map<string, { diff: string; stat: DiffStat | null; truncated: boolean }>();
   private expanded = new Set<string>();
 
   constructor(private readonly onTakeOver: (claudeSessionId: string, cwd: string) => void) {}
@@ -194,7 +203,36 @@ export class JobBoard {
           : '<div class="pw-hint">No spec written yet.</div>'
       );
     }
+
+    const diff = this.diffs.get(job.id);
+    if (diff !== undefined) {
+      const stat = diff.stat
+        ? `${diff.stat.files} files +${diff.stat.insertions}/-${diff.stat.deletions}`
+        : '';
+      parts.push(
+        diff.diff
+          ? `<div class="jb-diff-head">${escapeHtml(stat)}${
+              diff.truncated ? ' · truncated' : ''
+            }</div><pre class="jb-diff">${this.highlightDiff(diff.diff)}</pre>`
+          : '<div class="pw-hint">No changes on this branch yet.</div>'
+      );
+    }
     return parts.join('');
+  }
+
+  /** Escape first, then colour by diff prefix — never the other way round. */
+  private highlightDiff(diff: string): string {
+    return escapeHtml(diff)
+      .split('\n')
+      .map((line) => {
+        if (line.startsWith('+++') || line.startsWith('---')) return `<span class="d-meta">${line}</span>`;
+        if (line.startsWith('@@')) return `<span class="d-hunk">${line}</span>`;
+        if (line.startsWith('diff --git')) return `<span class="d-file">${line}</span>`;
+        if (line.startsWith('+')) return `<span class="d-add">${line}</span>`;
+        if (line.startsWith('-')) return `<span class="d-del">${line}</span>`;
+        return line;
+      })
+      .join('\n');
   }
 
   private renderActions(job: Job): string {
@@ -202,13 +240,22 @@ export class JobBoard {
     const buttons: string[] = [];
 
     if (job.status === 'parked' && job.parkReason === 'gate') {
-      buttons.push(`<button class="btn-primary jb-approve" data-job="${id}">Approve</button>`);
+      // Spell out what approving the merge gate actually sets in motion.
+      const label = job.gate === 'merge' ? 'Approve &amp; merge' : 'Approve';
+      buttons.push(`<button class="btn-primary jb-approve" data-job="${id}">${label}</button>`);
     }
     if (job.stages.some((s) => s.name === 'design' && s.status === 'passed')) {
       const shown = this.specs.has(job.id);
       buttons.push(
         `<button class="btn-secondary jb-spec-btn" data-job="${id}">${
           shown ? 'Hide spec' : 'View spec'
+        }</button>`
+      );
+    }
+    if (job.stages.some((s) => s.name === 'implement' && s.status === 'passed')) {
+      buttons.push(
+        `<button class="btn-secondary jb-diff-btn" data-job="${id}">${
+          this.diffs.has(job.id) ? 'Hide diff' : 'View diff'
         }</button>`
       );
     }
@@ -283,6 +330,31 @@ export class JobBoard {
     this.render();
   }
 
+  private async toggleDiff(jobId: string): Promise<void> {
+    if (this.diffs.has(jobId)) {
+      this.diffs.delete(jobId);
+      this.render();
+      return;
+    }
+    this.expanded.add(jobId);
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/diff`);
+      const data = (await res.json()) as {
+        diff: string;
+        stat: DiffStat | null;
+        truncated?: boolean;
+      };
+      this.diffs.set(jobId, {
+        diff: data.diff || '',
+        stat: data.stat,
+        truncated: !!data.truncated,
+      });
+    } catch {
+      this.diffs.set(jobId, { diff: '', stat: null, truncated: false });
+    }
+    this.render();
+  }
+
   private takeOver(jobId: string): void {
     const job = this.jobs.find((j) => j.id === jobId);
     if (!job?.claudeSessionId || !job.worktreePath) return;
@@ -318,6 +390,9 @@ export class JobBoard {
 
       const spec = target.closest('.jb-spec-btn') as HTMLElement | null;
       if (spec) return void this.toggleSpec(spec.dataset.job || '');
+
+      const diff = target.closest('.jb-diff-btn') as HTMLElement | null;
+      if (diff) return void this.toggleDiff(diff.dataset.job || '');
 
       const takeover = target.closest('.jb-takeover') as HTMLElement | null;
       if (takeover) return this.takeOver(takeover.dataset.job || '');

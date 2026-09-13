@@ -2703,3 +2703,29 @@ body {
   .pw-dispatch { opacity: 1; }
   .jb-branch { display: none; }
 }
+
+.jb-diff-head {
+  padding: 0 14px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+.jb-diff {
+  margin: 0 14px 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: pre;
+  overflow: auto;
+  max-height: 480px;
+}
+.jb-diff .d-add { color: var(--success); }
+.jb-diff .d-del { color: var(--danger); }
+.jb-diff .d-hunk { color: var(--accent); }
+.jb-diff .d-file { color: var(--text-primary); font-weight: 700; }
+.jb-diff .d-meta { color: var(--text-muted); }

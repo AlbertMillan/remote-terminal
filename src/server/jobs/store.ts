@@ -30,6 +30,7 @@ interface JobRow {
   status: string;
   stage: string | null;
   gate: string | null;
+  approved_gate: string | null;
   park_reason: string | null;
   detail: string | null;
   worktree_path: string | null;
@@ -58,6 +59,7 @@ function toJob(row: JobRow): Job {
     status: row.status as JobStatus,
     stage: (row.stage as StageName | null) ?? null,
     gate: (row.gate as GateName | null) ?? null,
+    approvedGate: (row.approved_gate as GateName | null) ?? null,
     parkReason: (row.park_reason as ParkReason | null) ?? null,
     detail: row.detail,
     worktreePath: row.worktree_path,
@@ -158,6 +160,7 @@ export interface JobPatch {
   status?: JobStatus;
   stage?: StageName | null;
   gate?: GateName | null;
+  approvedGate?: GateName | null;
   parkReason?: ParkReason | null;
   detail?: string | null;
   worktreePath?: string | null;
@@ -169,6 +172,7 @@ const COLUMN_OF: Record<keyof JobPatch, string> = {
   status: 'status',
   stage: 'stage',
   gate: 'gate',
+  approvedGate: 'approved_gate',
   parkReason: 'park_reason',
   detail: 'detail',
   worktreePath: 'worktree_path',
