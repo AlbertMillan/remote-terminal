@@ -58,6 +58,19 @@ const STAGE_ICON: Record<StageStatus, string> = {
   failed: '✕',
 };
 
+export type Severity = 'critical' | 'important' | 'nice';
+
+export interface Finding {
+  id: string;
+  severity: Severity;
+  file: string;
+  line: number | null;
+  title: string;
+  detail: string;
+  suggestion: string;
+  selected: boolean;
+}
+
 export interface DiffStat {
   files: number;
   insertions: number;
@@ -75,6 +88,8 @@ export class JobBoard {
   private specs = new Map<string, string>();
   /** Diff text keyed by job id, fetched lazily at the merge gate. */
   private diffs = new Map<string, { diff: string; stat: DiffStat | null; truncated: boolean }>();
+  /** Findings keyed by job id, loaded when a job parks at the review gate. */
+  private findings = new Map<string, Finding[]>();
   private expanded = new Set<string>();
 
   constructor(private readonly onTakeOver: (claudeSessionId: string, cwd: string) => void) {}
@@ -100,8 +115,32 @@ export class JobBoard {
     } catch {
       this.jobs = [];
     }
+    await this.loadFindingsForGates();
     this.render();
     this.schedulePoll();
+  }
+
+  /**
+   * Fetch findings for jobs parked at the review gate. Done eagerly rather than
+   * behind a button: the gate is meaningless without the list it is asking
+   * about.
+   */
+  private async loadFindingsForGates(): Promise<void> {
+    const waiting = this.jobs.filter(
+      (j) => j.status === 'parked' && j.gate === 'review' && !this.findings.has(j.id)
+    );
+    await Promise.all(
+      waiting.map(async (job) => {
+        try {
+          const res = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/findings`);
+          const data = (await res.json()) as { findings: Finding[] };
+          this.findings.set(job.id, data.findings || []);
+          this.expanded.add(job.id);
+        } catch {
+          this.findings.set(job.id, []);
+        }
+      })
+    );
   }
 
   /**
@@ -204,6 +243,11 @@ export class JobBoard {
       );
     }
 
+    const findings = this.findings.get(job.id);
+    if (findings && job.gate === 'review') {
+      parts.push(this.renderFindings(job, findings));
+    }
+
     const diff = this.diffs.get(job.id);
     if (diff !== undefined) {
       const stat = diff.stat
@@ -218,6 +262,50 @@ export class JobBoard {
       );
     }
     return parts.join('');
+  }
+
+  /**
+   * The review gate: every finding with a checkbox, nothing pre-ticked. The
+   * user decides what is worth acting on; the fix stage applies exactly that
+   * and is told explicitly to leave the rest alone.
+   */
+  private renderFindings(job: Job, findings: Finding[]): string {
+    if (findings.length === 0) {
+      return '<div class="pw-hint">No findings.</div>';
+    }
+    const rows = findings
+      .map((f) => {
+        const where = f.file
+          ? `${escapeHtml(f.file)}${f.line ? `:${f.line}` : ''}`
+          : '';
+        return `
+        <li class="jb-finding ${f.severity}">
+          <label class="jb-finding-head">
+            <input type="checkbox" class="jb-finding-box" data-job="${escapeAttr(job.id)}"
+                   data-finding="${escapeAttr(f.id)}" ${f.selected ? 'checked' : ''} />
+            <span class="jb-sev ${f.severity}">${f.severity}</span>
+            <span class="jb-finding-title">${escapeHtml(f.title)}</span>
+            ${where ? `<code class="jb-finding-where">${where}</code>` : ''}
+          </label>
+          ${f.detail ? `<div class="jb-finding-detail">${escapeHtml(f.detail)}</div>` : ''}
+          ${
+            f.suggestion
+              ? `<div class="jb-finding-fix"><strong>Fix:</strong> ${escapeHtml(f.suggestion)}</div>`
+              : ''
+          }
+        </li>`;
+      })
+      .join('');
+
+    const chosen = findings.filter((f) => f.selected).length;
+    return `
+      <div class="jb-findings">
+        <div class="jb-findings-head">
+          <span>${findings.length} finding${findings.length === 1 ? '' : 's'} — tick the ones to fix</span>
+          <span class="jb-findings-count">${chosen} selected</span>
+        </div>
+        <ul class="jb-finding-list">${rows}</ul>
+      </div>`;
   }
 
   /** Escape first, then colour by diff prefix — never the other way round. */
@@ -241,7 +329,12 @@ export class JobBoard {
 
     if (job.status === 'parked' && job.parkReason === 'gate') {
       // Spell out what approving the merge gate actually sets in motion.
-      const label = job.gate === 'merge' ? 'Approve &amp; merge' : 'Approve';
+      const label =
+        job.gate === 'merge'
+          ? 'Approve &amp; merge'
+          : job.gate === 'review'
+            ? this.approveReviewLabel(job)
+            : 'Approve';
       buttons.push(`<button class="btn-primary jb-approve" data-job="${id}">${label}</button>`);
     }
     if (job.stages.some((s) => s.name === 'design' && s.status === 'passed')) {
@@ -267,7 +360,15 @@ export class JobBoard {
                  title="Continue this run's conversation in a terminal">Take over</button>`
       );
     }
-    if (job.status === 'queued' || job.status === 'running' || job.status === 'parked') {
+    if (job.status === 'failed') {
+      buttons.push(`<button class="btn-primary jb-retry" data-job="${id}">Retry stage</button>`);
+    }
+    if (
+      job.status === 'queued' ||
+      job.status === 'running' ||
+      job.status === 'parked' ||
+      job.status === 'failed'
+    ) {
       buttons.push(`<button class="btn-secondary jb-cancel" data-job="${id}">Cancel</button>`);
     }
     return buttons.length ? `<div class="jb-actions">${buttons.join('')}</div>` : '';
@@ -330,6 +431,12 @@ export class JobBoard {
     this.render();
   }
 
+  /** Say whether approving will apply fixes or move straight on. */
+  private approveReviewLabel(job: Job): string {
+    const chosen = (this.findings.get(job.id) || []).filter((f) => f.selected).length;
+    return chosen > 0 ? `Fix ${chosen} &amp; continue` : 'Skip all &amp; continue';
+  }
+
   private async toggleDiff(jobId: string): Promise<void> {
     if (this.diffs.has(jobId)) {
       this.diffs.delete(jobId);
@@ -351,6 +458,33 @@ export class JobBoard {
       });
     } catch {
       this.diffs.set(jobId, { diff: '', stat: null, truncated: false });
+    }
+    this.render();
+  }
+
+  /**
+   * Persist the selection as it changes rather than on approval, so a tick is
+   * never lost to a refresh or a poll landing mid-decision.
+   */
+  private async selectFinding(jobId: string, findingId: string, checked: boolean): Promise<void> {
+    const current = this.findings.get(jobId) || [];
+    const next = current.map((f) => (f.id === findingId ? { ...f, selected: checked } : f));
+    this.findings.set(jobId, next);
+
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/findings/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected: next.filter((f) => f.selected).map((f) => f.id) }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { findings: Finding[] };
+      this.findings.set(jobId, data.findings || next);
+    } catch {
+      // Put the box back rather than leave the UI claiming a choice the server
+      // never recorded.
+      this.findings.set(jobId, current);
+      this.flash('Could not save that selection — try again.');
     }
     this.render();
   }
@@ -379,6 +513,9 @@ export class JobBoard {
       const approve = target.closest('.jb-approve') as HTMLElement | null;
       if (approve) return void this.act(approve.dataset.job || '', 'approve');
 
+      const retry = target.closest('.jb-retry') as HTMLElement | null;
+      if (retry) return void this.act(retry.dataset.job || '', 'retry');
+
       const cancel = target.closest('.jb-cancel') as HTMLElement | null;
       if (cancel) {
         const job = this.jobs.find((j) => j.id === cancel.dataset.job);
@@ -404,6 +541,12 @@ export class JobBoard {
         else this.expanded.add(id);
         this.render();
       }
+    });
+
+    container.addEventListener('change', (event) => {
+      const box = (event.target as HTMLElement).closest('.jb-finding-box') as HTMLInputElement | null;
+      if (!box) return;
+      void this.selectFinding(box.dataset.job || '', box.dataset.finding || '', box.checked);
     });
 
     container.addEventListener('submit', (event) => {

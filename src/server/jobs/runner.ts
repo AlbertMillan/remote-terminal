@@ -10,6 +10,7 @@ import {
   listJobsByStatus,
   startStage,
   updateJob,
+  updateStage,
 } from './store.js';
 import {
   commitAll,
@@ -22,6 +23,9 @@ import { runDesignStage } from './stages/design.js';
 import { runImplementStage } from './stages/implement.js';
 import { runIntegrateStage } from './stages/integrate.js';
 import { runMergeStage } from './stages/merge.js';
+import { runReviewStage } from './stages/review.js';
+import { runFixStage } from './stages/fix.js';
+import { readFindings, selectedFindings } from './findings.js';
 import {
   GATE_AFTER,
   GATE_BEFORE,
@@ -153,6 +157,12 @@ async function runNextStage(jobId: string): Promise<void> {
         break;
       case 'integrate':
         await executeIntegrate(job);
+        break;
+      case 'review':
+        await executeReview(job);
+        break;
+      case 'fix':
+        await executeFix(job);
         break;
       case 'merge':
         await executeMerge(job);
@@ -333,6 +343,86 @@ async function executeIntegrate(job: Job): Promise<void> {
   void pump();
 }
 
+/** Review stage: run the user's criteria over the diff, then park at gate 2. */
+async function executeReview(job: Job): Promise<void> {
+  const worktreePath = requireWorktree(job);
+  const result = await runReviewStage({
+    jobId: job.id,
+    worktreePath,
+    baseBranch: await baseBranchOf(job),
+    specPath: specPathOf(job.id),
+  });
+
+  if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
+
+  // Findings are scratch, but committing them would dirty the worktree and
+  // confuse the merge diff, so the gitignore rule added by the stage handles it.
+  // Commit the gitignore rule the stage may have added, so the worktree stays
+  // clean and the rule lands with the merge.
+  await commitAll(worktreePath, 'chore: ignore job review findings');
+
+  const count = result.findings?.findings.length ?? 0;
+  finishStage(job.id, 'review', 'passed', result.summary);
+
+  if (count === 0) {
+    // Nothing to choose between. Parking here would ask the user to approve an
+    // empty list, so flow straight on — the stage row still says "no findings".
+    updateJob(job.id, { status: 'queued', stage: 'review', detail: null });
+    void pump();
+    return;
+  }
+
+  updateJob(job.id, {
+    status: 'parked',
+    stage: 'review',
+    gate: 'review',
+    parkReason: 'gate',
+    detail: `${count} finding${count === 1 ? '' : 's'} — choose which to act on.`,
+  });
+  logger.info({ jobId: job.id, count }, 'job: parked at the review gate');
+}
+
+/** Fix stage: apply exactly the findings the user ticked. */
+async function executeFix(job: Job): Promise<void> {
+  const worktreePath = requireWorktree(job);
+  const findings = readFindings(worktreePath, job.id);
+  const selected = selectedFindings(findings);
+
+  if (selected.length === 0) {
+    // The user reviewed the findings and chose none. That is a decision, not an
+    // omission, so record it rather than treating the stage as unfinished.
+    finishStage(job.id, 'fix', 'skipped', 'no findings selected');
+    updateJob(job.id, { status: 'queued', stage: 'fix', detail: null });
+    void pump();
+    return;
+  }
+
+  const skipped = (findings?.findings ?? []).filter((f) => !f.selected);
+  const result = await runFixStage({
+    jobId: job.id,
+    worktreePath,
+    baseBranch: await baseBranchOf(job),
+    selected,
+    skipped,
+    title: job.title,
+  });
+
+  if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
+
+  const applied = selected.length - result.unresolved.length;
+  const detail =
+    result.unresolved.length > 0
+      ? `${applied}/${selected.length} applied — unresolved: ${result.unresolved.join('; ')}`
+      : `${selected.length} applied (${result.stat.files} files +${result.stat.insertions}/-${result.stat.deletions})`;
+
+  // An unresolved finding is not a stage failure — the run said so honestly and
+  // the user sees it before the merge gate. Mark it skipped so it reads as
+  // "something did not happen" rather than "everything was fine".
+  finishStage(job.id, 'fix', result.unresolved.length > 0 ? 'skipped' : 'passed', detail);
+  updateJob(job.id, { status: 'queued', stage: 'fix', detail: null });
+  void pump();
+}
+
 /** Merge stage: runs only after the merge gate; lands and pushes the work. */
 async function executeMerge(job: Job): Promise<void> {
   if (!job.branch) throw new Error('This job has no branch to merge');
@@ -411,6 +501,40 @@ export function answerQuestion(jobId: string, answer: string): JobWithStages {
     detail: null,
   });
   logger.info({ jobId }, 'job: question answered, re-running design');
+  void pump();
+  return getJobWithStages(jobId) as JobWithStages;
+}
+
+/**
+ * Re-run the stage a failed job died on.
+ *
+ * Stage failures are often transient and fixable from outside — the merge stage
+ * refusing a dirty project tree is the obvious case. Without this the only way
+ * forward is to cancel and re-dispatch, throwing away a design, an
+ * implementation and a review to get past a one-line problem.
+ *
+ * The failed stage is reset to pending and `stage` steps back to its
+ * predecessor, so the pipeline repeats that stage rather than skipping it.
+ */
+export function retryJob(jobId: string): JobWithStages {
+  const job = getJob(jobId);
+  if (!job) throw new JobError('Unknown job', 404);
+  if (job.status !== 'failed') throw new JobError('Only a failed job can be retried', 409);
+  if (!job.stage) throw new JobError('This job has no stage to retry', 409);
+
+  updateStage(jobId, job.stage, {
+    status: 'pending',
+    detail: null,
+    startedAt: null,
+    finishedAt: null,
+  });
+  updateJob(jobId, {
+    status: 'queued',
+    stage: previousStageOf(job),
+    parkReason: null,
+    detail: null,
+  });
+  logger.info({ jobId, stage: job.stage }, 'job: retrying failed stage');
   void pump();
   return getJobWithStages(jobId) as JobWithStages;
 }

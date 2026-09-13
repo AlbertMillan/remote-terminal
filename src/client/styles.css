@@ -2729,3 +2729,91 @@ body {
 .jb-diff .d-hunk { color: var(--accent); }
 .jb-diff .d-file { color: var(--text-primary); font-weight: 700; }
 .jb-diff .d-meta { color: var(--text-muted); }
+
+/* Review gate: findings checklist */
+
+.jb-findings {
+  margin: 0 14px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.jb-findings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.jb-findings-count { color: var(--accent); }
+
+.jb-finding-list { list-style: none; margin: 0; padding: 0; }
+.jb-finding {
+  border-top: 1px solid var(--border-subtle);
+  padding: 9px 12px;
+}
+.jb-finding:first-child { border-top: none; }
+.jb-finding.critical { border-left: 2px solid var(--danger); }
+.jb-finding.important { border-left: 2px solid var(--warning); }
+.jb-finding.nice { border-left: 2px solid var(--border); }
+
+.jb-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.jb-finding-box {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.jb-sev {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+.jb-sev.critical { color: var(--danger); }
+.jb-sev.important { color: var(--warning); }
+.jb-sev.nice { color: var(--text-muted); }
+
+.jb-finding-title {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.jb-finding-where {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+.jb-finding-detail,
+.jb-finding-fix {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 5px;
+  padding-left: 22px;
+}
+.jb-finding-fix { color: var(--text-muted); }
+.jb-finding-fix strong { color: var(--accent); font-weight: 600; }
+
+@media (max-width: 640px) {
+  .jb-findings { margin: 0 8px 12px; }
+  .jb-finding-detail, .jb-finding-fix { padding-left: 0; }
+}
