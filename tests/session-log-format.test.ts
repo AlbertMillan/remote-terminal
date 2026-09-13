@@ -4,6 +4,8 @@ import {
   parseLogEntries,
   parsePhasesBlock,
   buildEntrySkeleton,
+  removeLogEntry,
+  removeLogEntry,
   type LogEntryMeta,
 } from '../src/server/sessions/session-log-format.js';
 import { pathKey } from '../src/server/sessions/project-discovery.js';
@@ -116,5 +118,72 @@ describe('pathKey', () => {
   it('normalizes separators, trailing slash, and case', () => {
     expect(pathKey('C:/Users/Albert/Proj/')).toBe(pathKey('C:\\Users\\Albert\\Proj'));
     expect(pathKey('C:\\Users\\ALBERT\\Proj')).toBe('c:\\users\\albert\\proj');
+  });
+});
+
+
+describe('removeLogEntry', () => {
+  const entry = (sid: string, body: string): string =>
+    `${buildMarker({ ...META, claudeSessionId: sid })}\n## entry ${sid}\n${body}\n`;
+  const PHASES = `<!-- claude-remote-phases\n[{ "group": "T", "source": "d.md", "items": [] }]\n-->`;
+  const file = `# Session Log\n\n${PHASES}\n\n${entry('a', 'body A')}\n${entry('b', 'body B')}\n${entry('c', 'body C')}`;
+
+  it('removes the first (newest) entry, keeping the header and phases block', () => {
+    const out = removeLogEntry(file, 0) as string;
+    expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['b', 'c']);
+    expect(out).toContain('# Session Log');
+    expect(parsePhasesBlock(out)).toHaveLength(1);
+    expect(out).not.toContain('body A');
+  });
+
+  it('removes a middle entry without touching its neighbours', () => {
+    const out = removeLogEntry(file, 1) as string;
+    expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['a', 'c']);
+    expect(out).toContain('body A');
+    expect(out).toContain('body C');
+    expect(out).not.toContain('body B');
+  });
+
+  it('removes the last entry without eating the phases block', () => {
+    const out = removeLogEntry(file, 2) as string;
+    expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['a', 'b']);
+    expect(parsePhasesBlock(out)).toHaveLength(1);
+    expect(out).not.toContain('body C');
+  });
+
+  it('leaves a header-only file when the sole entry goes, ending in one newline', () => {
+    const single = `# Session Log\n\n${PHASES}\n\n${entry('a', 'body A')}`;
+    const out = removeLogEntry(single, 0) as string;
+    expect(parseLogEntries(out)).toHaveLength(0);
+    expect(parsePhasesBlock(out)).toHaveLength(1);
+    expect(out.endsWith('\n')).toBe(true);
+    expect(out.endsWith('\n\n')).toBe(false);
+  });
+
+  it('separates the surviving neighbours by exactly one blank line', () => {
+    const out = removeLogEntry(file, 1) as string;
+    expect(out).not.toMatch(/\n{3}/);
+  });
+
+  it('removes an entry whose marker JSON is malformed', () => {
+    const md = `# Session Log\n\n<!-- claude-remote-log {not json} -->\n## broken\nbody\n\n${entry('b', 'body B')}`;
+    const out = removeLogEntry(md, 0) as string;
+    expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['b']);
+    expect(out).not.toContain('broken');
+  });
+
+  it('returns null for an out-of-range or non-integer index', () => {
+    expect(removeLogEntry(file, 3)).toBeNull();
+    expect(removeLogEntry(file, -1)).toBeNull();
+    expect(removeLogEntry(file, 1.5)).toBeNull();
+    expect(removeLogEntry('# Session Log\n', 0)).toBeNull();
+  });
+
+  it('supports clearing every entry for one conversation, highest index first', () => {
+    const shared = `# Session Log\n\n${entry('x', 'one')}\n${entry('y', 'other')}\n${entry('x', 'two')}`;
+    let out = shared;
+    for (const i of [2, 0]) out = removeLogEntry(out, i) as string;
+    expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['y']);
+    expect(out).toContain('other');
   });
 });

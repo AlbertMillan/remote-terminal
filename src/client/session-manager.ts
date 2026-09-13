@@ -239,6 +239,13 @@ class SessionManager {
   private activeTab: 'sessions' | 'projects' = 'sessions';
   private projectBoard: ProjectBoardItem[] = [];
   private selectedProjectCwd: string | null = null;
+  // Entry targeted by the open delete-history-entry modal.
+  private pendingHistoryDelete: {
+    cwd: string;
+    entryIndex: number;
+    claudeSessionId: string | null;
+    siblingCount: number; // other entries sharing the same claudeSessionId
+  } | null = null;
   private backfillPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private failedBackfills = new Set<string>();
 
@@ -346,6 +353,16 @@ class SessionManager {
         if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode);
         return;
       }
+      const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
+      if (delBtn) {
+        this.showDeleteEntryModal({
+          cwd: delBtn.getAttribute('data-delete-cwd') || '',
+          entryIndex: Number(delBtn.getAttribute('data-delete-entry')),
+          claudeSessionId: delBtn.getAttribute('data-delete-session') || null,
+          siblingCount: Number(delBtn.getAttribute('data-delete-siblings')) || 0,
+        });
+        return;
+      }
       const copyBtn = target.closest('[data-copy]') as HTMLElement | null;
       if (copyBtn) {
         const sid = copyBtn.getAttribute('data-copy') || '';
@@ -402,6 +419,10 @@ class SessionManager {
       if (e.key === 'Enter') this.confirmCategoryAction();
     });
 
+    // Delete history-entry modal
+    document.getElementById('delete-entry-cancel')?.addEventListener('click', () => this.hideDeleteEntryModal());
+    document.getElementById('delete-entry-confirm')?.addEventListener('click', () => this.confirmDeleteEntry());
+
     // Settings modal
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
     document.getElementById('settings-cancel')?.addEventListener('click', () => this.hideSettingsModal());
@@ -425,6 +446,7 @@ class SessionManager {
         this.hideCategoryModal();
         this.hideSettingsModal();
         this.hideShortcutsModal();
+        this.hideDeleteEntryModal();
       }
       // Show keyboard shortcuts: ?
       // Skip when an input/textarea is focused (modal inputs or xterm helper
@@ -479,6 +501,9 @@ class SessionManager {
     });
     document.getElementById('shortcuts-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideShortcutsModal();
+    });
+    document.getElementById('delete-entry-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.hideDeleteEntryModal();
     });
   }
 
@@ -1734,7 +1759,9 @@ class SessionManager {
         project.entries.length === 0
           ? '<div class="project-empty">No entries yet.</div>'
           : `<h3 class="project-log-subhead">Session history</h3>` +
-            project.entries.map((e) => this.renderLogEntry(e, project.cwd)).join('');
+            project.entries
+              .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
+              .join('');
       entriesEl.innerHTML = phasesHtml + entriesHtml;
     }
     this.renderProjectList(); // refresh active highlight
@@ -1785,7 +1812,19 @@ class SessionManager {
       .join('')}</div>`;
   }
 
-  private renderLogEntry(entry: ParsedLogEntry, cwd: string): string {
+  /**
+   * How many OTHER entries in the same log point at this entry's Claude session.
+   * The generator writes one entry per session close, so a long-running
+   * conversation has several entries backed by a single transcript file — which
+   * the transcript can only be deleted along with.
+   */
+  private countSiblingEntries(project: ProjectBoardItem, entry: ParsedLogEntry): number {
+    const sid = entry.meta?.claudeSessionId;
+    if (!sid || sid === 'backfill' || sid === 'unknown') return 0;
+    return project.entries.filter((e) => e.meta?.claudeSessionId === sid).length - 1;
+  }
+
+  private renderLogEntry(entry: ParsedLogEntry, cwd: string, index: number, siblingCount: number): string {
     const meta = entry.meta;
     const date = meta?.date ? new Date(meta.date) : null;
     const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
@@ -1795,12 +1834,16 @@ class SessionManager {
     // Resume/Fork controls only make sense when the entry carries a real Claude session id.
     const sid = meta?.claudeSessionId;
     const hasSid = !!sid && sid !== 'backfill' && sid !== 'unknown';
-    const actions = hasSid
-      ? `<span class="log-entry-actions">
-          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" title="Resume this Claude session">Resume</button>
-          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" title="Fork this Claude session into a new branch">Fork</button>
-        </span>`
+    const openButtons = hasSid
+      ? `<button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" title="Resume this Claude session">Resume</button>
+          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" title="Fork this Claude session into a new branch">Fork</button>`
       : '';
+    // Delete is offered for every entry, including ones with no usable session id
+    // (those are log-only removals — there's no transcript to find).
+    const actions = `<span class="log-entry-actions">
+          ${openButtons}
+          <button class="log-entry-open log-entry-delete" data-delete-entry="${index}" data-delete-cwd="${escapeAttr(cwd)}" data-delete-session="${escapeAttr(hasSid ? (sid as string) : '')}" data-delete-siblings="${siblingCount}" title="Delete this entry and its local conversation">Delete</button>
+        </span>`;
     const head = `
       <div class="log-entry-head">
         ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
@@ -1824,6 +1867,108 @@ class SessionManager {
         return `<p>${withInline}</p>`;
       })
       .join('');
+  }
+
+  /**
+   * Confirm removal of one session-history entry. Wording depends on what the
+   * click will actually destroy: an entry whose conversation is referenced by
+   * other entries can't take the transcript with it unless the user opts into
+   * clearing all of them, so the checkbox appears only in that case.
+   */
+  private showDeleteEntryModal(target: {
+    cwd: string;
+    entryIndex: number;
+    claudeSessionId: string | null;
+    siblingCount: number;
+  }): void {
+    if (!target.cwd || !Number.isInteger(target.entryIndex) || target.entryIndex < 0) return;
+    this.pendingHistoryDelete = target;
+
+    const { claudeSessionId: sid, siblingCount } = target;
+    const shortSid = sid ? sid.slice(0, 8) : '';
+    let summary: string;
+    if (!sid) {
+      summary =
+        'Remove this entry from <code>SESSION-LOG.md</code>. It carries no Claude session id, so there is no local conversation to delete.';
+    } else if (siblingCount > 0) {
+      summary =
+        `Remove this entry from <code>SESSION-LOG.md</code>. ${siblingCount} other ` +
+        `${siblingCount === 1 ? 'entry' : 'entries'} also came from conversation <code>${escapeHtml(shortSid)}</code>, ` +
+        `so its local transcript is kept unless you delete ${siblingCount === 1 ? 'both' : 'all of them'}.`;
+    } else {
+      summary =
+        `Remove this entry from <code>SESSION-LOG.md</code> and permanently delete the local ` +
+        `conversation <code>${escapeHtml(shortSid)}.jsonl</code>. It can no longer be resumed or forked. This cannot be undone.`;
+    }
+    const summaryEl = document.getElementById('delete-entry-summary');
+    if (summaryEl) summaryEl.innerHTML = summary;
+
+    const allRow = document.getElementById('delete-entry-all-row');
+    const allBox = document.getElementById('delete-entry-all') as HTMLInputElement | null;
+    const allLabel = document.getElementById('delete-entry-all-label');
+    const showAll = !!sid && siblingCount > 0;
+    allRow?.classList.toggle('hidden', !showAll);
+    if (allBox) allBox.checked = false;
+    if (allLabel && showAll) {
+      allLabel.textContent = `Delete all ${siblingCount + 1} entries for this conversation, and the conversation itself`;
+    }
+
+    const errEl = document.getElementById('delete-entry-error');
+    errEl?.classList.add('hidden');
+    const confirmBtn = document.getElementById('delete-entry-confirm') as HTMLButtonElement | null;
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Delete';
+    }
+    document.getElementById('delete-entry-modal')?.classList.remove('hidden');
+  }
+
+  private hideDeleteEntryModal(): void {
+    document.getElementById('delete-entry-modal')?.classList.add('hidden');
+    this.pendingHistoryDelete = null;
+  }
+
+  private async confirmDeleteEntry(): Promise<void> {
+    const target = this.pendingHistoryDelete;
+    if (!target) return;
+    const allRow = document.getElementById('delete-entry-all-row');
+    const allBox = document.getElementById('delete-entry-all') as HTMLInputElement | null;
+    const scope = allBox?.checked && allRow && !allRow.classList.contains('hidden') ? 'conversation' : 'entry';
+    const confirmBtn = document.getElementById('delete-entry-confirm') as HTMLButtonElement | null;
+    const errEl = document.getElementById('delete-entry-error');
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting...';
+    }
+    try {
+      const res = await fetch('/api/project-logs/entry/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: target.cwd,
+          entryIndex: target.entryIndex,
+          claudeSessionId: target.claudeSessionId,
+          scope,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      this.hideDeleteEntryModal();
+      // Refresh the board, then re-render the open project so the entry disappears.
+      await this.loadProjectBoard();
+      if (this.selectedProjectCwd) this.showProjectLog(this.selectedProjectCwd);
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = err instanceof Error ? err.message : 'Delete failed';
+        errEl.classList.remove('hidden');
+      }
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Delete';
+      }
+    }
   }
 
   private async resyncSelectedProject(): Promise<void> {

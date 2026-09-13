@@ -165,6 +165,15 @@ function scanProjects(): DiscoveredProject[] {
   return projects;
 }
 
+/**
+ * Drop the discovery cache so the very next call re-scans. Call this after a
+ * mutation that changes what discovery would report (e.g. deleting a
+ * transcript), otherwise the dashboard shows stale counts for up to the TTL.
+ */
+export function invalidateProjectCache(): void {
+  cache = null;
+}
+
 /** Find a discovered project by working directory (case/separator-insensitive). */
 export function findProjectByCwd(cwd: string): DiscoveredProject | undefined {
   const key = pathKey(cwd);

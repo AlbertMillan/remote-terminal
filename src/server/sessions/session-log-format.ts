@@ -140,3 +140,25 @@ export function buildEntrySkeleton(opts: {
     `**Blockers:** ${hints.blockers}`,
   ].join('\n');
 }
+
+/**
+ * Remove the entry at `index` (as returned by parseLogEntries) from a
+ * SESSION-LOG.md, returning the rewritten markdown — or null if the index is
+ * out of range.
+ *
+ * The slice runs from the entry's own marker to the next marker (or EOF), so
+ * everything preceding the first marker — the "# Session Log" header and the
+ * `claude-remote-phases` manifest block — is always preserved. Blank lines are
+ * normalized so removing an entry can't leave a double gap or strip the file's
+ * trailing newline.
+ */
+export function removeLogEntry(markdown: string, index: number): string | null {
+  const matches = [...markdown.matchAll(MARKER_RE)];
+  if (!Number.isInteger(index) || index < 0 || index >= matches.length) return null;
+  const start = matches[index].index ?? 0;
+  const end = index + 1 < matches.length ? matches[index + 1].index ?? markdown.length : markdown.length;
+  const before = markdown.slice(0, start).replace(/\s+$/, '');
+  const after = markdown.slice(end).replace(/^\s+/, '');
+  const joined = before && after ? `${before}\n\n${after}` : before || after;
+  return joined ? `${joined.replace(/\s+$/, '')}\n` : '';
+}

@@ -16,6 +16,7 @@ import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
 import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
 import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
+import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -156,6 +157,41 @@ export async function createApp(): Promise<FastifyInstance> {
     }
     const outcome = await resyncProjectPhases(project.cwd);
     return { cwd: project.cwd, outcome };
+  });
+
+  // Delete one session-history entry from a project's SESSION-LOG.md, and the
+  // backing Claude transcript with it. The transcript is only unlinked once no
+  // surviving entry references it (several entries can share one conversation),
+  // so pass scope: 'conversation' to clear every entry for that session id at once.
+  app.post<{
+    Body?: { cwd?: string; entryIndex?: number; claudeSessionId?: string | null; scope?: string };
+  }>('/api/project-logs/entry/delete', async (request, reply) => {
+    const body = (request.body || {}) as {
+      cwd?: string;
+      entryIndex?: number;
+      claudeSessionId?: string | null;
+      scope?: string;
+    };
+    if (!body.cwd || typeof body.cwd !== 'string') {
+      return reply.status(400).send({ error: 'cwd required' });
+    }
+    if (typeof body.entryIndex !== 'number' || !Number.isInteger(body.entryIndex) || body.entryIndex < 0) {
+      return reply.status(400).send({ error: 'entryIndex required (non-negative integer)' });
+    }
+    try {
+      return deleteHistoryEntry({
+        cwd: body.cwd,
+        entryIndex: body.entryIndex,
+        expectedClaudeSessionId: body.claudeSessionId ?? null,
+        scope: body.scope === 'conversation' ? 'conversation' : 'entry',
+      });
+    } catch (error) {
+      if (error instanceof HistoryDeleteError) {
+        return reply.status(error.status).send({ error: error.message });
+      }
+      logger.error({ error }, 'project-log: entry delete failed');
+      return reply.status(500).send({ error: error instanceof Error ? error.message : 'Delete failed' });
+    }
   });
 
   // Claude session ID registration (called by the Stop hook)

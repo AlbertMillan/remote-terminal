@@ -38,3 +38,6 @@ coverage/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Auto-generated per-session changelog (claude-remote project-log)
+SESSION-LOG.md

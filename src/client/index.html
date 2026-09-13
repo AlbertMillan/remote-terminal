@@ -278,6 +278,26 @@
     </div>
   </div>
 
+  <!-- Delete History Entry Modal -->
+  <div id="delete-entry-modal" class="modal hidden">
+    <div class="modal-content">
+      <h3>Delete Session History Entry</h3>
+      <p id="delete-entry-summary" class="modal-text"></p>
+      <div id="delete-entry-all-row" class="setting-item hidden">
+        <input type="checkbox" id="delete-entry-all">
+        <label for="delete-entry-all">
+          <span id="delete-entry-all-label">Delete every entry for this conversation</span>
+          <div class="setting-description">Required to remove the local conversation file while other entries still reference it</div>
+        </label>
+      </div>
+      <p id="delete-entry-error" class="modal-error hidden"></p>
+      <div class="modal-actions">
+        <button id="delete-entry-cancel" class="btn-secondary">Cancel</button>
+        <button id="delete-entry-confirm" class="btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content">
