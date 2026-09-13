@@ -67,11 +67,16 @@ export async function createApp(): Promise<FastifyInstance> {
     }
   }
 
-  // Create Fastify instance
-  const app = Fastify({
-    logger: false, // We use our own logger
-    https: httpsOptions,
-  });
+  // Create Fastify instance. When TLS is off, `https` must be OMITTED rather than
+  // passed as undefined: a literal `https: undefined` matches none of Fastify's
+  // overloads, so it falls back to inferring the HTTP/2 signature and every route
+  // handler downstream then mismatches on Http2ServerRequest vs IncomingMessage.
+  // The TLS branch really does produce FastifyInstance<https.Server>, which is not
+  // assignable to the http default, hence the narrow cast — only the raw-server
+  // generic differs; the instance is identical at runtime.
+  const app: FastifyInstance = httpsOptions
+    ? (Fastify({ logger: false, https: httpsOptions }) as unknown as FastifyInstance)
+    : Fastify({ logger: false });
 
   // Register WebSocket plugin
   await app.register(fastifyWebsocket);

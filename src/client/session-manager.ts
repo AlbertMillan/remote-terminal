@@ -1459,7 +1459,7 @@ class SessionManager {
       const draggedSession = this.sessions.get(this.draggedSessionId);
       if (!draggedSession) return;
 
-      const categorySection = li.closest('.category-section');
+      const categorySection = li.closest('.category-section') as HTMLElement | null;
       const categoryIdAttr = categorySection?.dataset.categoryId;
       const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
 
@@ -1494,7 +1494,7 @@ class SessionManager {
       e.preventDefault();
       e.stopPropagation();
 
-      const categorySection = li.closest('.category-section');
+      const categorySection = li.closest('.category-section') as HTMLElement | null;
       const categoryIdAttr = categorySection?.dataset.categoryId;
       const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
 

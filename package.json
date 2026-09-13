@@ -8,6 +8,7 @@
     "build": "npm run build:server && npm run build:client",
     "build:server": "esbuild src/server/index.ts --bundle --platform=node --target=node20 --outdir=dist/server --format=esm --packages=external",
     "build:client": "esbuild src/client/terminal.ts src/client/session-manager.ts --bundle --outdir=dist/client --format=esm && node scripts/copy-client-assets.mjs",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
     "dev": "tsx watch src/server/index.ts",
     "start": "node dist/server/index.js",
     "lint": "eslint src",
