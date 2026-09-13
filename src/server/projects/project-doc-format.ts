@@ -91,6 +91,12 @@ export function emptyFrontmatter(): Frontmatter {
  */
 function splitFrontmatter(markdown: string): { fm: string[]; body: string[] } {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  // Drop the single empty element a trailing newline produces. It is an artifact
+  // of the file's final "\n" (which renderProjectDoc always writes), not content
+  // — and left in place it becomes a raw item at the end of the last track, so
+  // each append would insert another blank line than the one before.
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
   if (lines[0]?.trim() !== '---') return { fm: [], body: lines };
   const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
   if (end === -1) return { fm: [], body: lines }; // unterminated fence — treat as body

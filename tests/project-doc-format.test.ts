@@ -128,6 +128,19 @@ describe('renderProjectDoc', () => {
     expect(renderProjectDoc(parseProjectDoc(src))).toBe(src);
   });
 
+  it('does not accumulate blank lines across repeated appends', () => {
+    // The file's trailing newline must not become a raw item inside the last
+    // track, or every append would insert a growing run of blank lines.
+    let md = '';
+    for (let i = 0; i < 4; i++) {
+      const doc = parseProjectDoc(md);
+      addFeature(doc, { title: `Feature ${i}` });
+      md = renderProjectDoc(doc);
+    }
+    expect(md).not.toMatch(/\n\n- \[/);
+    expect(md.split('\n').filter((l) => l.startsWith('- ['))).toHaveLength(4);
+  });
+
   it('omits the frontmatter fence when there is nothing to put in it', () => {
     expect(renderProjectDoc(parseProjectDoc('## Track: T\n- [ ] `f-1` A\n'))).not.toContain('---');
   });

@@ -18,6 +18,7 @@ import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases 
 import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
 import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
+import { registerProjectRoutes } from './projects/routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -119,6 +120,9 @@ export async function createApp(): Promise<FastifyInstance> {
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };
   });
+
+  // Project workspace: canonical PROJECT.md board, registry and feature edits.
+  registerProjectRoutes(app);
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {
