@@ -34,8 +34,10 @@ import {
   GATE_BEFORE,
   isLive,
   nextStage,
+  STAGE_ORDER,
   type Job,
   type JobWithStages,
+  type StageName,
 } from './types.js';
 
 const logger = createLogger('job-runner');
@@ -214,6 +216,7 @@ async function executeDesign(job: Job): Promise<void> {
       updateJob(job.id, {
         worktreePath: created.path,
         branch: created.branch,
+        baseBranch: created.baseBranch,
         detail: created.initialisedRepo
           ? 'Initialised a git repo for this project — work is committed locally and never pushed.'
           : null,
@@ -224,8 +227,9 @@ async function executeDesign(job: Job): Promise<void> {
     }
   }
 
-  const answer = pendingAnswers.get(job.id) ?? null;
-  pendingAnswers.delete(job.id);
+  // Consume any answer the user gave to a previous pass's question.
+  const answer = job.pendingAnswer;
+  if (answer) updateJob(job.id, { pendingAnswer: null });
 
   const result = await runDesignStage({ job, worktreePath, answer });
 
@@ -239,18 +243,11 @@ async function executeDesign(job: Job): Promise<void> {
   if (result.openQuestion) {
     // A question the design pass could not settle. Park on it rather than let
     // it guess — this is the whole point of the gate.
-    finishStage(job.id, 'design', 'passed', 'Needs a decision');
-    updateJob(job.id, {
-      status: 'parked',
-      stage: 'design',
-      gate: null,
-      parkReason: 'question',
-      detail: result.openQuestion,
-    });
-    logger.info({ jobId: job.id }, 'job: parked on an open question');
+    parkOnQuestion(job, 'design', result.openQuestion);
     return;
   }
 
+  if (!stillLive(job.id)) return;
   finishStage(job.id, 'design', 'passed', result.specPath);
   const gate = GATE_AFTER.design;
   updateJob(job.id, {
@@ -263,12 +260,17 @@ async function executeDesign(job: Job): Promise<void> {
   logger.info({ jobId: job.id, branch }, 'job: parked at the design gate');
 }
 
-/** The spec path recorded by the design stage, needed by implement. */
+/**
+ * The spec path recorded by the design stage, needed by implement.
+ *
+ * Only a `passed` design has a usable spec: a design that stopped on a question
+ * is recorded as `needs_decision`, so no sentinel string is needed to tell the
+ * two apart.
+ */
 function specPathOf(jobId: string): string | null {
   const stages = getJobWithStages(jobId)?.stages ?? [];
   const design = stages.find((s) => s.name === 'design');
-  const path = design?.status === 'passed' ? design.detail : null;
-  return path && path !== 'Needs a decision' ? path : null;
+  return design?.status === 'passed' ? design.detail : null;
 }
 
 /** Guard the stages that cannot run without a worktree. */
@@ -279,9 +281,22 @@ function requireWorktree(job: Job): string {
   return job.worktreePath;
 }
 
-/** The branch this job's work is measured and merged against. */
+/**
+ * The branch this job's work is measured and merged against.
+ *
+ * Recorded on the job when its worktree was created. Falling back to the
+ * project's CURRENT branch would mean a job that sat parked while you switched
+ * branches silently rebases and diffs against the wrong base — so the fallback
+ * only applies to jobs created before the column existed.
+ */
 async function baseBranchOf(job: Job): Promise<string> {
-  return (await currentBranch(job.projectCwd)) || 'main';
+  if (job.baseBranch) return job.baseBranch;
+  const fallback = (await currentBranch(job.projectCwd)) || 'main';
+  logger.warn(
+    { jobId: job.id, fallback },
+    'job: no recorded base branch, falling back to the current branch'
+  );
+  return fallback;
 }
 
 /** Implement stage: build the approved spec, then continue to integrate. */
@@ -302,19 +317,12 @@ async function executeImplement(job: Job): Promise<void> {
   if (result.openQuestion) {
     // The spec turned out to be unworkable. Park rather than let the run
     // improvise a design the user never approved.
-    finishStage(job.id, 'implement', 'failed', 'Blocked — the approved spec does not hold');
-    updateJob(job.id, {
-      status: 'parked',
-      stage: 'implement',
-      gate: null,
-      parkReason: 'question',
-      detail: result.openQuestion,
-    });
-    logger.info({ jobId: job.id }, 'job: implement blocked on the spec');
+    parkOnQuestion(job, 'implement', result.openQuestion, 'the approved spec does not hold');
     return;
   }
 
   const { files, insertions, deletions } = result.stat;
+  if (!stillLive(job.id)) return;
   finishStage(job.id, 'implement', 'passed', `${files} files +${insertions}/-${deletions}`);
   // No gate here: implement flows straight into integrate so the diff the user
   // eventually reviews is already rebased onto current base.
@@ -330,17 +338,15 @@ async function executeIntegrate(job: Job): Promise<void> {
 
   if (result.outcome === 'conflict') {
     // Two changes disagree about the same lines. Deciding which wins is exactly
-    // the kind of call that should reach a person.
-    finishStage(job.id, 'integrate', 'failed', result.detail);
-    updateJob(job.id, {
-      status: 'parked',
-      stage: 'integrate',
-      gate: null,
-      parkReason: 'question',
-      detail:
-        `${result.detail}. Take over to resolve it in the worktree, ` +
+    // the kind of call that should reach a person. Answering re-attempts the
+    // rebase — which is what you want once you have resolved it via Take over.
+    parkOnQuestion(
+      job,
+      'integrate',
+      `${result.detail}. Take over to resolve it in the worktree and then continue, ` +
         `or cancel this job and re-dispatch it against the current base.`,
-    });
+      result.detail ?? undefined
+    );
     return;
   }
 
@@ -350,6 +356,7 @@ async function executeIntegrate(job: Job): Promise<void> {
     'passed',
     result.outcome === 'already-current' ? `already current with ${baseBranch}` : `rebased onto ${baseBranch}`
   );
+  if (!stillLive(job.id)) return;
   updateJob(job.id, { status: 'queued', stage: 'integrate', detail: null });
   void pump();
 }
@@ -372,6 +379,7 @@ async function executeReview(job: Job): Promise<void> {
   // clean and the rule lands with the merge.
   await commitAll(worktreePath, 'chore: ignore job review findings');
 
+  if (!stillLive(job.id)) return;
   const count = result.findings?.findings.length ?? 0;
   finishStage(job.id, 'review', 'passed', result.summary);
 
@@ -429,6 +437,7 @@ async function executeFix(job: Job): Promise<void> {
   // An unresolved finding is not a stage failure — the run said so honestly and
   // the user sees it before the merge gate. Mark it skipped so it reads as
   // "something did not happen" rather than "everything was fine".
+  if (!stillLive(job.id)) return;
   finishStage(job.id, 'fix', result.unresolved.length > 0 ? 'skipped' : 'passed', detail);
   updateJob(job.id, { status: 'queued', stage: 'fix', detail: null });
   void pump();
@@ -458,6 +467,7 @@ async function executeQa(job: Job): Promise<void> {
     if (check.detail) detailParts.push(`${check.name}: ${check.detail.split('\n')[0]}`);
   }
 
+  if (!stillLive(job.id)) return;
   finishStage(job.id, 'qa', result.outcome, detailParts.join(' | ').slice(0, 500));
   updateJob(job.id, {
     status: 'queued',
@@ -485,6 +495,8 @@ async function executeMerge(job: Job): Promise<void> {
     title: job.title,
   });
 
+  // No stillLive() guard here: the merge has already landed in the repo, so
+  // recording it is mandatory even if the job was cancelled mid-merge.
   finishStage(
     job.id,
     'merge',
@@ -531,8 +543,50 @@ async function executeRebuild(job: Job): Promise<void> {
   void pump();
 }
 
-/** Answers supplied for a parked question, consumed by the next design pass. */
-const pendingAnswers = new Map<string, string>();
+/**
+ * Park a job on a question the stage could not settle.
+ *
+ * `stage` is stepped back to the asking stage's PREDECESSOR, so once answered,
+ * nextStage() resolves to the stage that asked and re-runs it. Without this the
+ * job restarted from design, discarding an implementation to answer a question
+ * integrate had raised.
+ *
+ * The asking stage's row is marked `needs_decision` rather than passed: a tick
+ * beside a job that is waiting on the user is a lie, and `failed` would be one
+ * too, since nothing went wrong.
+ */
+function parkOnQuestion(job: Job, stage: StageName, question: string, stageDetail?: string): void {
+  if (!stillLive(job.id)) return;
+  finishStage(job.id, stage, 'needs_decision', stageDetail ?? 'Needs a decision');
+  updateJob(job.id, {
+    status: 'parked',
+    stage: stageBefore(stage),
+    gate: null,
+    parkReason: 'question',
+    detail: question,
+  });
+  logger.info({ jobId: job.id, stage }, 'job: parked on an open question');
+}
+
+/** The stage preceding `stage` in pipeline order, or null for the first. */
+function stageBefore(stage: StageName): StageName | null {
+  const index = STAGE_ORDER.indexOf(stage);
+  return index > 0 ? STAGE_ORDER[index - 1] : null;
+}
+
+/**
+ * True when the job is still the one we started working on.
+ *
+ * A stage runs for minutes; the user may cancel in the middle of it. Every
+ * terminal write checks this first, so a cancellation cannot be overwritten by
+ * the stage that was already in flight when it arrived.
+ */
+function stillLive(jobId: string): boolean {
+  const current = getJob(jobId);
+  if (current && isLive(current.status)) return true;
+  logger.info({ jobId, status: current?.status }, 'job: no longer live, discarding stage result');
+  return false;
+}
 
 /**
  * Approve a gate, letting the job continue to the next stage.
@@ -558,9 +612,17 @@ export function approveGate(jobId: string): JobWithStages {
 }
 
 /**
- * Answer a parked question. The design stage re-runs with the answer, so the
- * spec ends up reflecting the decision rather than the answer living only in a
- * chat message.
+ * Answer a parked question, re-running the stage that asked it.
+ *
+ * `stage` already points at that stage's predecessor (see parkOnQuestion), so
+ * simply re-queueing resolves nextStage() back to the asking stage. The answer
+ * is stored on the job, which is what lets it survive a restart and reach a
+ * stage that may not run for minutes.
+ *
+ * Design and implement fold the answer into their prompts, so the decision ends
+ * up in the spec and the code rather than only in a message. Integrate has
+ * nothing to fold it into — answering there re-attempts the rebase, which is
+ * what you want once Take over has resolved the conflict.
  */
 export function answerQuestion(jobId: string, answer: string): JobWithStages {
   const job = getJob(jobId);
@@ -568,16 +630,14 @@ export function answerQuestion(jobId: string, answer: string): JobWithStages {
   if (job.parkReason !== 'question') throw new JobError('This job has no open question', 409);
   if (!answer.trim()) throw new JobError('An answer is required');
 
-  pendingAnswers.set(jobId, answer.trim());
-  // Re-run the same stage rather than advancing past it.
   updateJob(jobId, {
     status: 'queued',
-    stage: null,
+    pendingAnswer: answer.trim(),
     gate: null,
     parkReason: null,
     detail: null,
   });
-  logger.info({ jobId }, 'job: question answered, re-running design');
+  logger.info({ jobId, stage: nextStage(job.stage) }, 'job: question answered, re-running stage');
   void pump();
   return getJobWithStages(jobId) as JobWithStages;
 }
@@ -616,11 +676,26 @@ export function retryJob(jobId: string): JobWithStages {
   return getJobWithStages(jobId) as JobWithStages;
 }
 
-/** Cancel a job and tear down its worktree. */
+/**
+ * Cancel a job and tear down its worktree.
+ *
+ * Refuses while a stage is actually executing. Cancelling mid-stage used to
+ * delete the worktree out from under a running `claude -p` and then have that
+ * stage's terminal write flip the job back to queued, resuming a pipeline the
+ * user had just cancelled. There is no way to interrupt a stage cleanly, so the
+ * honest answer is to say so.
+ */
 export async function cancelJob(jobId: string): Promise<JobWithStages> {
   const job = getJob(jobId);
   if (!job) throw new JobError('Unknown job', 404);
   if (!isLive(job.status)) throw new JobError('This job has already finished', 409);
+  if (inFlight.has(jobId)) {
+    throw new JobError(
+      `The ${job.stage ?? 'current'} stage is still running and cannot be interrupted. ` +
+        'Wait for it to finish, then cancel.',
+      409
+    );
+  }
 
   updateJob(jobId, { status: 'cancelled', gate: null, parkReason: null });
   if (job.worktreePath) {
@@ -643,7 +718,14 @@ export function reconcileJobsOnStartup(): void {
 
   for (const job of stranded) {
     if (job.stage) {
-      finishStage(job.id, job.stage, 'pending', 'Interrupted by a server restart');
+      // Not finishStage(): that stamps finishedAt, leaving a stage both pending
+      // and finished.
+      updateStage(job.id, job.stage, {
+        status: 'pending',
+        detail: 'Interrupted by a server restart',
+        startedAt: null,
+        finishedAt: null,
+      });
     }
     // Step back so the interrupted stage runs again rather than being skipped.
     const previous = previousStageOf(job);

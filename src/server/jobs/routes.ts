@@ -41,7 +41,7 @@ export function registerJobRoutes(app: FastifyInstance): void {
 
     const specStage = job.stages.find((s) => s.name === 'design');
     const specRel = specStage?.status === 'passed' ? specStage.detail : null;
-    if (!job.worktreePath || !specRel || specRel === 'Needs a decision') {
+    if (!job.worktreePath || !specRel) {
       return { spec: null, path: null };
     }
     const abs = join(job.worktreePath, specRel);

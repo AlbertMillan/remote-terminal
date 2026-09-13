@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject } from './workspace.js';
 import { getRollup } from './rollup.js';
+import { pathKey } from '../sessions/project-discovery.js';
 import { loadRegistry, saveRegistry, normalizeRegistry } from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
@@ -56,12 +57,13 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const { cwd, feature } = request.query;
       if (!cwd) return reply.status(400).send({ error: 'cwd required' });
-      const project = findWorkspaceProject(cwd);
+
+      // Build the board once and reuse it for both the lookup and the payload.
+      const allProjects = getWorkspaceBoard();
+      const project = findWorkspaceProject(cwd, allProjects);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
-      const board = getWorkspaceBoard().find(
-        (p) => p.cwd.toLowerCase() === project.cwd.toLowerCase()
-      );
+      const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
       const state = readProjectDoc(project);
       const target = feature
         ? state.doc.tracks

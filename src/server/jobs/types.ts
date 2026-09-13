@@ -56,7 +56,19 @@ export type JobStatus =
   | 'failed' // a stage failed hard; worktree retained for inspection
   | 'cancelled'; // user abandoned it
 
-export type StageStatus = 'pending' | 'running' | 'passed' | 'skipped' | 'failed';
+export type StageStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'skipped'
+  | 'failed'
+  /**
+   * The stage ran, could not settle a decision, and stopped rather than guess.
+   * Distinct from 'passed' because the pipeline strip must not show a tick
+   * beside a job that is waiting on the user, and distinct from 'failed'
+   * because nothing went wrong.
+   */
+  | 'needs_decision';
 
 /** Why a job is parked — distinguishes "waiting for you" from "needs an answer". */
 export type ParkReason = 'gate' | 'question';
@@ -82,6 +94,17 @@ export interface Job {
   detail: string | null;
   worktreePath: string | null;
   branch: string | null;
+  /**
+   * The branch this job branched from. Recorded once at worktree creation:
+   * re-deriving it from the project's current branch later means a job rebases
+   * and merges against whatever happens to be checked out at the time.
+   */
+  baseBranch: string | null;
+  /**
+   * An answer supplied for a parked question, consumed by the stage that asked.
+   * Persisted because a job may sit parked for days across restarts.
+   */
+  pendingAnswer: string | null;
   /**
    * Claude session id of the most recent stage run, so the user can take over
    * that exact conversation interactively instead of restarting it.

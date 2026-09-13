@@ -92,17 +92,35 @@ function dedupeByKey(paths: string[]): string[] {
  * directory whose transcripts have been deleted disappears from it entirely.
  * Decoding the slug against the filesystem recovers those, and drops the ones
  * whose directory is genuinely gone.
+ *
+ * Cached on the same short TTL as discoverProjects(), because each decode walks
+ * the filesystem segment by segment — roughly a hundred readdir calls across a
+ * machine's worth of slugs — and this sits on the board's poll path.
  */
+const SLUG_CACHE_TTL_MS = 5000;
+let slugCache: { at: number; cwds: string[] } | null = null;
+
 function recoverCwdsFromSlugs(): string[] {
+  const now = Date.now();
+  if (slugCache && now - slugCache.at < SLUG_CACHE_TTL_MS) return slugCache.cwds;
+
   const projectsDir = join(homedir(), '.claude', 'projects');
+  let cwds: string[] = [];
   try {
     const slugs = readdirSync(projectsDir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
-    return decodeProjectSlugs(slugs);
+    cwds = decodeProjectSlugs(slugs);
   } catch {
-    return [];
+    cwds = [];
   }
+  slugCache = { at: now, cwds };
+  return cwds;
+}
+
+/** Drop the slug cache, for tests and for callers that just changed the tree. */
+export function invalidateSlugCache(): void {
+  slugCache = null;
 }
 
 /** Directory mtime as an ISO string, or null when unreadable. */
@@ -226,8 +244,17 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
   return board;
 }
 
-/** Resolve a cwd from a request to a registry entry, or null if not on the board. */
-export function findWorkspaceProject(cwd: string): RegistryProject | null {
+/**
+ * Resolve a cwd from a request to a registry entry, or null if not on the board.
+ *
+ * Pass `board` when the caller has already built one: otherwise a single
+ * request that both resolves a project and returns the board pays for two full
+ * discovery passes.
+ */
+export function findWorkspaceProject(
+  cwd: string,
+  board?: WorkspaceProject[]
+): RegistryProject | null {
   const registry = loadRegistry();
   const key = pathKey(cwd);
 
@@ -236,6 +263,6 @@ export function findWorkspaceProject(cwd: string): RegistryProject | null {
 
   // Not explicitly registered — accept it only if it is actually on the board,
   // so a request can never point the store at an arbitrary directory.
-  const onBoard = getWorkspaceBoard(registry).find((p) => pathKey(p.cwd) === key);
+  const onBoard = (board ?? getWorkspaceBoard(registry)).find((p) => pathKey(p.cwd) === key);
   return onBoard ? { cwd: onBoard.cwd } : null;
 }

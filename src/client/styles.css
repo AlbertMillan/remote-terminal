@@ -3066,3 +3066,5 @@ body {
   .rv-project-name { min-width: 0; flex: 1 1 100%; }
   .rv-project-badges { flex-wrap: wrap; }
 }
+
+.jb-stage.needs_decision { color: var(--warning); }

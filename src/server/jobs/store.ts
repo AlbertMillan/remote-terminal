@@ -35,6 +35,8 @@ interface JobRow {
   detail: string | null;
   worktree_path: string | null;
   branch: string | null;
+  base_branch: string | null;
+  pending_answer: string | null;
   claude_session_id: string | null;
   created_at: string;
   updated_at: string;
@@ -64,6 +66,8 @@ function toJob(row: JobRow): Job {
     detail: row.detail,
     worktreePath: row.worktree_path,
     branch: row.branch,
+    baseBranch: row.base_branch,
+    pendingAnswer: row.pending_answer,
     claudeSessionId: row.claude_session_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -133,15 +137,39 @@ export function getJobWithStages(id: string): JobWithStages | null {
   return job ? { ...job, stages: getJobStages(id) } : null;
 }
 
-/** All jobs, newest first, with their stages. */
+/**
+ * All jobs, newest first, with their stages.
+ *
+ * Stages are fetched in ONE query and grouped in memory rather than one query
+ * per job: this is on the job board's poll path, and every job carries eight
+ * stage rows.
+ */
 export function listJobs(): JobWithStages[] {
-  const rows = getDatabase()
-    .prepare('SELECT * FROM jobs ORDER BY created_at DESC')
-    .all() as JobRow[];
-  return rows.map((row) => ({ ...toJob(row), stages: getJobStages(row.id) }));
+  const db = getDatabase();
+  const rows = db.prepare('SELECT * FROM jobs ORDER BY created_at DESC').all() as JobRow[];
+  if (rows.length === 0) return [];
+
+  const stageRows = db
+    .prepare('SELECT * FROM job_stages ORDER BY id')
+    .all() as StageRow[];
+
+  const byJob = new Map<string, JobStage[]>();
+  for (const row of stageRows) {
+    const list = byJob.get(row.job_id);
+    if (list) list.push(toStage(row));
+    else byJob.set(row.job_id, [toStage(row)]);
+  }
+
+  return rows.map((row) => ({ ...toJob(row), stages: byJob.get(row.id) ?? [] }));
 }
 
-/** Jobs for one project, newest first. Matching is path-normalized. */
+/**
+ * Jobs for one project, newest first.
+ *
+ * Filtered in memory rather than SQL because matching is path-normalized
+ * (case and separator insensitive), which SQLite cannot express. listJobs()
+ * is a single pair of queries, so this stays cheap.
+ */
 export function listJobsForProject(cwd: string): JobWithStages[] {
   const key = pathKey(cwd);
   return listJobs().filter((j) => pathKey(j.projectCwd) === key);
@@ -165,6 +193,8 @@ export interface JobPatch {
   detail?: string | null;
   worktreePath?: string | null;
   branch?: string | null;
+  baseBranch?: string | null;
+  pendingAnswer?: string | null;
   claudeSessionId?: string | null;
 }
 
@@ -177,6 +207,8 @@ const COLUMN_OF: Record<keyof JobPatch, string> = {
   detail: 'detail',
   worktreePath: 'worktree_path',
   branch: 'branch',
+  baseBranch: 'base_branch',
+  pendingAnswer: 'pending_answer',
   claudeSessionId: 'claude_session_id',
 };
 

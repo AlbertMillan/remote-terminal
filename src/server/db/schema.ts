@@ -194,6 +194,18 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE jobs ADD COLUMN approved_gate TEXT;
       `,
     },
+    {
+      // base_branch: the branch a job actually branched from, so later stages
+      // compare and merge against that rather than whatever the project happens
+      // to have checked out now.
+      // pending_answer: the user's answer to a parked question. In memory it was
+      // lost on restart, silently re-asking the same question.
+      name: '011_add_job_base_branch_and_answer',
+      sql: `
+        ALTER TABLE jobs ADD COLUMN base_branch TEXT;
+        ALTER TABLE jobs ADD COLUMN pending_answer TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

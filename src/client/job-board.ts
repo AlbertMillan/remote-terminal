@@ -20,7 +20,13 @@ export type StageName =
   | 'rebuild';
 
 export type JobStatus = 'queued' | 'running' | 'parked' | 'done' | 'failed' | 'cancelled';
-export type StageStatus = 'pending' | 'running' | 'passed' | 'skipped' | 'failed';
+export type StageStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'skipped'
+  | 'failed'
+  | 'needs_decision';
 export type ParkReason = 'gate' | 'question';
 
 export interface JobStage {
@@ -56,6 +62,8 @@ const STAGE_ICON: Record<StageStatus, string> = {
   passed: '✓',
   skipped: '−',
   failed: '✕',
+  // Deliberately not a tick: the stage ran but is waiting on the user.
+  needs_decision: '?',
 };
 
 export type Severity = 'critical' | 'important' | 'nice';
@@ -91,6 +99,12 @@ export class JobBoard {
   /** Findings keyed by job id, loaded when a job parks at the review gate. */
   private findings = new Map<string, Finding[]>();
   private expanded = new Set<string>();
+  /**
+   * Incremented on every load. A response whose token is stale belongs to a
+   * project the user has already navigated away from, and rendering it would
+   * show one project's jobs under another's name.
+   */
+  private loadToken = 0;
 
   constructor(private readonly onTakeOver: (claudeSessionId: string, cwd: string) => void) {}
 
@@ -106,16 +120,24 @@ export class JobBoard {
   // --- Loading -----------------------------------------------------------
 
   async load(cwd: string): Promise<void> {
+    const token = ++this.loadToken;
     this.cwd = cwd;
+
+    let jobs: Job[] = [];
     try {
       const res = await fetch(`/api/jobs?cwd=${encodeURIComponent(cwd)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { jobs: Job[] };
-      this.jobs = data.jobs || [];
+      jobs = data.jobs || [];
     } catch {
-      this.jobs = [];
+      jobs = [];
     }
+    if (token !== this.loadToken) return; // superseded by a newer load
+
+    this.jobs = jobs;
     await this.loadFindingsForGates();
+    if (token !== this.loadToken) return;
+
     this.render();
     this.schedulePoll();
   }
