@@ -2094,10 +2094,29 @@ body {
   word-break: break-all;
 }
 
+/*
+ * The one scroller in the project detail view. The header and badge row stay
+ * pinned; features, jobs and session history scroll together beneath them.
+ * Without `min-height: 0` a flex child refuses to shrink below its content and
+ * the list is simply clipped by the view's `overflow: hidden`.
+ */
+.project-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .project-log-entries {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 16px 24px 40px;
+}
+
+/* Inside the shared scroller it must not scroll on its own (the rollup view
+   still uses this class as its top-level scrolling pane). */
+.project-detail-body > .project-log-entries {
+  flex: 0 0 auto;
+  overflow-y: visible;
 }
 
 .log-entry {
@@ -2416,6 +2435,29 @@ body {
   transition: width 0.2s ease;
 }
 .pw-progress-text { font-size: 11px; color: var(--text-muted); }
+
+.pw-subhead-right {
+  display: flex;
+  align-items: center;
+  /* Its own wrap: grouping these took them out of .pw-subhead's, and on a
+     phone the bar, its label and the button will not share one line. */
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.pw-collapse-all {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.pw-collapse-all:hover { color: var(--text-primary); border-color: var(--accent); }
+.pw-collapse-all:focus-visible { color: var(--text-primary); outline: 1px solid var(--accent); }
 
 .pw-track { margin-bottom: 14px; }
 

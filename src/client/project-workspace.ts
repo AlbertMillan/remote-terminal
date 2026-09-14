@@ -1,4 +1,9 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
+import {
+  isPhaseGroupActivation,
+  setPhaseGroupCollapsed,
+  togglePhaseGroup,
+} from './phase-group.js';
 
 /**
  * Client for the project workspace: the canonical PROJECT.md board.
@@ -81,6 +86,27 @@ const STATUS_LABEL: Record<FeatureStatus, string> = {
   blocked: 'Blocked',
 };
 
+/** localStorage key holding the folded tracks, as an array of `trackKey()` strings. */
+const COLLAPSED_TRACKS_KEY = 'pw.collapsedTracks';
+
+function loadCollapsedTracks(): string[] {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_TRACKS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsedTracks(keys: Set<string>): void {
+  try {
+    localStorage.setItem(COLLAPSED_TRACKS_KEY, JSON.stringify([...keys]));
+  } catch {
+    /* private browsing or a full quota — folding still works for this session. */
+  }
+}
+
 export class ProjectWorkspace {
   private board: WorkspaceProject[] = [];
   private selectedCwd: string | null = null;
@@ -90,6 +116,12 @@ export class ProjectWorkspace {
   /** QA contract per project, loaded with the detail view. */
   private qaDocs = new Map<string, QaDoc | null>();
   private qaBusy = new Set<string>();
+  /**
+   * Tracks the user has folded away, keyed by (cwd, track). Held here rather
+   * than in the DOM because every mutation re-renders the whole board, and
+   * persisted so a long index doesn't unfold itself on every reload.
+   */
+  private collapsedTracks = new Set<string>(loadCollapsedTracks());
 
   constructor(
     private readonly onSelect: (cwd: string) => void,
@@ -238,7 +270,10 @@ export class ProjectWorkspace {
       <div class="pw-features">
         <div class="pw-subhead">
           <h3 class="project-log-subhead">Features</h3>
-          ${this.renderProgress(project)}
+          <div class="pw-subhead-right">
+            ${this.renderProgress(project)}
+            ${this.renderCollapseAll(project)}
+          </div>
         </div>
         ${tracks}${empty}
         ${this.renderAddRow(project)}
@@ -344,6 +379,16 @@ export class ProjectWorkspace {
     }
   }
 
+  private renderCollapseAll(project: WorkspaceProject): string {
+    if (project.tracks.length < 2) return '';
+    const allCollapsed = project.tracks.every((t) => this.isCollapsed(project.cwd, t.name));
+    return `
+      <button class="pw-collapse-all" data-cwd="${escapeAttr(project.cwd)}"
+              title="${allCollapsed ? 'Expand' : 'Collapse'} every track">
+        ${allCollapsed ? 'Expand all' : 'Collapse all'}
+      </button>`;
+  }
+
   private renderProgress(project: WorkspaceProject): string {
     const { done, total, in_progress: active, blocked } = project.counts;
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -377,12 +422,83 @@ export class ProjectWorkspace {
       </div>`;
   }
 
+  private trackKey(cwd: string, track: string): string {
+    return JSON.stringify([cwd, track]);
+  }
+
+  private isCollapsed(cwd: string, track: string): boolean {
+    return this.collapsedTracks.has(this.trackKey(cwd, track));
+  }
+
+  /**
+   * Fold or unfold one track. The fold itself is a class toggle on the group —
+   * re-rendering the board would rebuild every feature row and throw away the
+   * focused head for a change CSS already handles. The set is updated alongside
+   * so the fold survives the *next* re-render, whatever triggers it.
+   */
+  private toggleTrack(head: HTMLElement, cwd: string, track: string): void {
+    const collapsed = togglePhaseGroup(head);
+    const key = this.trackKey(cwd, track);
+    if (collapsed) this.collapsedTracks.add(key);
+    else this.collapsedTracks.delete(key);
+    saveCollapsedTracks(this.collapsedTracks);
+    this.syncCollapseAll(head, cwd);
+  }
+
+  /** Fold every track at once, or unfold them all if they are already folded. */
+  private toggleAllTracks(button: HTMLElement, cwd: string): void {
+    const heads = this.trackHeads(button, cwd);
+    if (heads.length === 0) return;
+    const collapse = !heads.every((h) => h.closest('.phase-group')?.classList.contains('collapsed'));
+    for (const head of heads) {
+      setPhaseGroupCollapsed(head, collapse);
+      const key = this.trackKey(cwd, head.dataset.track || '');
+      if (collapse) this.collapsedTracks.add(key);
+      else this.collapsedTracks.delete(key);
+    }
+    saveCollapsedTracks(this.collapsedTracks);
+    this.syncCollapseAll(button, cwd);
+  }
+
+  /**
+   * The track heads of one project, found from any element inside its board.
+   * Scoped to that board and matched on cwd as well as track: only one project
+   * renders at a time today, but a lookup that relies on it is a trap.
+   */
+  private trackHeads(origin: HTMLElement, cwd: string): HTMLElement[] {
+    const root = origin.closest('.pw-features') || origin.ownerDocument;
+    return [...root.querySelectorAll<HTMLElement>('.pw-track-head')].filter(
+      (h) => h.dataset.cwd === cwd
+    );
+  }
+
+  /**
+   * Keep the Collapse all / Expand all button honest after a fold. It is the
+   * one thing on the board that a class toggle can't update on its own.
+   */
+  private syncCollapseAll(origin: HTMLElement, cwd: string): void {
+    const button = origin
+      .closest('.pw-features')
+      ?.querySelector<HTMLElement>('.pw-collapse-all');
+    if (!button) return;
+    const heads = this.trackHeads(origin, cwd);
+    const allCollapsed =
+      heads.length > 0 &&
+      heads.every((h) => h.closest('.phase-group')?.classList.contains('collapsed'));
+    button.textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+    button.title = `${allCollapsed ? 'Expand' : 'Collapse'} every track`;
+  }
+
   private renderTrack(project: WorkspaceProject, track: WorkspaceTrack): string {
     const rows = track.features.map((f) => this.renderFeatureRow(project, f)).join('');
     const done = track.features.filter((f) => f.status === 'done').length;
+    const collapsed = this.isCollapsed(project.cwd, track.name);
     return `
-      <div class="phase-group pw-track">
-        <div class="phase-group-head">
+      <div class="phase-group pw-track${collapsed ? ' collapsed' : ''}">
+        <div class="phase-group-head pw-track-head" role="button" tabindex="0"
+             aria-expanded="${collapsed ? 'false' : 'true'}"
+             data-cwd="${escapeAttr(project.cwd)}" data-track="${escapeAttr(track.name)}">
+          <span class="phase-chevron" aria-hidden="true">▾</span>
           <span class="phase-group-name">${escapeHtml(track.name)}</span>
           <span class="phase-progress">${done}/${track.features.length}</span>
         </div>
@@ -592,6 +708,18 @@ export class ProjectWorkspace {
     container.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
 
+      const collapseAll = target.closest('.pw-collapse-all') as HTMLElement | null;
+      if (collapseAll) {
+        this.toggleAllTracks(collapseAll, collapseAll.dataset.cwd || '');
+        return;
+      }
+
+      const trackHead = target.closest('.pw-track-head') as HTMLElement | null;
+      if (trackHead) {
+        this.toggleTrack(trackHead, trackHead.dataset.cwd || '', trackHead.dataset.track || '');
+        return;
+      }
+
       const status = target.closest('.pw-status') as HTMLElement | null;
       if (status) {
         void this.cycleStatus(status.dataset.cwd || '', status.dataset.id || '');
@@ -638,6 +766,14 @@ export class ProjectWorkspace {
           void this.renameFeature(title.dataset.cwd || '', title.dataset.id || '', next);
         }
       }
+    });
+
+    container.addEventListener('keydown', (event) => {
+      if (!isPhaseGroupActivation(event.key)) return;
+      const head = (event.target as HTMLElement).closest('.pw-track-head') as HTMLElement | null;
+      if (!head) return;
+      event.preventDefault();
+      this.toggleTrack(head, head.dataset.cwd || '', head.dataset.track || '');
     });
 
     container.addEventListener('submit', (event) => {

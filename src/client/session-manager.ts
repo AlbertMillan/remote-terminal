@@ -6,6 +6,7 @@ import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
+import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 
 // Configuration constants
 const REQUEST_TIMEOUT_MS = 30000;
@@ -410,14 +411,14 @@ class SessionManager {
         return;
       }
       const head = target.closest('.phase-group-head') as HTMLElement | null;
-      if (head) this.togglePhaseGroup(head);
+      if (head) togglePhaseGroup(head);
     });
     phasesContainer?.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (!isPhaseGroupActivation(e.key)) return;
       const head = (e.target as HTMLElement).closest('.phase-group-head') as HTMLElement | null;
       if (head) {
         e.preventDefault();
-        this.togglePhaseGroup(head);
+        togglePhaseGroup(head);
       }
     });
 
@@ -1787,13 +1788,6 @@ class SessionManager {
         .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
         .join('')
     );
-  }
-
-  private togglePhaseGroup(head: HTMLElement): void {
-    const group = head.closest('.phase-group');
-    if (!group) return;
-    const collapsed = group.classList.toggle('collapsed');
-    head.setAttribute('aria-expanded', String(!collapsed));
   }
 
   private renderPhaseGroups(groups: PhaseGroup[]): string {
