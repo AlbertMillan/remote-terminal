@@ -3,6 +3,7 @@ import type { IPty } from 'node-pty';
 import { getDefaultShell, getShellArgs, isWindows } from '../utils/platform.js';
 import { createLogger } from '../utils/logger.js';
 import { getConfig } from '../config.js';
+import { withoutInheritedClaudeSession } from '../utils/claude-env.js';
 
 const logger = createLogger('pty-handler');
 
@@ -30,8 +31,12 @@ export function createPty(options: PtyOptions = {}): IPty {
   const cols = options.cols || 80;
   const rows = options.rows || 24;
 
+  // Drop the parent-session markers a `claude` that launched this server stamped on
+  // it (see utils/claude-env.ts). A terminal we hand out is a top-level session; left
+  // in, CLAUDE_CODE_CHILD_SESSION makes every `claude` in it skip saving its
+  // transcript, which silently breaks Fork, resume history and SESSION-LOG.
   const env = {
-    ...process.env,
+    ...withoutInheritedClaudeSession(process.env),
     ...options.env,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',

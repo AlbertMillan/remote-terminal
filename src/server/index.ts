@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { getConfig } from './config.js';
 import { createLogger, getLogDirectory } from './utils/logger.js';
 import { getPlatform } from './utils/platform.js';
+import { scrubProcessEnv } from './utils/claude-env.js';
 
 const logger = createLogger('server');
 
@@ -22,6 +23,18 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 async function main() {
   logger.info({ platform: getPlatform(), logDir: getLogDirectory() }, 'Starting Claude Remote Terminal Server');
+
+  // Done before anything can spawn a child: the server may have been started from
+  // inside a claude-remote terminal (that is what restart-server.ps1 does), in which
+  // case it inherited that conversation's session markers and would pass them to
+  // every PTY and every headless `claude` run. See utils/claude-env.ts.
+  const inherited = scrubProcessEnv();
+  if (inherited.length > 0) {
+    logger.info(
+      { inherited },
+      'Started from inside a Claude Code session; dropped its env markers so terminals save their own transcripts'
+    );
+  }
 
   try {
     const app = await createApp();
