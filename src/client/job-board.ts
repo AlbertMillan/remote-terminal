@@ -203,6 +203,10 @@ export class JobBoard {
 
   async load(cwd: string): Promise<void> {
     const token = ++this.loadToken;
+    // Switching project strands every cached detail for the old one's jobs, and
+    // a cached diff runs to MAX_DIFF_CHARS apiece — so drop them rather than
+    // carry another project's scrollback around for the life of the page.
+    if (this.cwd !== cwd) this.forgetCachedDetail();
     this.cwd = cwd;
 
     let jobs: Job[] = [];
@@ -248,6 +252,14 @@ export class JobBoard {
         }
       })
     );
+  }
+
+  /** Drop every per-job detail cache. */
+  private forgetCachedDetail(): void {
+    this.specs.clear();
+    this.diffs.clear();
+    this.findings.clear();
+    this.expanded.clear();
   }
 
   /**

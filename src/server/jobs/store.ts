@@ -172,9 +172,10 @@ export function listJobs(): JobWithStages[] {
 
   const byJob = new Map<string, JobStage[]>();
   for (const row of stageRows) {
+    const stage = toStage(row);
     const list = byJob.get(row.job_id);
-    if (list) list.push(toStage(row));
-    else byJob.set(row.job_id, [toStage(row)]);
+    if (list) list.push(stage);
+    else byJob.set(row.job_id, [stage]);
   }
 
   return rows.map((row) => {

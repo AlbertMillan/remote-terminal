@@ -35,6 +35,33 @@ export class RunAbortedError extends Error {
   }
 }
 
+/**
+ * A rejection that still knows what the run had spent.
+ *
+ * A stage killed at the 20-minute timeout burned every one of those tokens, so
+ * the failure path has to be able to report them — otherwise the runs worth
+ * knowing the cost of are exactly the ones recorded as free. Absent when the
+ * run died before printing an envelope, which is the honest answer there.
+ */
+export interface SpentOnFailure {
+  spentUsage?: RunUsage;
+}
+
+/** "1200000ms" is not a number anyone reads as 20 minutes on a failed job row. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 120) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes}m`;
+}
+
+/** Tag a rejection with the usage parsed from whatever the run managed to print. */
+function withSpent(error: Error, partial: ClaudeRunResult | null): Error {
+  if (partial) (error as Error & SpentOnFailure).spentUsage = partial.usage;
+  return error;
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency queue — caps simultaneous `claude -p` runs at maxConcurrent.
 // ---------------------------------------------------------------------------
@@ -204,6 +231,26 @@ function parseUsage(envelope: {
 
 /** Parse the `--output-format json` envelope; tolerant of unexpected shapes. */
 export function parseClaudeResult(stdout: string): ClaudeRunResult {
+  return (
+    tryParseClaudeResult(stdout) ?? {
+      isError: false,
+      result: '',
+      permissionDenials: 0,
+      sessionId: null,
+      usage: NO_USAGE,
+    }
+  );
+}
+
+/**
+ * Parse the envelope, or null when there wasn't one.
+ *
+ * The distinction matters on the failure paths: a killed run that never printed
+ * an envelope has no usage to report, and recording a zero-token run for it
+ * would claim the run cost nothing rather than that we don't know.
+ */
+function tryParseClaudeResult(stdout: string): ClaudeRunResult | null {
+  if (!stdout.trim()) return null;
   try {
     const j = JSON.parse(stdout) as {
       is_error?: unknown;
@@ -221,7 +268,7 @@ export function parseClaudeResult(stdout: string): ClaudeRunResult {
       usage: parseUsage(j),
     };
   } catch {
-    return { isError: false, result: '', permissionDenials: 0, sessionId: null, usage: NO_USAGE };
+    return null;
   }
 }
 
@@ -252,10 +299,15 @@ export interface RunOptions extends SpawnOptions {
   failOnDenial?: boolean;
   /**
    * Receives this run's usage as soon as the envelope is parsed — BEFORE the
-   * error and denial checks below. A run that produced an envelope has already
-   * spent its tokens whether or not we accept its output, so recording after
-   * the checks would under-report exactly the runs worth knowing about: the
-   * rejected ones.
+   * error and denial checks below, and on the failure paths as well as the
+   * clean one. A run that produced an envelope has already spent its tokens
+   * whether or not we accept its output, and a run killed at the timeout spent
+   * every token it burned getting there, so recording only on success would
+   * under-report exactly the runs worth knowing the cost of.
+   *
+   * Not called when the run died before printing an envelope: there is no
+   * figure to report, and a zero-token run would claim it cost nothing rather
+   * than that we don't know.
    */
   onUsage?: UsageSink;
 }
@@ -307,13 +359,20 @@ export function spawnClaude(
     // Same teardown as the timeout path — the only difference is who asked.
     const onAbort = () => {
       killTree(child);
-      finish(() => reject(new RunAbortedError()));
+      finish(() => reject(withSpent(new RunAbortedError(), tryParseClaudeResult(stdout))));
     };
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
     const timer = setTimeout(() => {
       killTree(child);
-      finish(() => reject(new Error(`generation timed out after ${timeoutMs}ms`)));
+      finish(() =>
+        reject(
+          withSpent(
+            new Error(`run timed out after ${formatDuration(timeoutMs)}`),
+            tryParseClaudeResult(stdout)
+          )
+        )
+      );
     }, timeoutMs);
 
     child.stdout?.on('data', (d) => {
@@ -324,8 +383,17 @@ export function spawnClaude(
     });
     child.on('error', (err) => finish(() => reject(err)));
     child.on('close', (code) => {
-      if (code === 0) finish(() => resolve(parseClaudeResult(stdout)));
-      else finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
+      if (code === 0) return finish(() => resolve(parseClaudeResult(stdout)));
+      // A non-zero exit usually still printed its envelope, so this is the
+      // failure path most likely to recover a real figure.
+      finish(() =>
+        reject(
+          withSpent(
+            new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`),
+            tryParseClaudeResult(stdout)
+          )
+        )
+      );
     });
 
     // claude may close stdin before we finish writing (fast failure / auth
@@ -407,6 +475,20 @@ export async function revertOutOfScope(
 }
 
 /**
+ * Hand one run's spend to the sink. Never throws: accounting must not be able to
+ * fail a stage, and it runs on the failure path too, where a throw would mask
+ * the error that actually killed the run.
+ */
+function reportUsage(cwd: string, sink: UsageSink | undefined, usage: RunUsage | undefined): void {
+  if (!sink || !usage) return;
+  try {
+    sink(usage);
+  } catch (error) {
+    logger.warn({ cwd, error }, 'claude-run: usage sink threw');
+  }
+}
+
+/**
  * Queued `claude -p` run with two safety layers:
  *  - hard-fail if claude reports an error or any denied tool call, and
  *  - revert any file the run touched outside `allowedGlobs` (git projects).
@@ -424,15 +506,18 @@ export async function runClaude(
     // run is dropped without ever touching the working tree.
     if (options.signal?.aborted) throw new RunAbortedError();
     const preEntries = await gitStatusEntries(cwd);
-    const result = await spawnClaude(cwd, prompt, options);
-    if (options.onUsage) {
-      // Accounting must never be able to fail a run.
-      try {
-        options.onUsage(result.usage);
-      } catch (error) {
-        logger.warn({ cwd, error }, 'claude-run: usage sink threw');
-      }
+
+    let result: ClaudeRunResult;
+    try {
+      result = await spawnClaude(cwd, prompt, options);
+    } catch (error) {
+      // A run killed by the timeout or a cancel still spent whatever it spent.
+      // Reporting only on the resolve path meant the expensive failures — the
+      // ones you most want the cost of — were recorded as free.
+      reportUsage(cwd, options.onUsage, (error as SpentOnFailure).spentUsage);
+      throw error;
     }
+    reportUsage(cwd, options.onUsage, result.usage);
     if (result.isError || (failOnDenial && result.permissionDenials > 0)) {
       throw new Error(
         `claude run rejected (isError=${result.isError}, permissionDenials=${result.permissionDenials})` +

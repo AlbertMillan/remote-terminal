@@ -6,9 +6,14 @@ import { EventEmitter } from 'events';
  *
  * The property worth pinning is WHEN the sink fires: a run that produced an
  * envelope has already spent its tokens, whether or not runClaude then rejects
- * its output for an error or a denied tool call. Recording after those checks
- * would silently under-report exactly the runs you most want to see the cost
- * of — the failed ones.
+ * its output for an error or a denied tool call, and whether or not the PROCESS
+ * itself then failed. Recording only on the clean path would silently
+ * under-report exactly the runs you most want to see the cost of — the failed
+ * ones, including a stage killed at the 20-minute timeout.
+ *
+ * The other half of the property is when it must NOT fire: a run that died
+ * before printing anything has no figure to report, and a zero-token run would
+ * claim it cost nothing rather than that we don't know.
  */
 
 const spawned = vi.hoisted(() => ({
@@ -200,6 +205,27 @@ describe('runClaude usage sink', () => {
       },
     });
     expect(result.result).toBe('done');
+  });
+
+  it('reports usage when the process exits non-zero but printed an envelope', async () => {
+    // The failure the sink used to miss entirely: onUsage sat after the awaited
+    // spawn, so every rejected PROCESS — as opposed to a rejected result — was
+    // recorded as free, however long it had been running.
+    spawned.stdout = envelope();
+    spawned.exitCode = 1;
+    const seen: unknown[] = [];
+    await expect(
+      runClaude('C:/wt', 'prompt', ['**'], { onUsage: (u) => seen.push(u) })
+    ).rejects.toThrow(/exited with code 1/);
+    expect(seen).toEqual([
+      {
+        inputTokens: 9,
+        outputTokens: 176,
+        cacheReadTokens: 18004,
+        cacheCreationTokens: 13004,
+        costUsd: 0.0287,
+      },
+    ]);
   });
 
   it('reports nothing when the process dies without an envelope', async () => {

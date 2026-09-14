@@ -218,7 +218,11 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
 - QA never reports unverified work as verified: precedence is failed > skipped > passed,
   so one trivial passing command cannot mask a driver that never ran.
 - Token/cost accounting hangs off `RunOptions.onUsage` in `agent/claude-run.ts`, which
-  fires **before** the error and denial checks — a rejected run still spent its tokens.
+  fires **before** the error and denial checks **and on the failure paths** — a rejected
+  run still spent its tokens, and so did a stage killed at the 20-minute timeout. Those
+  rejections carry the parsed figure out on the error (`SpentOnFailure.spentUsage`); a run
+  that died before printing an envelope reports nothing at all, because "we don't know" is
+  not the same as "it cost nothing".
   `addStageUsage()` adds rather than replaces (qa and fix run several passes per stage),
   and totals are summed with `sumUsage()`, never stored. Read `modelUsage`, not the
   envelope's `usage` block: on a multi-turn run `usage` reports only the final turn.
