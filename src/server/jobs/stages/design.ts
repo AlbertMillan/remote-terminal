@@ -116,8 +116,10 @@ export async function runDesignStage(opts: {
   answer?: string | null;
   /** Records what the run consumed; see runner.ts. */
   onUsage?: UsageSink;
+  /** Aborts the underlying claude run when the job is cancelled. */
+  signal?: AbortSignal;
 }): Promise<DesignResult> {
-  const { job, worktreePath, answer = null, onUsage } = opts;
+  const { job, worktreePath, answer = null, onUsage, signal } = opts;
 
   const slug = specSlugFor(job.title, job.featureId);
   const specRel = `${COMPANION_DIR}/${slug}.md`;
@@ -136,7 +138,8 @@ export async function runDesignStage(opts: {
   // treated as failure.
   const result = await runClaude(worktreePath, prompt, [`${COMPANION_DIR}/**`], {
     allowedTools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
-    timeoutMs: getConfig().projectLog.timeoutMs,
+    timeoutMs: getConfig().jobs.stageTimeoutMs,
+    signal,
     failOnDenial: false,
     onUsage,
   });

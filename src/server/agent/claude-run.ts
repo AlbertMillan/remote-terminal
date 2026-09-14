@@ -21,6 +21,20 @@ const execFileAsync = promisify(execFile);
  * outside the allowed globs, turning prompt-only scoping into enforced scoping.
  */
 
+/**
+ * Rejection raised when a run is aborted by its caller rather than failing.
+ *
+ * Distinct from a generic Error so callers can tell "the user stopped this" from
+ * "this broke", and log it as the former. The job runner relies on the
+ * distinction to avoid reporting a deliberate cancellation as a stage failure.
+ */
+export class RunAbortedError extends Error {
+  constructor(message = 'run aborted') {
+    super(message);
+    this.name = 'RunAbortedError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency queue — caps simultaneous `claude -p` runs at maxConcurrent.
 // ---------------------------------------------------------------------------
@@ -216,6 +230,12 @@ export interface SpawnOptions {
   allowedTools?: string[];
   /** Override the run timeout; defaults to projectLog.timeoutMs. */
   timeoutMs?: number;
+  /**
+   * Abort the run. Kills the child process tree if one is already running, and
+   * skips spawning entirely if the run is still queued behind maxConcurrent —
+   * which a registry of live child processes would miss.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunOptions extends SpawnOptions {
@@ -257,6 +277,13 @@ export function spawnClaude(
   const tools = (options.allowedTools ?? DEFAULT_TOOLS).join(',');
 
   return new Promise<ClaudeRunResult>((resolve, reject) => {
+    // Nothing to kill yet, so an already-aborted signal must short-circuit before
+    // the spawn rather than racing it.
+    if (options.signal?.aborted) {
+      reject(new RunAbortedError());
+      return;
+    }
+
     // Prompt is delivered via stdin (not argv) so shell quoting can't mangle it;
     // the static flag args are space-free, safe under shell:true (needed to
     // resolve `claude`/`claude.cmd` from PATH on Windows).
@@ -273,8 +300,16 @@ export function spawnClaude(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
       fn();
     };
+
+    // Same teardown as the timeout path — the only difference is who asked.
+    const onAbort = () => {
+      killTree(child);
+      finish(() => reject(new RunAbortedError()));
+    };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
 
     const timer = setTimeout(() => {
       killTree(child);
@@ -384,6 +419,10 @@ export async function runClaude(
 ): Promise<ClaudeRunResult> {
   const failOnDenial = options.failOnDenial !== false;
   return runQueued(async () => {
+    // A run can sit in the queue for as long as the runs ahead of it take, which
+    // is exactly when a cancel is most likely to land. Checking here means such a
+    // run is dropped without ever touching the working tree.
+    if (options.signal?.aborted) throw new RunAbortedError();
     const preEntries = await gitStatusEntries(cwd);
     const result = await spawnClaude(cwd, prompt, options);
     if (options.onUsage) {

@@ -83,8 +83,10 @@ export async function runImplementStage(opts: {
   specPath: string;
   baseBranch: string;
   onUsage?: UsageSink;
+  /** Aborts the underlying claude run when the job is cancelled. */
+  signal?: AbortSignal;
 }): Promise<ImplementResult> {
-  const { job, worktreePath, specPath, baseBranch, onUsage } = opts;
+  const { job, worktreePath, specPath, baseBranch, onUsage, signal } = opts;
 
   const specAbs = join(worktreePath, specPath);
   if (!existsSync(specAbs)) {
@@ -100,7 +102,8 @@ export async function runImplementStage(opts: {
   // that escape it entirely.
   const result = await runClaude(worktreePath, prompt, ['**'], {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
-    timeoutMs: getConfig().projectLog.timeoutMs,
+    timeoutMs: getConfig().jobs.stageTimeoutMs,
+    signal,
     failOnDenial: false,
     onUsage,
   });

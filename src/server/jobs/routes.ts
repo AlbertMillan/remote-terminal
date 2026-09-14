@@ -8,6 +8,7 @@ import {
   answerQuestion,
   approveGate,
   cancelJob,
+  discardJob,
   JobError,
   queueJob,
   retryJob,
@@ -142,9 +143,25 @@ export function registerJobRoutes(app: FastifyInstance): void {
     return withJob(reply, () => ({ job: retryJob(request.params.id) }));
   });
 
+  // Stop a live job: aborts the running stage, then tears the worktree down.
   app.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', async (request, reply) => {
     try {
       return { job: await cancelJob(request.params.id) };
+    } catch (error) {
+      if (error instanceof JobError) {
+        return reply.status(error.status).send({ error: error.message });
+      }
+      logger.error({ error }, 'job route failed');
+      return reply.status(500).send({ error: 'Request failed' });
+    }
+  });
+
+  // Clean up a finished job: remove its worktree and branch and drop the row.
+  // `mergeLanded` tells the UI to say that a merged commit was left in place
+  // rather than implying the project was fully restored.
+  app.post<{ Params: { id: string } }>('/api/jobs/:id/discard', async (request, reply) => {
+    try {
+      return await discardJob(request.params.id);
     } catch (error) {
       if (error instanceof JobError) {
         return reply.status(error.status).send({ error: error.message });

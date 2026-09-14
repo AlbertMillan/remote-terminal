@@ -108,6 +108,8 @@ export interface Job {
   detail: string | null;
   worktreePath: string | null;
   branch: string | null;
+  /** The branch this job forked from, and the one its merge lands on. */
+  baseBranch: string | null;
   claudeSessionId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -506,13 +508,13 @@ ${usageTooltip(usageOf(s))}` : '')
     if (job.status === 'failed') {
       buttons.push(`<button class="btn-primary jb-retry" data-job="${id}">Retry stage</button>`);
     }
-    if (
-      job.status === 'queued' ||
-      job.status === 'running' ||
-      job.status === 'parked' ||
-      job.status === 'failed'
-    ) {
+    // Cancel stops a live job; Discard cleans up one that has already stopped.
+    // The split matters: the server refuses each verb on the other's statuses, so
+    // offering Cancel on a finished job (as this once did) only ever produced a 409.
+    if (job.status === 'queued' || job.status === 'running' || job.status === 'parked') {
       buttons.push(`<button class="btn-secondary jb-cancel" data-job="${id}">Cancel</button>`);
+    } else {
+      buttons.push(`<button class="btn-secondary jb-discard" data-job="${id}">Discard</button>`);
     }
     return buttons.length ? `<div class="jb-actions">${buttons.join('')}</div>` : '';
   }
@@ -554,6 +556,46 @@ ${usageTooltip(usageOf(s))}` : '')
       if (this.cwd) await this.load(this.cwd);
     } catch (error) {
       this.flash(error instanceof Error ? error.message : 'Request failed');
+    }
+  }
+
+  /**
+   * Discard a finished job: remove its worktree and branch, drop it off the board.
+   *
+   * Not routed through act(), because the response says whether a merge was left
+   * in the base branch. Telling the user that is the whole point — "discarded"
+   * would otherwise read as "undone", which for a merged job it is not.
+   */
+  private async discard(jobId: string): Promise<void> {
+    const job = this.jobs.find((j) => j.id === jobId);
+    const merged = job?.stages.some((s) => s.name === 'merge' && s.status === 'passed');
+    const warning = merged
+      ? `\n\nIts merge has already landed in ${job?.baseBranch ?? 'the base branch'} and will NOT be undone — revert that commit by hand if you need to.`
+      : '\n\nThis job never merged, so the project returns to exactly its state beforehand.';
+    if (!confirm(`Discard "${job?.title ?? 'this job'}"?${warning}`)) return;
+
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/discard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        this.flash(data.error || `Could not discard (${res.status})`);
+        return;
+      }
+      const result = (await res.json()) as { mergeLanded?: boolean; baseBranch?: string | null };
+      if (result.mergeLanded) {
+        this.flash(
+          `Discarded. The merge commit remains in ${result.baseBranch ?? 'the base branch'}.`
+        );
+      }
+      this.expanded.delete(jobId);
+      this.specs.delete(jobId);
+      this.diffs.delete(jobId);
+      if (this.cwd) await this.load(this.cwd);
+    } catch (error) {
+      this.flash(error instanceof Error ? error.message : 'Could not discard');
     }
   }
 
@@ -662,9 +704,19 @@ ${usageTooltip(usageOf(s))}` : '')
       const cancel = target.closest('.jb-cancel') as HTMLElement | null;
       if (cancel) {
         const job = this.jobs.find((j) => j.id === cancel.dataset.job);
-        if (confirm(`Cancel "${job?.title ?? 'this job'}" and remove its worktree?`)) {
+        const running = job?.status === 'running';
+        const what = running
+          ? `Stop "${job?.title ?? 'this job'}" mid-${job?.stage ?? 'stage'} and remove its worktree?`
+          : `Cancel "${job?.title ?? 'this job'}" and remove its worktree?`;
+        if (confirm(what)) {
           void this.act(cancel.dataset.job || '', 'cancel');
         }
+        return;
+      }
+
+      const discard = target.closest('.jb-discard') as HTMLElement | null;
+      if (discard) {
+        void this.discard(discard.dataset.job || '');
         return;
       }
 

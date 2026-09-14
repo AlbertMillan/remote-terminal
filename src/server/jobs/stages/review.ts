@@ -124,8 +124,10 @@ export async function runReviewStage(opts: {
   baseBranch: string;
   specPath: string | null;
   onUsage?: UsageSink;
+  /** Aborts the underlying claude run when the job is cancelled. */
+  signal?: AbortSignal;
 }): Promise<ReviewResult> {
-  const { jobId, worktreePath, baseBranch, specPath, onUsage } = opts;
+  const { jobId, worktreePath, baseBranch, specPath, onUsage, signal } = opts;
 
   const fullDiff = await diffAgainst(worktreePath, baseBranch);
   if (!fullDiff.trim()) {
@@ -158,7 +160,8 @@ export async function runReviewStage(opts: {
     [`${COMPANION_DIR}/${REVIEWS_DIR}/**`],
     {
       allowedTools: ['Read', 'Glob', 'Grep', 'Write'],
-      timeoutMs: getConfig().projectLog.timeoutMs,
+      timeoutMs: getConfig().jobs.stageTimeoutMs,
+      signal,
       failOnDenial: false,
       onUsage,
     }

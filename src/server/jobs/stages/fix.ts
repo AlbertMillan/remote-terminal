@@ -85,15 +85,18 @@ export async function runFixStage(opts: {
   skipped: Finding[];
   title: string;
   onUsage?: UsageSink;
+  /** Aborts the underlying claude run when the job is cancelled. */
+  signal?: AbortSignal;
 }): Promise<FixResult> {
-  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage } = opts;
+  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage, signal } = opts;
 
   const prompt = buildFixPrompt({ selected, skipped });
 
   logger.info({ jobId, selected: selected.length }, 'fix: running');
   const result = await runClaude(worktreePath, prompt, ['**'], {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
-    timeoutMs: getConfig().projectLog.timeoutMs,
+    timeoutMs: getConfig().jobs.stageTimeoutMs,
+    signal,
     failOnDenial: false,
     onUsage,
   });

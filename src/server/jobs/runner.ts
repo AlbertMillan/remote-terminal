@@ -5,6 +5,7 @@ import { admit } from './scheduler.js';
 import {
   addStageUsage,
   createJob,
+  deleteJob,
   finishStage,
   getJob,
   getJobWithStages,
@@ -77,8 +78,16 @@ export class JobError extends Error {
  * anything.
  */
 
+/** A stage executing in this process, with the handles needed to stop it. */
+interface InFlightStage {
+  /** Aborts the stage's `claude -p` run, queued or already spawned. */
+  aborter: AbortController;
+  /** Settles when the stage has fully unwound; awaited before worktree teardown. */
+  run: Promise<void>;
+}
+
 /** Jobs currently executing a stage in this process. */
-const inFlight = new Set<string>();
+const inFlight = new Map<string, InFlightStage>();
 
 export interface CreateJobOptions {
   cwd: string;
@@ -122,14 +131,16 @@ export async function pump(): Promise<void> {
   const running = listJobsByStatus('running');
   for (const job of admit(queued, running)) {
     if (inFlight.has(job.id)) continue;
-    inFlight.add(job.id);
+    const aborter = new AbortController();
     // Detached: a stage can take minutes, and the caller (an HTTP request) must
-    // not wait for it.
-    void runNextStage(job.id).finally(() => {
+    // not wait for it. The promise is retained so cancelJob can await the stage
+    // actually unwinding before it touches the worktree.
+    const run = runNextStage(job.id, aborter.signal).finally(() => {
       inFlight.delete(job.id);
       // A finished stage may have freed this project's slot.
       void pump();
     });
+    inFlight.set(job.id, { aborter, run });
   }
 }
 
@@ -137,7 +148,7 @@ export async function pump(): Promise<void> {
  * Execute the job's next stage, then either park at a gate or leave it queued
  * for the following stage.
  */
-async function runNextStage(jobId: string): Promise<void> {
+async function runNextStage(jobId: string, signal?: AbortSignal): Promise<void> {
   const job = getJob(jobId);
   if (!job || !isLive(job.status)) return;
 
@@ -172,22 +183,22 @@ async function runNextStage(jobId: string): Promise<void> {
   try {
     switch (stage) {
       case 'design':
-        await executeDesign(job);
+        await executeDesign(job, signal);
         break;
       case 'implement':
-        await executeImplement(job);
+        await executeImplement(job, signal);
         break;
       case 'integrate':
         await executeIntegrate(job);
         break;
       case 'review':
-        await executeReview(job);
+        await executeReview(job, signal);
         break;
       case 'fix':
-        await executeFix(job);
+        await executeFix(job, signal);
         break;
       case 'qa':
-        await executeQa(job);
+        await executeQa(job, signal);
         break;
       case 'merge':
         await executeMerge(job);
@@ -209,6 +220,15 @@ async function runNextStage(jobId: string): Promise<void> {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    // This is the one terminal write that used to run unguarded, and it is what
+    // made mid-stage cancellation unsafe: cancelJob marks the job `cancelled` and
+    // aborts the run, the abort surfaces here as a rejection, and without this
+    // check the job the user just cancelled would be rewritten as `failed`.
+    // Every other terminal write in this file is already guarded the same way.
+    if (!stillLive(jobId)) {
+      logger.info({ jobId, stage }, 'job: stage unwound after cancellation');
+      return;
+    }
     logger.warn({ jobId, stage, err: detail }, 'job: stage failed');
     finishStage(jobId, stage, 'failed', detail);
     // Worktree is deliberately retained on failure so the run can be inspected
@@ -219,7 +239,7 @@ async function runNextStage(jobId: string): Promise<void> {
 }
 
 /** Design stage: create the worktree if needed, write the spec, park at gate 1. */
-async function executeDesign(job: Job): Promise<void> {
+async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
   let worktreePath = job.worktreePath;
   let branch = job.branch;
 
@@ -251,6 +271,7 @@ async function executeDesign(job: Job): Promise<void> {
     worktreePath,
     answer,
     onUsage: usageFor(job.id, 'design'),
+    signal,
   });
 
   if (result.claudeSessionId) {
@@ -320,7 +341,7 @@ async function baseBranchOf(job: Job): Promise<string> {
 }
 
 /** Implement stage: build the approved spec, then continue to integrate. */
-async function executeImplement(job: Job): Promise<void> {
+async function executeImplement(job: Job, signal?: AbortSignal): Promise<void> {
   const worktreePath = requireWorktree(job);
   const specPath = specPathOf(job.id);
   if (!specPath) throw new Error('No approved spec found for this job');
@@ -331,6 +352,7 @@ async function executeImplement(job: Job): Promise<void> {
     specPath,
     baseBranch: await baseBranchOf(job),
     onUsage: usageFor(job.id, 'implement'),
+    signal,
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -383,7 +405,7 @@ async function executeIntegrate(job: Job): Promise<void> {
 }
 
 /** Review stage: run the user's criteria over the diff, then park at gate 2. */
-async function executeReview(job: Job): Promise<void> {
+async function executeReview(job: Job, signal?: AbortSignal): Promise<void> {
   const worktreePath = requireWorktree(job);
   const result = await runReviewStage({
     jobId: job.id,
@@ -391,6 +413,7 @@ async function executeReview(job: Job): Promise<void> {
     baseBranch: await baseBranchOf(job),
     specPath: specPathOf(job.id),
     onUsage: usageFor(job.id, 'review'),
+    signal,
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -424,7 +447,7 @@ async function executeReview(job: Job): Promise<void> {
 }
 
 /** Fix stage: apply exactly the findings the user ticked. */
-async function executeFix(job: Job): Promise<void> {
+async function executeFix(job: Job, signal?: AbortSignal): Promise<void> {
   const worktreePath = requireWorktree(job);
   const findings = readFindings(worktreePath, job.id);
   const selected = selectedFindings(findings);
@@ -447,6 +470,7 @@ async function executeFix(job: Job): Promise<void> {
     skipped,
     title: job.title,
     onUsage: usageFor(job.id, 'fix'),
+    signal,
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -474,13 +498,14 @@ async function executeFix(job: Job): Promise<void> {
  * forward where they will see it, not to bury the work in a failed job. What
  * must never happen is the opposite: an unrun check reported as a pass.
  */
-async function executeQa(job: Job): Promise<void> {
+async function executeQa(job: Job, signal?: AbortSignal): Promise<void> {
   const worktreePath = requireWorktree(job);
   const result = await runQaStage({
     jobId: job.id,
     worktreePath,
     isProcessRunning,
     onUsage: usageFor(job.id, 'qa'),
+    signal,
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -705,34 +730,112 @@ export function retryJob(jobId: string): JobWithStages {
 }
 
 /**
- * Cancel a job and tear down its worktree.
+ * Cancel a live job: stop whatever it is doing and tear down its worktree.
  *
- * Refuses while a stage is actually executing. Cancelling mid-stage used to
- * delete the worktree out from under a running `claude -p` and then have that
- * stage's terminal write flip the job back to queued, resuming a pipeline the
- * user had just cancelled. There is no way to interrupt a stage cleanly, so the
- * honest answer is to say so.
+ * Interrupting a stage mid-flight is supported, because dispatching the wrong
+ * feature is an ordinary mistake and a job that dies in its first stage would
+ * otherwise have no window in which it could be stopped at all.
+ *
+ * The step order is what makes it safe:
+ *
+ *  1. Mark `cancelled` FIRST, so the aborted stage's rejection arrives to find a
+ *     job that is no longer live and is discarded by the `stillLive()` guard in
+ *     runNextStage's catch rather than rewriting this status as `failed`.
+ *  2. Abort the run — kills the `claude -p` process tree, or drops the run if it
+ *     is still queued behind maxConcurrent.
+ *  3. Await the stage unwinding. On Windows `git worktree remove` fails against
+ *     files a dying process still holds open, so teardown must not race it.
+ *  4. Tear down worktree and branch.
+ *
+ * Cancel is for live jobs only; a job that has already finished is cleaned up
+ * with discardJob().
  */
 export async function cancelJob(jobId: string): Promise<JobWithStages> {
   const job = getJob(jobId);
   if (!job) throw new JobError('Unknown job', 404);
-  if (!isLive(job.status)) throw new JobError('This job has already finished', 409);
-  if (inFlight.has(jobId)) {
-    throw new JobError(
-      `The ${job.stage ?? 'current'} stage is still running and cannot be interrupted. ` +
-        'Wait for it to finish, then cancel.',
-      409
-    );
+  if (!isLive(job.status)) {
+    throw new JobError('This job has already finished — discard it instead', 409);
   }
 
   updateJob(jobId, { status: 'cancelled', gate: null, parkReason: null });
+
+  const running = inFlight.get(jobId);
+  if (running) {
+    logger.info({ jobId, stage: job.stage }, 'job: aborting in-flight stage');
+    running.aborter.abort();
+    // The stage's own error handling never rejects this promise, but a bug there
+    // must not strand the cancel with a worktree still on disk.
+    await running.run.catch(() => {});
+  }
+
   if (job.worktreePath) {
     await removeWorktree(job.projectCwd, jobId, { deleteBranch: job.branch });
     updateJob(jobId, { worktreePath: null });
   }
-  logger.info({ jobId }, 'job: cancelled');
+  logger.info({ jobId, aborted: Boolean(running) }, 'job: cancelled');
   void pump();
   return getJobWithStages(jobId) as JobWithStages;
+}
+
+export interface DiscardResult {
+  /** True when the merge stage passed, so its commit is in the base branch to stay. */
+  mergeLanded: boolean;
+  /** The branch the merge landed on, for the message the UI shows. */
+  baseBranch: string | null;
+  worktreeRemoved: boolean;
+  branchDeleted: boolean;
+}
+
+/**
+ * Discard a finished job: remove what it left behind and drop it off the board.
+ *
+ * The counterpart to cancelJob, split by status because the two mean different
+ * things — Cancel stops a live job, Discard cleans up a job that has already
+ * stopped. Offering one button for both is what left `failed` jobs permanently
+ * stuck: the board rendered Cancel for them and the server rejected it with a 409.
+ *
+ * For a job that never merged this restores the project exactly. A job touches
+ * the project outside its own worktree in precisely one place — the merge stage,
+ * which runs `git merge --no-ff` and `git push` in the project directory. The
+ * spec, the code, the review findings and the .gitignore rule all live inside the
+ * worktree, so removing it and deleting the branch leaves nothing behind.
+ *
+ * A job whose merge DID land is the exception, and it is reported rather than
+ * undone: that commit may already have been pushed and pulled by others, so
+ * unwinding it is the user's call, not ours. `git revert -m 1 <merge>` is the
+ * manual step; resetting the base branch is never done here.
+ */
+export async function discardJob(jobId: string): Promise<DiscardResult> {
+  const job = getJobWithStages(jobId);
+  if (!job) throw new JobError('Unknown job', 404);
+  if (isLive(job.status)) {
+    throw new JobError('This job is still active — cancel it before discarding it', 409);
+  }
+
+  const mergeLanded = job.stages.some((s) => s.name === 'merge' && s.status === 'passed');
+
+  let worktreeRemoved = false;
+  let branchDeleted = false;
+  if (job.worktreePath || job.branch) {
+    // Deleting the branch is safe either way: if the merge landed, its commits
+    // already live in the base branch and only the label goes.
+    const torn = await removeWorktree(job.projectCwd, jobId, { deleteBranch: job.branch });
+    worktreeRemoved = torn.removed;
+    branchDeleted = torn.branchDeleted;
+  }
+
+  deleteJob(jobId);
+  logger.info(
+    { jobId, mergeLanded, worktreeRemoved, branchDeleted },
+    'job: discarded'
+  );
+
+  return {
+    mergeLanded,
+    baseBranch: mergeLanded ? job.baseBranch : null,
+    worktreeRemoved,
+    branchDeleted,
+  };
 }
 
 /**

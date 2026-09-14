@@ -138,8 +138,10 @@ export async function runQaStage(opts: {
   worktreePath: string;
   isProcessRunning?: ProcessProbe;
   onUsage?: UsageSink;
+  /** Aborts the underlying claude run when the job is cancelled. */
+  signal?: AbortSignal;
 }): Promise<QaResult> {
-  const { jobId, worktreePath, isProcessRunning, onUsage } = opts;
+  const { jobId, worktreePath, isProcessRunning, onUsage, signal } = opts;
 
   const qa = readQaDoc(worktreePath);
   // PROJECT.md's verify list is the other source of declared commands, so a
@@ -165,7 +167,8 @@ export async function runQaStage(opts: {
     } else {
       const result = await runClaude(worktreePath, buildFlowPrompt({ qaBody: qa.body, driver: qa.driver }), [], {
         allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
-        timeoutMs: getConfig().projectLog.timeoutMs,
+        timeoutMs: getConfig().jobs.stageTimeoutMs,
+        signal,
         failOnDenial: false,
         onUsage,
       });

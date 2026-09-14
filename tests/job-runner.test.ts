@@ -312,32 +312,103 @@ describe('cancellation (finding 1)', () => {
     expect(job.worktreePath).toBeNull();
   });
 
-  it('refuses to cancel while a stage is executing, rather than racing it', async () => {
-    // Hold the design stage open so the job is genuinely mid-flight.
-    let release: () => void = () => {};
-    const held = new Promise<void>((r) => (release = r));
+  it('aborts a stage that is mid-flight instead of refusing', async () => {
+    // A stage that only ends when its signal fires — the shape of a real
+    // `claude -p` run, which spawnClaude kills on abort.
     const design = await import('../src/server/jobs/stages/design.js');
-    vi.mocked(design.runDesignStage).mockImplementationOnce(async () => {
-      await held;
+    let receivedSignal: AbortSignal | undefined;
+    vi.mocked(design.runDesignStage).mockImplementationOnce(async (args) => {
+      receivedSignal = (args as { signal?: AbortSignal }).signal;
+      await new Promise<never>((_resolve, reject) => {
+        receivedSignal?.addEventListener('abort', () => reject(new Error('run aborted')), {
+          once: true,
+        });
+      });
       return stageResults.design;
     });
 
     const job = runner.queueJob({ cwd: CWD, featureId: 'f-1', title: 'Slow one' });
     await settle(5);
-
-    await expect(runner.cancelJob(job.id)).rejects.toThrow(/still running/);
     expect(store.getJob(job.id)!.status).toBe('running');
 
-    release();
-    await settle();
-    // The stage completed normally and the job was NOT left cancelled-then-revived.
-    expect(store.getJob(job.id)!.status).toBe('parked');
+    const cancelled = await runner.cancelJob(job.id);
+    // The stage was actually handed a signal — without one it could not be stopped.
+    expect(receivedSignal).toBeDefined();
+    expect(receivedSignal!.aborted).toBe(true);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.worktreePath).toBeNull();
   });
 
-  it('refuses to cancel a job that already finished', async () => {
+  it('does not let the aborted stage rewrite the cancellation as failed', async () => {
+    // The regression this guards: the catch in runNextStage was the one terminal
+    // write with no stillLive() check, so an aborted run's rejection landed as
+    // `failed` on top of the status the user had just asked for.
+    const design = await import('../src/server/jobs/stages/design.js');
+    vi.mocked(design.runDesignStage).mockImplementationOnce(async (args) => {
+      const { signal } = args as { signal?: AbortSignal };
+      await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('run aborted')), { once: true });
+      });
+      return stageResults.design;
+    });
+
+    const job = runner.queueJob({ cwd: CWD, featureId: 'f-1', title: 'Slow one' });
+    await settle(5);
+    await runner.cancelJob(job.id);
+
+    // Let every queued microtask and pump() settle: the status must still be the
+    // one cancelJob wrote, not `failed`.
+    await settle();
+    expect(store.getJob(job.id)!.status).toBe('cancelled');
+    // The abort's rejection message must not have been recorded as a failure.
+    expect(store.getJob(job.id)!.detail).toBeNull();
+  });
+
+  it('refuses to cancel a job that already finished, pointing at discard', async () => {
     const id = await startJob();
     await runner.cancelJob(id);
     await expect(runner.cancelJob(id)).rejects.toThrow(/already finished/);
+  });
+});
+
+describe('discard', () => {
+  it('refuses to discard a job that is still live', async () => {
+    const id = await startJob(); // parked at the design gate
+    await expect(runner.discardJob(id)).rejects.toThrow(/still active/);
+  });
+
+  it('tears down the worktree and drops the row off the board', async () => {
+    const id = await startJob();
+    await runner.cancelJob(id);
+
+    const result = await runner.discardJob(id);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(store.getJob(id)).toBeNull();
+  });
+
+  it('reports a job that never merged as fully restoring the project', async () => {
+    const id = await startJob();
+    await runner.cancelJob(id);
+
+    const result = await runner.discardJob(id);
+    expect(result.mergeLanded).toBe(false);
+    expect(result.baseBranch).toBeNull();
+  });
+
+  it('reports a landed merge rather than pretending it was undone', async () => {
+    const id = await startJob();
+    runner.approveGate(id); // design
+    await settle();
+    runner.approveGate(id); // merge
+    await settle();
+    expect(store.getJob(id)!.status).toBe('done');
+
+    const result = await runner.discardJob(id);
+    // The commit is in the base branch and stays there; discard only says so.
+    expect(result.mergeLanded).toBe(true);
+    expect(result.baseBranch).toBe('trunk');
+    expect(store.getJob(id)).toBeNull();
   });
 });
 

@@ -48,6 +48,7 @@ status: active
 - [x] `f-qemxfo` Review stage, selectable findings, and the fix stage
 - [x] `f-gr797e` QA stage, per-project QA contract, and skip alerts
 - [x] `f-soj5vl` Rebuild stage and the cross-project rollup overview
+- [x] `f-3kw82m` P1 Job abort & discard — cancel mid-stage, discard terminal jobs, 20-min stage timeout → project/job-abort-and-discard.md
 
 ## Track: Token & cost accounting for jobs
 - [x] `f-4jqq6m` Section 3 — Server: stage token-usage migration, RunUsage parsing, addStageUsage, sumUsage rollups

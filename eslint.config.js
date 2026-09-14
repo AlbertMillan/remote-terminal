@@ -23,6 +23,8 @@ export default [
         setInterval: 'readonly',
         clearInterval: 'readonly',
         NodeJS: 'readonly',
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
       },
     },
     plugins: {

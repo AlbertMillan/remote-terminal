@@ -198,6 +198,23 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
 - The merge gate is checked **before** its stage, so parked jobs keep `stage` on the last
   *completed* stage and approval is recorded in `approved_gate`. Changing this breaks the
   gate (see `tests/job-gates.test.ts`).
+- **Cancel and Discard are split by status and neither accepts the other's.** Cancel stops a
+  live job (`queued`/`running`/`parked`), aborting the stage mid-flight via an `AbortSignal`
+  that `spawnClaude` turns into a `killTree()`. Discard cleans up a terminal job
+  (`failed`/`done`/`cancelled`): worktree and branch removed, row deleted. Offering one verb
+  for both is what once left `failed` jobs unremovable — the board rendered Cancel and the
+  server answered 409.
+- **Cancel's step order is load-bearing**: mark `cancelled` → abort → *await the stage
+  unwinding* → tear down. The `catch` in `runNextStage` must keep its `stillLive()` guard, or
+  the aborted run's rejection rewrites the cancellation as `failed`; awaiting the run before
+  teardown is what stops `git worktree remove` racing a dying process's open file handles.
+  Both are covered in `tests/job-runner.test.ts`.
+- Discard restores the project exactly **only for a job that never merged** — the merge stage
+  is the single thing a job does outside its worktree. A landed merge is reported
+  (`mergeLanded`) and deliberately left in place; reverting it is manual.
+- Stage runs use `jobs.stageTimeoutMs` (20 min), **not** `projectLog.timeoutMs` (180s, the
+  session-log budget). Stages borrowed the latter and were being killed with finished work in
+  hand.
 - QA never reports unverified work as verified: precedence is failed > skipped > passed,
   so one trivial passing command cannot mask a driver that never ran.
 - Token/cost accounting hangs off `RunOptions.onUsage` in `agent/claude-run.ts`, which

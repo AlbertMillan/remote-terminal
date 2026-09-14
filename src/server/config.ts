@@ -39,6 +39,15 @@ export interface Config {
     minTurnsToLog: number; // tiebreaker floor on transcript user-turns
     claudeCommand: string; // executable used for headless generation
   };
+  jobs: {
+    // Kill a pipeline stage's `claude -p` run after this long.
+    //
+    // Deliberately NOT projectLog.timeoutMs, which the stages used to borrow. That
+    // budget sizes the session-log generator — one transcript in, one entry out. A
+    // stage reads a whole repo and authors a spec, an implementation or a review, and
+    // under the 180s log budget was being killed with finished work in hand.
+    stageTimeoutMs: number;
+  };
 }
 
 const defaultConfig: Config = {
@@ -70,6 +79,9 @@ const defaultConfig: Config = {
     timeoutMs: 180000,
     minTurnsToLog: 2,
     claudeCommand: 'claude',
+  },
+  jobs: {
+    stageTimeoutMs: 1_200_000, // 20 minutes
   },
 };
 
