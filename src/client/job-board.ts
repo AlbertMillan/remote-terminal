@@ -147,6 +147,24 @@ export interface DiffStat {
   deletions: number;
 }
 
+/**
+ * A POST that carries no body.
+ *
+ * Deliberately sends no Content-Type: Fastify rejects an `application/json`
+ * request with an empty body as 400 before the route is ever reached, so
+ * declaring a body the request does not have turned every bodyless action
+ * (retry, approve, cancel, discard) into "Bad Request".
+ */
+export const BODYLESS_POST = { method: 'POST' as const };
+
+export function jsonPost(body: Record<string, unknown>) {
+  return {
+    method: 'POST' as const,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
 /** How often to re-poll while any job is still moving. */
 const POLL_MS = 4000;
 
@@ -543,11 +561,10 @@ ${usageTooltip(usageOf(s))}` : '')
 
   private async act(jobId: string, action: string, body?: Record<string, unknown>): Promise<void> {
     try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      const res = await fetch(
+        `/api/jobs/${encodeURIComponent(jobId)}/${action}`,
+        body ? jsonPost(body) : BODYLESS_POST
+      );
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         this.flash(data.error || `Request failed (${res.status})`);
@@ -575,10 +592,7 @@ ${usageTooltip(usageOf(s))}` : '')
     if (!confirm(`Discard "${job?.title ?? 'this job'}"?${warning}`)) return;
 
     try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/discard`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/discard`, BODYLESS_POST);
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         this.flash(data.error || `Could not discard (${res.status})`);
