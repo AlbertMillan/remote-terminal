@@ -1,4 +1,5 @@
 // WebSocket message protocol definitions
+import type { JobsSummary } from '../jobs/summary.js';
 
 export type ClientMessageType =
   | 'auth'
@@ -54,6 +55,7 @@ export type ServerMessageType =
   | 'notification.preferences'
   | 'notification.preferences.updated'
   | 'notification'
+  | 'jobs.summary'
   | 'error'
   | 'pong';
 
@@ -289,6 +291,13 @@ export interface NotificationPreferencesSetPayload {
 export interface NotificationDismissPayload {
   sessionId: string;
 }
+
+/**
+ * The live job feed behind the overlay. Pushed on every job or stage write and
+ * once per client just after auth, so a fresh page is populated before anything
+ * moves. Mirrors JobSummary in src/server/jobs/summary.ts.
+ */
+export type JobsSummaryPayload = JobsSummary;
 
 export interface NotificationPayload {
   sessionId: string;

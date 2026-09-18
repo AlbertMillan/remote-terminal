@@ -34,6 +34,7 @@ import {
   type NotificationPreferencesSetPayload,
   type NotificationDismissPayload,
   type NotificationPayload,
+  type JobsSummaryPayload,
 } from './protocol.js';
 import {
   insertCategory,
@@ -55,6 +56,8 @@ import {
   type TailscaleIdentity,
 } from '../auth/tailscale.js';
 import { notificationService, type Notification } from '../notifications/service.js';
+import { jobEvents } from '../jobs/events.js';
+import { buildJobsSummary } from '../jobs/summary.js';
 
 const logger = createLogger('websocket');
 
@@ -81,6 +84,49 @@ const connections = new Map<string, ClientConnection>();
 notificationService.onNotification((notification: Notification) => {
   handleNotification(notification);
 });
+
+/**
+ * Push the job feed to every connected client whenever a job or stage changes.
+ *
+ * Rebuilt per change rather than diffed: the summary is a few hundred bytes and
+ * a burst of writes inside one transition collapses into whatever the last one
+ * sees, which is the state we want to send anyway.
+ */
+let jobsBroadcastQueued = false;
+
+jobEvents.onChange(() => {
+  // One logical transition writes several rows -- finishStage then updateJob,
+  // and a stage's usage besides -- and each write fires. Collapsing them onto a
+  // microtask sends the settled state once instead of broadcasting each
+  // intermediate one. Writes separated by an await land in different turns and
+  // are still sent separately, which is right: they are different states.
+  if (jobsBroadcastQueued) return;
+  jobsBroadcastQueued = true;
+  queueMicrotask(() => {
+    jobsBroadcastQueued = false;
+    broadcastJobsSummary();
+  });
+});
+
+function broadcastJobsSummary(target?: ClientConnection): void {
+  const targets = (target ? [target] : [...connections.values()]).filter(
+    (conn) => conn.ws.readyState === WS_OPEN
+  );
+  // Build nothing when nobody is listening: a job running overnight with no
+  // browser open would otherwise pay for a summary on every write.
+  if (targets.length === 0) return;
+
+  let payload: JobsSummaryPayload;
+  try {
+    payload = buildJobsSummary();
+  } catch (error) {
+    logger.error({ error }, 'Failed to build job summary');
+    return;
+  }
+
+  const message = createMessage('jobs.summary', payload);
+  for (const conn of targets) conn.ws.send(message);
+}
 
 function handleNotification(notification: Notification): void {
   logger.info({ sessionId: notification.sessionId, type: notification.type }, 'Processing notification');
@@ -142,6 +188,10 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
       displayName: identity.displayName,
     })
   );
+
+  // Seed the job overlay before anything moves, so a freshly loaded page is not
+  // blank until the next stage transition (which may be 20 minutes away).
+  broadcastJobsSummary(connection);
 
   // Set up message handler with rate limiting
   ws.on('message', (data: Buffer | string) => {

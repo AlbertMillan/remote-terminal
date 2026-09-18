@@ -3308,3 +3308,305 @@ body {
 }
 
 .jb-stage.needs_decision { color: var(--warning); }
+
+/* ============================================================
+   Live job overlay (src/client/job-overlay.ts)
+   ============================================================ */
+
+/* Floating placement: clear of the terminal header, and clear of
+   .terminal-scrollbar — a 10px draggable strip pinned to right: 0 that an
+   overlay flush to the edge would swallow the drags of. */
+.job-overlay {
+  z-index: 40;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-ui);
+}
+
+.job-overlay.jo-floating {
+  position: absolute;
+  top: 62px;
+  right: 14px;
+  max-width: calc(100% - 28px);
+}
+
+/* Docked placement: a flex item in #terminal-header, list hanging beneath. */
+.job-overlay.jo-docked {
+  position: relative;
+  width: auto;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.job-overlay.hidden { display: none; }
+
+.jo-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(31, 35, 53, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--transition-fast);
+}
+
+.jo-bar:hover { border-color: var(--accent); }
+.jo-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.job-overlay.open .jo-bar {
+  border-radius: 10px 10px 0 0;
+  border-bottom-color: transparent;
+}
+
+/* Docked, the list is a detached dropdown, so the pill keeps all four corners. */
+.job-overlay.jo-docked.open .jo-bar {
+  border-radius: 8px;
+  border-bottom-color: var(--border);
+}
+
+.jo-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.job-overlay.open .jo-chevron { transform: rotate(90deg); }
+
+.jo-bar-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-right: auto;
+}
+
+#job-overlay-counts { display: flex; gap: 6px; }
+
+.jo-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.jo-count.running { color: var(--accent); background: rgba(122, 162, 247, 0.12); }
+.jo-count.waiting { color: var(--warning); background: rgba(224, 175, 104, 0.14); }
+.jo-count.failed { color: var(--danger); background: rgba(247, 118, 142, 0.14); }
+.jo-count.done { color: var(--success); background: rgba(158, 206, 106, 0.14); }
+
+.jo-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: jo-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes jo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.jo-list {
+  display: none;
+  flex-direction: column;
+  background: rgba(31, 35, 53, 0.94);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+
+.job-overlay.open .jo-list { display: flex; }
+
+.job-overlay.jo-docked .jo-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  border-top: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.jo-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px 10px 14px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.jo-card:first-child { border-top: none; }
+.jo-card:hover { background: rgba(122, 162, 247, 0.07); }
+.jo-card.fading { opacity: 0.55; }
+
+/* Status rail down the left edge. */
+.jo-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--border);
+}
+
+.jo-card.running::before { background: var(--accent); }
+.jo-card.parked::before { background: var(--warning); }
+.jo-card.failed::before { background: var(--danger); }
+.jo-card.done::before { background: var(--success); }
+.jo-card.queued::before, .jo-card.cancelled::before { background: var(--text-muted); }
+
+.jo-card-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.jo-project {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jo-age {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.jo-title {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+/* One segment per pipeline stage, in STAGE_ORDER — positional, so a stage the
+   job has not reached still occupies its slot. */
+.jo-strip {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 5px;
+}
+
+.jo-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+}
+
+.jo-seg.passed { background: var(--success); opacity: 0.75; }
+.jo-seg.skipped { background: var(--text-muted); }
+.jo-seg.failed { background: var(--danger); }
+.jo-seg.needs_decision { background: var(--warning); }
+.jo-seg.running { background: var(--accent); animation: jo-pulse 1.4s ease-in-out infinite; }
+
+.jo-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.jo-stage { font-family: var(--font-mono); color: var(--text-secondary); }
+
+.jo-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.jo-chip.gate, .jo-chip.question { color: var(--warning); background: rgba(224, 175, 104, 0.14); }
+.jo-chip.failed { color: var(--danger); background: rgba(247, 118, 142, 0.14); }
+.jo-chip.done { color: var(--success); background: rgba(158, 206, 106, 0.14); }
+.jo-chip.cancelled { color: var(--text-muted); background: var(--bg-tertiary); }
+
+.jo-cost { margin-left: auto; font-family: var(--font-mono); }
+
+.jo-detail {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding-left: 7px;
+  border-left: 2px solid var(--border);
+}
+
+/* Settings: the placement radios only mean something while the panel is on. */
+.setting-sub {
+  margin-top: -4px;
+  padding-left: 46px;
+}
+
+.setting-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.setting-radios label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.setting-radios input[type="radio"] { accent-color: var(--accent); cursor: pointer; }
+.setting-sub.disabled { opacity: 0.45; pointer-events: none; }
+
+/* On a phone the panel spans the width; the header has no room to dock into,
+   so the floating placement is the only one that applies. */
+@media (max-width: 640px) {
+  .job-overlay.jo-floating { left: 8px; right: 8px; width: auto; max-width: none; }
+  .job-overlay.jo-docked { margin-right: 6px; }
+  .job-overlay.jo-docked .jo-list { width: min(320px, calc(100vw - 24px)); }
+}
+
+/* A job the overlay just opened: a brief ring so the eye lands on it after the
+   scroll, rather than on whichever card happens to be under the cursor. */
+.jb-job.jb-focused {
+  box-shadow: 0 0 0 2px var(--accent-glow);
+  transition: box-shadow var(--transition-slow);
+}

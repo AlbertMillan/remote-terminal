@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../sessions/project-discovery.js';
+import { jobEvents } from './events.js';
 import type {
   GateName,
   Job,
@@ -130,6 +131,7 @@ export function createJob(input: CreateJobInput): Job {
   });
   insert();
 
+  jobEvents.emitChange();
   return getJob(id) as Job;
 }
 
@@ -170,6 +172,46 @@ export function listJobs(): JobWithStages[] {
     .prepare('SELECT * FROM job_stages ORDER BY id')
     .all() as StageRow[];
 
+  return attachStages(rows, stageRows);
+}
+
+/**
+ * Jobs the live overlay feed cares about: everything still in flight, plus
+ * anything that reached a terminal status since `since` (an ISO timestamp).
+ *
+ * Filtered in SQL rather than after `listJobs()` because this runs on every
+ * job write, several times per stage. Reading every job ever run — and all
+ * eight stage rows of each — to then discard most of them is work that grows
+ * with the table and is thrown away every time.
+ *
+ * `updated_at` is compared as text, which is exactly right for the ISO-8601
+ * UTC strings the store writes: they sort lexicographically.
+ */
+const LIVE_OR_RECENT = `status IN ('queued', 'running', 'parked') OR updated_at > ?`;
+
+export function listLiveAndRecentJobs(since: string): JobWithStages[] {
+  const db = getDatabase();
+  const rows = db
+    .prepare(`SELECT * FROM jobs WHERE ${LIVE_OR_RECENT} ORDER BY created_at DESC`)
+    .all(since) as JobRow[];
+  if (rows.length === 0) return [];
+
+  // Stages are selected by repeating the predicate as a subquery rather than
+  // binding one parameter per job id: an IN-list has a bound on how many
+  // parameters SQLite accepts, and this has none.
+  const stageRows = db
+    .prepare(
+      `SELECT * FROM job_stages
+        WHERE job_id IN (SELECT id FROM jobs WHERE ${LIVE_OR_RECENT})
+        ORDER BY id`
+    )
+    .all(since) as StageRow[];
+
+  return attachStages(rows, stageRows);
+}
+
+/** Group stage rows onto their jobs in one pass, rather than a query per job. */
+function attachStages(rows: JobRow[], stageRows: StageRow[]): JobWithStages[] {
   const byJob = new Map<string, JobStage[]>();
   for (const row of stageRows) {
     const stage = toStage(row);
@@ -247,6 +289,7 @@ export function updateJob(id: string, patch: JobPatch): Job | null {
   getDatabase()
     .prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id = ?`)
     .run(...values, id);
+  jobEvents.emitChange();
   return getJob(id);
 }
 
@@ -281,6 +324,8 @@ export function updateStage(jobId: string, name: StageName, patch: StagePatch): 
   getDatabase()
     .prepare(`UPDATE job_stages SET ${sets.join(', ')} WHERE job_id = ? AND name = ?`)
     .run(...values, jobId, name);
+  // Covers startStage and finishStage too — both route through here.
+  jobEvents.emitChange();
 }
 
 /**
@@ -319,6 +364,7 @@ export function addStageUsage(
         jobId,
         name
       );
+    jobEvents.emitChange();
   } catch {
     // A job whose row has gone (cancelled and deleted mid-run) is the expected
     // case here, and it is not worth failing the stage over.
@@ -352,5 +398,6 @@ export function finishStage(
 /** Remove a job and (via cascade) its stages. */
 export function deleteJob(id: string): boolean {
   const info = getDatabase().prepare('DELETE FROM jobs WHERE id = ?').run(id);
+  if (info.changes > 0) jobEvents.emitChange();
   return info.changes > 0;
 }

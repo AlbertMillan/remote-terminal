@@ -134,6 +134,19 @@
 
       <div id="fork-error-toast" class="fork-error-toast hidden"></div>
 
+      <!-- Live job overlay: pushed job cards over the main area (src/client/job-overlay.ts).
+           Reparented into #terminal-header in "header" placement. -->
+      <div id="job-overlay" class="job-overlay jo-floating hidden">
+        <div id="job-overlay-bar" class="jo-bar" role="button" tabindex="0" title="Pipeline jobs in flight">
+          <svg class="jo-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+          <span class="jo-bar-title">Jobs</span>
+          <span id="job-overlay-counts"></span>
+        </div>
+        <div id="job-overlay-list" class="jo-list"></div>
+      </div>
+
       <div id="terminal-container" class="hidden">
         <!-- xterm.js will render here -->
       </div>
@@ -374,6 +387,23 @@
             </label>
           </div>
         </div>
+        <div class="settings-section">
+          <div class="settings-section-title">Display</div>
+          <div class="setting-item">
+            <input type="checkbox" id="setting-job-overlay" checked>
+            <label for="setting-job-overlay">
+              Job overlay
+              <div class="setting-description">Live pipeline jobs across all projects, over the main area</div>
+            </label>
+          </div>
+          <div class="setting-item setting-sub" id="setting-job-overlay-placement">
+            <div class="setting-radios">
+              <label><input type="radio" name="job-overlay-placement" value="below" checked> Floating below the header</label>
+              <label><input type="radio" name="job-overlay-placement" value="header"> In the session header</label>
+            </div>
+          </div>
+        </div>
+
       </div>
       <div class="modal-actions">
         <button id="settings-cancel" class="btn-secondary">Cancel</button>

@@ -5,6 +5,7 @@ import { escapeHtml, escapeAttr } from './html-utils.js';
 import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
+import { JobOverlay, type JobSummary, type JobsSummary } from './job-overlay.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 
@@ -201,6 +202,7 @@ type ServerMessage =
   | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification'; id?: string; payload: NotificationPayload }
+  | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };
 
@@ -265,7 +267,14 @@ class SessionManager {
   );
   /** Cross-project overview; clicking a row opens that project. */
   private rollup = new RollupView((cwd) => this.showProjectLog(cwd));
+  /**
+   * The live job panel over the main area. Fed by pushed `jobs.summary`
+   * messages, so it stays current while a terminal is in front of it.
+   */
+  private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
   private selectedProjectCwd: string | null = null;
+  /** The board load in flight, so concurrent callers share one round trip. */
+  private boardLoad: Promise<void> | null = null;
   // Entry targeted by the open delete-history-entry modal.
   private pendingHistoryDelete: {
     cwd: string;
@@ -282,6 +291,7 @@ class SessionManager {
     this.setupMobileNavigation();
     this.renderWelcomeShortcuts();
     this.setupPipButton();
+    this.jobOverlay.attach();
     this.initBrowserNotifications();
     this.connect();
   }
@@ -366,7 +376,9 @@ class SessionManager {
     document.getElementById('tab-sessions')?.addEventListener('click', () => this.switchTab('sessions'));
     document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
-    document.getElementById('overview-btn')?.addEventListener('click', () => void this.rollup.show());
+    document.getElementById('overview-btn')?.addEventListener('click', () => {
+      void this.rollup.show().then(() => this.syncJobOverlay());
+    });
     document.getElementById('rollup-refresh-btn')?.addEventListener('click', () => void this.rollup.load());
     const rollupBody = document.getElementById('rollup-body');
     if (rollupBody) this.rollup.attach(rollupBody);
@@ -469,6 +481,9 @@ class SessionManager {
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
     document.getElementById('settings-cancel')?.addEventListener('click', () => this.hideSettingsModal());
     document.getElementById('settings-save')?.addEventListener('click', () => this.saveSettings());
+    document
+      .getElementById('setting-job-overlay')
+      ?.addEventListener('change', () => this.updatePlacementEnabled());
 
     // Keyboard shortcuts modal
     document.getElementById('shortcuts-btn')?.addEventListener('click', () => this.showShortcutsModal());
@@ -751,6 +766,9 @@ class SessionManager {
         this.currentSessionId = null;
       }
       this.attachingSessionId = null;
+      // Job states from before the drop go stale silently -- no further push is
+      // coming -- so show nothing until the server re-seeds us after auth.
+      this.jobOverlay.clear();
       this.attemptReconnect();
     };
 
@@ -896,6 +914,9 @@ class SessionManager {
         break;
       case 'notification':
         this.handleNotification(message.payload);
+        break;
+      case 'jobs.summary':
+        this.jobOverlay.update(message.payload);
         break;
       case 'session.error':
         this.handleSessionError(message.payload);
@@ -1175,6 +1196,52 @@ class SessionManager {
     if (visualCheckbox) visualCheckbox.checked = this.notificationPreferences.visualEnabled;
     if (inputCheckbox) inputCheckbox.checked = this.notificationPreferences.notifyOnInput;
     if (completedCheckbox) completedCheckbox.checked = this.notificationPreferences.notifyOnCompleted;
+
+    // Display prefs live in localStorage (per device), not in the server's
+    // notification row -- a phone and a desktop want different answers here.
+    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
+    if (overlayCheckbox) overlayCheckbox.checked = this.jobOverlay.isEnabled();
+    const placement = this.jobOverlay.getPlacement();
+    for (const radio of this.placementRadios()) radio.checked = radio.value === placement;
+    this.updatePlacementEnabled();
+  }
+
+  private placementRadios(): HTMLInputElement[] {
+    return [
+      ...document.querySelectorAll<HTMLInputElement>('input[name="job-overlay-placement"]'),
+    ];
+  }
+
+  /** The placement choice means nothing while the panel is switched off. */
+  private updatePlacementEnabled(): void {
+    const on = (document.getElementById('setting-job-overlay') as HTMLInputElement)?.checked ?? true;
+    document.getElementById('setting-job-overlay-placement')?.classList.toggle('disabled', !on);
+    for (const radio of this.placementRadios()) radio.disabled = !on;
+  }
+
+  /**
+   * Keep the overlay where it belongs: docked into the terminal header when
+   * that is the chosen placement and a header is on screen, and off entirely
+   * while the Projects or Overview view is up -- both put their own actions in
+   * that corner and both already list these jobs in full.
+   */
+  private syncJobOverlay(): void {
+    const isVisible = (id: string): boolean =>
+      !document.getElementById(id)?.classList.contains('hidden');
+    this.jobOverlay.setSuppressed(isVisible('project-log-view') || isVisible('rollup-view'));
+    this.jobOverlay.applyPlacement();
+  }
+
+  /** Hand a job from the overlay to the board that can actually act on it. */
+  private async openJobFromOverlay(job: JobSummary): Promise<void> {
+    this.rollup.hide();
+    // switchTab starts a board load of its own; join it rather than race a
+    // second one, and re-check afterwards -- getProject() before that load
+    // resolves says nothing about whether the project exists.
+    if (this.activeTab !== 'projects') this.switchTab('projects');
+    if (!this.workspace.getProject(job.projectCwd)) await this.joinProjectBoardLoad();
+    this.showProjectLog(job.projectCwd);
+    this.jobBoard.focusJob(job.id);
   }
 
   private updateConnectionStatus(status: ConnectionStatus): void {
@@ -1653,6 +1720,7 @@ class SessionManager {
     if (nameEl) nameEl.textContent = session.name;
 
     this.updateForkControls(session);
+    this.syncJobOverlay();
   }
 
   private updateForkControls(session?: SessionInfo): void {
@@ -1679,6 +1747,7 @@ class SessionManager {
       document.getElementById('welcome-screen')?.classList.remove('hidden');
     }
 
+    this.syncJobOverlay();
     this.renderSessionList();
   }
 
@@ -1699,13 +1768,35 @@ class SessionManager {
     document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
     document.getElementById('overview-btn')?.classList.toggle('hidden', !onProjects);
     if (!onProjects) this.rollup.hide();
+    this.syncJobOverlay();
 
-    if (onProjects) this.loadProjectBoard();
+    if (onProjects) void this.loadProjectBoard();
   }
 
   /** Load both halves of the board: the PROJECT.md workspace and the session logs. */
-  private async loadProjectBoard(): Promise<void> {
-    await Promise.all([this.workspace.loadBoard(), this.loadProjectLogData()]);
+  private loadProjectBoard(): Promise<void> {
+    const load = Promise.all([this.workspace.loadBoard(), this.loadProjectLogData()]).then(
+      () => undefined
+    );
+    this.boardLoad = load;
+    void load.finally(() => {
+      if (this.boardLoad === load) this.boardLoad = null;
+    });
+    return load;
+  }
+
+  /**
+   * Wait for the board, joining a load already in flight rather than starting
+   * a second one.
+   *
+   * Only for callers that just need the board *present* — the overlay's
+   * click-through, which arrives right behind the unawaited load `switchTab`
+   * kicks off. A caller that has just mutated the board must call
+   * `loadProjectBoard()` instead: a fetch that began before its write cannot
+   * see it.
+   */
+  private joinProjectBoardLoad(): Promise<void> {
+    return this.boardLoad ?? this.loadProjectBoard();
   }
 
   /**
@@ -1774,6 +1865,7 @@ class SessionManager {
     document.getElementById('welcome-screen')?.classList.add('hidden');
     this.rollup.hide();
     document.getElementById('project-log-view')?.classList.remove('hidden');
+    this.syncJobOverlay();
 
     const titleEl = document.getElementById('project-log-title');
     if (titleEl) titleEl.textContent = wsProject.name;
@@ -2648,6 +2740,14 @@ class SessionManager {
       notifyOnInput: inputCheckbox?.checked ?? true,
       notifyOnCompleted: completedCheckbox?.checked ?? true,
     });
+
+    // Applied on Save rather than on change, so Cancel genuinely cancels.
+    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
+    const placement = this.placementRadios().find((r) => r.checked)?.value === 'header'
+      ? 'header'
+      : 'below';
+    this.jobOverlay.setPreferences(overlayCheckbox?.checked ?? true, placement);
+    this.syncJobOverlay();
 
     this.hideSettingsModal();
   }

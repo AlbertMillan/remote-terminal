@@ -25,6 +25,7 @@ export default [
         NodeJS: 'readonly',
         AbortController: 'readonly',
         AbortSignal: 'readonly',
+        queueMicrotask: 'readonly',
       },
     },
     plugins: {

@@ -54,3 +54,6 @@ status: active
 ## Track: Token & cost accounting for jobs
 - [x] `f-4jqq6m` Section 3 — Server: stage token-usage migration, RunUsage parsing, addStageUsage, sumUsage rollups
 - [x] `f-k3ttmk` Section 4 — Client: stage and job cost chips, project total beside the Jobs heading
+
+## Track: Live job status
+- [x] `f-7d386y` P1 Live job overlay — pushed cross-project job cards over the terminal, toggled from Settings → project/live-job-overlay.md
