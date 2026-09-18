@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { sessionManager } from '../sessions/manager.js';
 import { createLogger } from '../utils/logger.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
+import { isValidDimension, validateTerminalDimensions } from './validation.js';
 import {
   parseMessage,
   createMessage,
@@ -19,6 +20,7 @@ import {
   type SessionReorderPayload,
   type SessionForkPayload,
   type SessionOpenPayload,
+  type SessionRevivePayload,
   type SessionKeepPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
@@ -63,8 +65,6 @@ const rateLimiter = new RateLimiter(100, 10);
 const MAX_SESSION_NAME_LENGTH = 100;
 const MAX_CWD_LENGTH = 500;
 const VALID_SHELL_PATTERN = /^[a-zA-Z0-9/_.-]+$/;
-const MIN_TERMINAL_DIMENSION = 1;
-const MAX_TERMINAL_DIMENSION = 500;
 
 interface ClientConnection {
   id: string;
@@ -224,6 +224,10 @@ function handleMessage(connection: ClientConnection, data: string): void {
       handleSessionOpen(connection, message);
       break;
 
+    case 'session.revive':
+      handleSessionRevive(connection, message);
+      break;
+
     case 'session.keep':
       handleSessionKeep(connection, message);
       break;
@@ -334,21 +338,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
   }
 
   // Validate terminal dimensions
-  if (payload?.cols !== undefined) {
-    const cols = Number(payload.cols);
-    if (isNaN(cols) || cols < MIN_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION) {
-      throw new Error('Invalid terminal columns');
-    }
-    validated.cols = cols;
-  }
-
-  if (payload?.rows !== undefined) {
-    const rows = Number(payload.rows);
-    if (isNaN(rows) || rows < MIN_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION) {
-      throw new Error('Invalid terminal rows');
-    }
-    validated.rows = rows;
-  }
+  Object.assign(validated, validateTerminalDimensions(payload));
 
   return validated;
 }
@@ -372,7 +362,7 @@ async function handleSessionCreate(connection: ClientConnection, message: Client
       createMessage(
         'session.created',
         {
-          session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: false }),
+          session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null }),
         },
         message.id
       )
@@ -424,7 +414,7 @@ function handleSessionAttach(connection: ClientConnection, message: ClientMessag
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false }),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null }),
         scrollback: scrollback.join('\r\n'),
       },
       message.id
@@ -525,16 +515,13 @@ function handleTerminalResize(connection: ClientConnection, message: ClientMessa
     return;
   }
 
-  // Validate terminal dimensions
-  const cols = Number(payload.cols);
-  const rows = Number(payload.rows);
-  if (
-    isNaN(cols) || isNaN(rows) ||
-    cols < MIN_TERMINAL_DIMENSION || cols > MAX_TERMINAL_DIMENSION ||
-    rows < MIN_TERMINAL_DIMENSION || rows > MAX_TERMINAL_DIMENSION
-  ) {
+  // Validate terminal dimensions. A bad resize is ignored rather than reported: it arrives
+  // unprompted from the client's resize observer, not from a user action.
+  if (!isValidDimension(payload.cols) || !isValidDimension(payload.rows)) {
     return;
   }
+  const cols = Number(payload.cols);
+  const rows = Number(payload.rows);
 
   if (connection.attachedSession !== payload.sessionId) {
     return;
@@ -612,7 +599,7 @@ function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'delete
   }
 }
 
-function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean }): SessionInfo {
+function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -627,6 +614,7 @@ function sessionToInfo(session: { id: string; name: string; shell: string; cwd: 
     categoryId: session.categoryId ?? null,
     sortOrder: session.sortOrder ?? 0,
     isFork: session.isFork ?? false,
+    claudeSessionId: session.claudeSessionId ?? null,
   };
 }
 
@@ -701,13 +689,15 @@ async function handleSessionOpen(connection: ClientConnection, message: ClientMe
       throw new Error('Invalid working directory path');
     }
 
+    const { cols, rows } = validateTerminalDimensions(payload);
+
     const session = await sessionManager.openClaudeSession({
       claudeSessionId: payload.claudeSessionId,
       cwd: payload.cwd,
       mode: payload.mode,
       ownerId: connection.identity?.userId,
-      cols: payload.cols,
-      rows: payload.rows,
+      cols,
+      rows,
     });
 
     const sessionMetadata = getSessionFromDb(session.id);
@@ -733,6 +723,55 @@ async function handleSessionOpen(connection: ClientConnection, message: ClientMe
     attachToSession(connection, session.id);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to open session';
+    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+  }
+}
+
+// Revive a stale session in place: same row, same cwd, new PTY, and `claude --resume` when
+// the row carries a claudeSessionId. Answers with session.created (as handleSessionOpen does)
+// so the client's existing handleSessionCreated updates the row and auto-attaches.
+function handleSessionRevive(connection: ClientConnection, message: ClientMessage): void {
+  const payload = message.payload as SessionRevivePayload | undefined;
+
+  try {
+    if (!payload?.sessionId) {
+      throw new Error('Session ID required');
+    }
+
+    const { cols, rows } = validateTerminalDimensions(payload);
+
+    const session = sessionManager.reviveSession({
+      id: payload.sessionId,
+      cols,
+      rows,
+    });
+
+    const sessionMetadata = getSessionFromDb(session.id);
+
+    connection.ws.send(
+      createMessage(
+        'session.created',
+        {
+          session: sessionToInfo({
+            ...session,
+            categoryId: sessionMetadata?.categoryId ?? null,
+            sortOrder: sessionMetadata?.sortOrder ?? 0,
+            isFork: false,
+            claudeSessionId: sessionMetadata?.claudeSessionId ?? null,
+          }),
+        },
+        message.id
+      )
+    );
+
+    // Same detach-before-attach order handleSessionCreate needs: attaching without detaching
+    // first leaks the previous session's data listener onto this connection.
+    if (connection.attachedSession) {
+      detachFromSession(connection);
+    }
+    attachToSession(connection, session.id);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to revive session';
     connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
   }
 }

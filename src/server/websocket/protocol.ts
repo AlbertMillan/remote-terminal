@@ -13,6 +13,7 @@ export type ClientMessageType =
   | 'session.list'
   | 'session.fork'
   | 'session.open'
+  | 'session.revive'
   | 'session.keep'
   | 'terminal.data'
   | 'terminal.resize'
@@ -160,6 +161,10 @@ export interface SessionInfo {
   categoryId: string | null;
   sortOrder: number;
   isFork: boolean;
+  /** The Claude conversation this session last reported, if any. Drives the sidebar's
+   *  revive tooltip: with an id we resume the conversation, without one we only respawn
+   *  the shell. */
+  claudeSessionId: string | null;
 }
 
 export interface SessionForkPayload {
@@ -172,6 +177,14 @@ export interface SessionOpenPayload {
   claudeSessionId: string;
   cwd: string;
   mode: 'resume' | 'fork';
+  cols?: number;
+  rows?: number;
+}
+
+// Bring a stale session (a DB row whose PTY died with the server) back to life in place:
+// same id, same cwd, and `claude --resume` when the row carries a claudeSessionId.
+export interface SessionRevivePayload {
+  sessionId: string;
   cols?: number;
   rows?: number;
 }

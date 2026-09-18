@@ -128,6 +128,16 @@ export function persistScrollback(sessionId: string, scrollback: string[]): void
   logger.debug({ sessionId, lines: scrollback.length }, 'Persisted scrollback');
 }
 
+/**
+ * The stored scrollback as a single blob, for callers that re-parse it anyway.
+ * reviveSession() seeds a ScrollbackBuffer, which splits on newlines itself, so going
+ * through restoreScrollback() would split here and re-join there for nothing -- two extra
+ * full copies of up to `scrollbackLines` lines.
+ */
+export function restoreScrollbackRaw(sessionId: string): string {
+  return getScrollback(sessionId) || '';
+}
+
 export function restoreScrollback(sessionId: string): string[] {
   const content = getScrollback(sessionId);
   if (!content) return [];

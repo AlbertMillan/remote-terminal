@@ -26,6 +26,7 @@ import {
   killTmuxSession,
   persistScrollback,
   restoreScrollback,
+  restoreScrollbackRaw,
   isTmuxAvailable,
 } from './persistence.js';
 
@@ -699,6 +700,107 @@ class SessionManager {
     this._injectResumeCommand(session, resumeId);
 
     logger.info({ id, name, pid: ptyProcess.pid }, 'Historical session opened successfully');
+    return session;
+  }
+
+  /**
+   * Bring a stale session back to life in place. "Stale" is a DB row that outlived its PTY:
+   * shutdown() deliberately marks sessions 'idle' rather than 'terminated' so they can be
+   * reconnected after a restart. The row keeps its id, name, category, sort order and
+   * persisted scrollback -- only the PTY is new. When the row carries a claudeSessionId the
+   * conversation is resumed too, exactly as openClaudeSession does.
+   *
+   * Deliberately no maxSessions check: a stale row is already status != 'terminated', so it
+   * counts toward countActiveSessions(). Re-checking the cap here would make every session
+   * unrevivable after a restart at the limit.
+   */
+  reviveSession(options: { id: string; cols?: number; rows?: number }): ActiveSession {
+    const { id } = options;
+
+    const metadata = getSessionMetadata(id);
+    if (!metadata) throw new Error('Session not found');
+    if (this.activeSessions.has(id)) throw new Error('Session is already running');
+    if (metadata.status === 'terminated') throw new Error('Session has been terminated');
+    // Fork transcripts are unlinked at boot by cleanupOrphanedForkFiles(), so a revived fork
+    // would resume a conversation whose JSONL no longer exists.
+    if (metadata.isFork) throw new Error('Forked sessions cannot be revived; their transcript is removed on restart');
+
+    const cols = options.cols || metadata.cols || 80;
+    const rows = options.rows || metadata.rows || 24;
+    const now = new Date();
+
+    logger.info({ id, cwd: metadata.cwd, claudeSessionId: metadata.claudeSessionId }, 'Reviving stale session');
+
+    let ptyProcess;
+    try {
+      ptyProcess = createPty({
+        shell: metadata.shell,
+        cwd: metadata.cwd,
+        cols,
+        rows,
+        env: { CLAUDE_REMOTE_SESSION_ID: id },
+      });
+    } catch (error) {
+      // Nearly always a cwd that no longer exists. Say which directory failed rather than
+      // silently falling back to home, which would resume the conversation somewhere else.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to start shell in ${metadata.cwd}: ${reason}`);
+    }
+
+    const session: ActiveSession = {
+      id,
+      name: metadata.name,
+      shell: metadata.shell,
+      cwd: metadata.cwd,
+      createdAt: new Date(metadata.createdAt),
+      lastAccessedAt: now,
+      ownerId: metadata.ownerId ?? undefined,
+      status: 'active',
+      cols,
+      rows,
+      pty: ptyProcess,
+      tmuxSession: metadata.tmuxSession ?? undefined,
+      scrollback: [],
+      connectedClients: new Set(),
+    };
+
+    this._initSessionPty(session);
+
+    // _initSessionPty installs a fresh, empty buffer, and getScrollback() prefers the
+    // in-memory one -- without this seed the scrollback persisted at shutdown would be
+    // silently dropped on the first attach. Empty after a hard kill, since persistScrollback
+    // only runs on a graceful shutdown.
+    const persisted = restoreScrollbackRaw(id);
+    if (persisted) {
+      // The trailing newline matters: ScrollbackBuffer holds an unterminated final line as
+      // `partialLine`, which getAll() drops once the buffer has any complete lines.
+      this.scrollbackBuffers.get(id)?.push(persisted.endsWith('\n') ? persisted : `${persisted}\n`);
+    }
+
+    this.activeSessions.set(id, session);
+    try {
+      updateSession(id, { status: 'active', lastAccessedAt: now.toISOString() });
+      logSessionEvent(id, 'revived', JSON.stringify({ claudeSessionId: metadata.claudeSessionId }));
+    } catch (error) {
+      // Mirrors createSession's DB-failure path. The caller is about to be told the revive
+      // failed, so nothing may be left running behind its back. Drop the registrations before
+      // killing the PTY so the resulting exit event finds no session and no-ops.
+      logger.error({ id, error }, 'Failed to record revived session, cleaning up PTY');
+      this.activeSessions.delete(id);
+      this.dataListeners.delete(id);
+      this.exitListeners.delete(id);
+      this.scrollbackBuffers.delete(id);
+      killPty(ptyProcess);
+      throw error;
+    }
+
+    // No claudeSessionId means this row never reported a conversation (a plain shell, or the
+    // SessionStart hook never fired). Respawning the shell in the right cwd is the whole job.
+    if (metadata.claudeSessionId) {
+      this._injectResumeCommand(session, metadata.claudeSessionId);
+    }
+
+    logger.info({ id, name: metadata.name, pid: ptyProcess.pid }, 'Session revived successfully');
     return session;
   }
 

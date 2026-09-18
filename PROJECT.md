@@ -18,6 +18,7 @@ status: active
 - [x] `f-5fv6fv` Recent-paths dropdown on the new-session working directory field
 - [x] `f-vaq9ns` Session fork — ephemeral branched Claude conversations with Keep
 - [x] `f-shu9vw` Windows auto-start via start-server.bat and the hidden VBS launcher
+- [x] `f-2wq7bd` P1 Revive stale sessions from the sidebar — respawn the PTY in place and resume the conversation → project/revive-stale-sessions.md
 
 ## Track: Project Session Log
 - [x] `f-j6jxm9` Step 1 — Plan / design doc

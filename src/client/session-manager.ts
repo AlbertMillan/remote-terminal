@@ -29,6 +29,9 @@ interface SessionInfo {
   categoryId: string | null;
   sortOrder: number;
   isFork: boolean;
+  /** Set once the session reports a Claude conversation (SessionStart/Stop hooks).
+   *  Decides whether reviving resumes that conversation or only respawns the shell. */
+  claudeSessionId: string | null;
 }
 
 interface CategoryInfo {
@@ -905,6 +908,13 @@ class SessionManager {
 
   private handleSessionError(payload: ErrorPayload): void {
     console.error('Session error:', payload.message);
+    // Release the in-flight attach flag. It is otherwise only cleared by a successful
+    // session.attached or a socket close, so a rejected attach pins it to that session id
+    // and every later attachToSession() for it early-returns -- leaving a live session
+    // unreachable until the page is reloaded. The reconnect path hits this routinely: it
+    // re-attaches to the previously attached session, which after a server restart is stale
+    // and answers "Session not found", and reviving it afterwards then showed nothing.
+    this.attachingSessionId = null;
     // Show error to user - for now use alert, could be improved with toast notification
     alert('Session error: ' + payload.message);
   }
@@ -1447,6 +1457,20 @@ class SessionManager {
     const escapedSessionId = escapeAttr(session.id);
     const escapedStatus = escapeHtml(session.status);
 
+    // A stale row is a session whose PTY died with the server -- it outlived its process and
+    // can be brought back. Forks cannot: their transcript is unlinked at boot, so there would
+    // be nothing to resume. Both the "(stale)" label and the button derive from this one
+    // expression so they can never disagree about what stale means.
+    const isStale = !session.attachable && session.status !== 'terminated';
+    const canRevive = isStale && !session.isFork;
+    const reviveHtml = canRevive
+      ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedSessionId}">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </button>`
+      : '';
+
     li.innerHTML = `
       <span class="session-drag-handle">
         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1463,8 +1487,9 @@ class SessionManager {
       </span>
       <div class="session-info">
         <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-status">${escapedStatus}${!session.attachable && session.status !== 'terminated' ? ' (stale)' : ''}</div>
+        <div class="session-status">${escapedStatus}${isStale ? ' (stale)' : ''}</div>
       </div>
+      ${reviveHtml}
       <button class="session-delete-btn" title="Delete session" data-session-id="${escapedSessionId}">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="3 6 5 6 21 6"></polyline>
@@ -1563,6 +1588,7 @@ class SessionManager {
     // Click handler for session selection
     li.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('.session-delete-btn')) return;
+      if ((e.target as HTMLElement).closest('.session-revive-btn')) return;
       if ((e.target as HTMLElement).closest('.session-drag-handle')) return;
 
       if (session.attachable) {
@@ -1571,6 +1597,13 @@ class SessionManager {
         document.getElementById('sidebar-overlay')?.classList.remove('open');
         document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
       }
+    });
+
+    // Revive button handler (stale rows only)
+    const reviveBtn = li.querySelector('.session-revive-btn');
+    reviveBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.reviveSession(session.id);
     });
 
     // Delete button handler
@@ -2139,6 +2172,15 @@ class SessionManager {
 
     this.attachingSessionId = sessionId;
     this.send('session.attach', { sessionId });
+  }
+
+  /**
+   * Bring a stale session back in place. The server answers with session.created for the same
+   * id, so handleSessionCreated updates the existing row and attaches -- no new row appears.
+   */
+  reviveSession(sessionId: string): void {
+    const dims = this.terminalMgr.getDimensions();
+    this.send('session.revive', { sessionId, cols: dims.cols, rows: dims.rows });
   }
 
   deleteSession(sessionId: string): void {

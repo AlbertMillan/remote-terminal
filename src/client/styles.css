@@ -350,6 +350,45 @@ body {
   transform: scale(1.1);
 }
 
+/* Revive button -- only rendered on stale rows (PTY died with the server). Reveals on row
+   hover exactly like the delete button beside it, so the two behave as one control group. */
+.session-revive-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: all var(--transition-fast);
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-item:hover .session-revive-btn {
+  opacity: 0.7;
+}
+
+/* Both buttons carry margin-left:auto on their own; side by side, flex would split the free
+   space between them and strand the revive button mid-row. */
+.session-revive-btn + .session-delete-btn {
+  margin-left: 0;
+}
+
+.session-revive-btn:hover {
+  opacity: 1 !important;
+  background-color: var(--accent);
+  color: var(--bg-primary);
+  transform: scale(1.1);
+}
+
+/* The row sets cursor:not-allowed; the one thing you *can* click must not inherit it. */
+.session-item.not-attachable .session-revive-btn {
+  cursor: pointer;
+}
+
 .sidebar-footer {
   padding: 16px 20px;
   border-top: 1px solid var(--border);
