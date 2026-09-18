@@ -1,4 +1,5 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
+import { parseDecision, stripMarks, type DecisionCard } from './decision-format.js';
 
 /**
  * Client for the job pipeline: dispatching a feature, watching its stages, and
@@ -182,6 +183,14 @@ export class JobBoard {
   private findings = new Map<string, Finding[]>();
   private expanded = new Set<string>();
   /**
+   * Answers typed but not yet sent, keyed `jobId#questionNumber`.
+   *
+   * Every render replaces the board's HTML wholesale, and opening a spec or
+   * ticking a finding renders. Half a decision is expensive to retype, so it is
+   * read back out of the DOM before it is thrown away.
+   */
+  private answerDrafts = new Map<string, string>();
+  /**
    * Incremented on every load. A response whose token is stale belongs to a
    * project the user has already navigated away from, and rendering it would
    * show one project's jobs under another's name.
@@ -287,6 +296,7 @@ export class JobBoard {
   render(): void {
     const container = document.getElementById('project-jobs');
     if (!container) return;
+    this.captureDrafts(container);
     if (this.jobs.length === 0) {
       container.innerHTML = '';
       return;
@@ -380,16 +390,7 @@ ${usageTooltip(usageOf(s))}` : '')
     const parts: string[] = [];
 
     if (job.parkReason === 'question' && job.detail) {
-      parts.push(`
-        <div class="jb-question">
-          <div class="jb-question-label">This run stopped rather than guess:</div>
-          <div class="jb-question-text">${escapeHtml(job.detail)}</div>
-          <form class="jb-answer" data-job="${escapeAttr(job.id)}">
-            <input type="text" class="jb-answer-input" placeholder="Your decision…"
-                   aria-label="Answer" maxlength="500" />
-            <button type="submit" class="btn-secondary">Answer &amp; continue</button>
-          </form>
-        </div>`);
+      parts.push(this.renderDecision(job));
     } else if (job.detail) {
       parts.push(`<div class="jb-detail">${escapeHtml(job.detail)}</div>`);
     }
@@ -440,6 +441,179 @@ ${usageTooltip(usageOf(s))}` : '')
   }
 
   /**
+   * Send the decision.
+   *
+   * With more than one question the answers go over labelled by the question
+   * they belong to. The stage re-runs from its own prompt with this text folded
+   * in, and "stop" on its own does not say which of two questions it settles.
+   *
+   * Every box has to be filled: sending a partial answer would restart a stage
+   * that is still missing what it stopped for.
+   */
+  private async submitAnswer(form: HTMLFormElement): Promise<void> {
+    const jobId = form.dataset.job || '';
+    const inputs = Array.from(form.querySelectorAll('.jb-answer-input')) as HTMLInputElement[];
+    if (inputs.length === 0) return;
+
+    const blank = inputs.find((input) => !input.value.trim());
+    if (blank) {
+      blank.focus();
+      this.flash(
+        inputs.length > 1 ? 'Answer every question before continuing.' : 'Type a decision first.'
+      );
+      return;
+    }
+
+    const answer =
+      inputs.length === 1
+        ? inputs[0].value.trim()
+        : inputs
+            .map((input, i) => `${i + 1}) ${input.dataset.question || ''}\n   ${input.value.trim()}`)
+            .join('\n');
+
+    if (await this.act(jobId, 'answer', { answer })) {
+      for (const input of inputs) this.answerDrafts.delete(`${jobId}#${input.dataset.index}`);
+    }
+  }
+
+  /** Read part-written answers out of the DOM before a render discards them. */
+  private captureDrafts(container: HTMLElement): void {
+    for (const el of Array.from(container.querySelectorAll('.jb-answer-input'))) {
+      const input = el as HTMLInputElement;
+      const jobId = (input.closest('.jb-answer') as HTMLElement | null)?.dataset.job;
+      if (!jobId) continue;
+      const key = `${jobId}#${input.dataset.index}`;
+      if (input.value.trim()) this.answerDrafts.set(key, input.value);
+      else this.answerDrafts.delete(key);
+    }
+  }
+
+  /**
+   * The decision a parked run is waiting on.
+   *
+   * A stage that stops rather than guess writes one bullet per open question,
+   * each running the question, its context, the alternatives it weighed and its
+   * recommendation together as prose. Printed verbatim — which is what this used
+   * to do — the question you actually have to answer reads exactly like the
+   * paragraph explaining it, and the model's own hard wraps pin the text into a
+   * narrow column. So the detail is parsed (decision-format.ts) and every part
+   * rendered as its own element.
+   *
+   * Parsing is best-effort by design. A detail it cannot make sense of falls
+   * back to the text as written, never to a wrong reading of it.
+   */
+  private renderDecision(job: Job): string {
+    const detail = job.detail as string;
+    const parsed = parseDecision(detail);
+    const head = (extra = ''): string =>
+      `<div class="jb-question-label">This run stopped rather than guess${extra}</div>`;
+    const form = (inner: string): string => `
+      <form class="jb-answer" data-job="${escapeAttr(job.id)}">
+        ${inner}
+        <div class="jb-answer-actions">
+          <button type="submit" class="btn-secondary">Answer &amp; continue</button>
+        </div>
+      </form>`;
+
+    if (!parsed) {
+      return `
+        <div class="jb-question">
+          ${head()}
+          <div class="jb-question-text">${escapeHtml(this.plainDetail(detail))}</div>
+          ${form(`<input type="text" class="jb-answer-input" data-index="1"
+                   value="${escapeAttr(this.answerDrafts.get(`${job.id}#1`) || '')}"
+                   placeholder="Your decision…" aria-label="Answer" maxlength="500" />`)}
+        </div>`;
+    }
+
+    let numbered = 0;
+    const cards = parsed.cards
+      .map((card) =>
+        this.renderDecisionCard(job, card, card.question ? ++numbered : null, parsed.questionCount)
+      )
+      .join('');
+
+    return `
+      <div class="jb-question">
+        ${head(parsed.questionCount > 1 ? ` · ${parsed.questionCount} questions` : '')}
+        ${parsed.preamble.length ? `<div class="jb-q-preamble">${this.paragraphs(parsed.preamble)}</div>` : ''}
+        ${form(`<div class="jb-q-cards">${cards}</div>`)}
+      </div>`;
+  }
+
+  /** One question: what is being asked, what informs it, and the box to answer in. */
+  private renderDecisionCard(
+    job: Job,
+    card: DecisionCard,
+    number: number | null,
+    total: number
+  ): string {
+    // A block that asks nothing is something the run wanted said alongside the
+    // questions. It keeps its text and does not pretend to need an answer.
+    if (number === null) {
+      return `<div class="jb-q-note">${this.paragraphs(card.context)}</div>`;
+    }
+
+    const part = (label: string, body: string): string => `
+      <div class="jb-q-part">
+        <span class="jb-q-part-label">${label}</span>
+        <div class="jb-q-part-body">${body}</div>
+      </div>`;
+
+    const options = card.options
+      .map(
+        (option) => `
+        <li class="jb-q-option">
+          <span class="jb-q-opt">${escapeHtml(option.label)}</span>
+          <span class="jb-q-opt-text">${escapeHtml(option.text)}</span>
+        </li>`
+      )
+      .join('');
+
+    const rec = card.recommendation;
+    const recLabel = rec
+      ? `${rec.kind === 'assumes' ? 'Assumed' : 'Recommends'}${rec.option ? ` (${escapeHtml(rec.option)})` : ''}`
+      : '';
+
+    return `
+      <div class="jb-q-card">
+        <div class="jb-q-head">
+          <span class="jb-q-num">Q${number}</span>
+          <span class="jb-q-text">${escapeHtml(card.question)}</span>
+        </div>
+        ${card.context.length ? part('Context', this.paragraphs(card.context)) : ''}
+        ${card.options.length ? part('Options', `<ul class="jb-q-options">${options}</ul>`) : ''}
+        ${
+          rec
+            ? `<div class="jb-q-rec ${rec.kind}">
+                 <span class="jb-q-rec-label">${recLabel}</span>
+                 <span class="jb-q-rec-text">${escapeHtml(rec.text)}</span>
+               </div>`
+            : ''
+        }
+        <input type="text" class="jb-answer-input" data-index="${number}"
+               data-question="${escapeAttr(card.question)}"
+               value="${escapeAttr(this.answerDrafts.get(`${job.id}#${number}`) || '')}"
+               placeholder="${total > 1 ? `Your decision on Q${number}…` : 'Your decision…'}"
+               aria-label="Answer to question ${number}" maxlength="500" />
+      </div>`;
+  }
+
+  private paragraphs(parts: string[]): string {
+    return parts.map((p) => `<p>${escapeHtml(p)}</p>`).join('');
+  }
+
+  /** The detail as the model laid it out, minus the syntax it wrote it in. */
+  private plainDetail(text: string): string {
+    return text
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.slice(0, line.length - line.trimStart().length) + stripMarks(line))
+      .join('\n')
+      .trim();
+  }
+
+  /**
    * The review gate: every finding with a checkbox, nothing pre-ticked. The
    * user decides what is worth acting on; the fix stage applies exactly that
    * and is told explicitly to leave the rest alone.
@@ -459,13 +633,13 @@ ${usageTooltip(usageOf(s))}` : '')
             <input type="checkbox" class="jb-finding-box" data-job="${escapeAttr(job.id)}"
                    data-finding="${escapeAttr(f.id)}" ${f.selected ? 'checked' : ''} />
             <span class="jb-sev ${f.severity}">${f.severity}</span>
-            <span class="jb-finding-title">${escapeHtml(f.title)}</span>
+            <span class="jb-finding-title">${escapeHtml(stripMarks(f.title))}</span>
             ${where ? `<code class="jb-finding-where">${where}</code>` : ''}
           </label>
-          ${f.detail ? `<div class="jb-finding-detail">${escapeHtml(f.detail)}</div>` : ''}
+          ${f.detail ? `<div class="jb-finding-detail">${escapeHtml(stripMarks(f.detail))}</div>` : ''}
           ${
             f.suggestion
-              ? `<div class="jb-finding-fix"><strong>Fix:</strong> ${escapeHtml(f.suggestion)}</div>`
+              ? `<div class="jb-finding-fix"><strong>Fix:</strong> ${escapeHtml(stripMarks(f.suggestion))}</div>`
               : ''
           }
         </li>`;
@@ -571,7 +745,7 @@ ${usageTooltip(usageOf(s))}` : '')
     }
   }
 
-  private async act(jobId: string, action: string, body?: Record<string, unknown>): Promise<void> {
+  private async act(jobId: string, action: string, body?: Record<string, unknown>): Promise<boolean> {
     try {
       const res = await fetch(
         `/api/jobs/${encodeURIComponent(jobId)}/${action}`,
@@ -580,11 +754,13 @@ ${usageTooltip(usageOf(s))}` : '')
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         this.flash(data.error || `Request failed (${res.status})`);
-        return;
+        return false;
       }
       if (this.cwd) await this.load(this.cwd);
+      return true;
     } catch (error) {
       this.flash(error instanceof Error ? error.message : 'Request failed');
+      return false;
     }
   }
 
@@ -774,10 +950,7 @@ ${usageTooltip(usageOf(s))}` : '')
       const form = (event.target as HTMLElement).closest('.jb-answer') as HTMLFormElement | null;
       if (!form) return;
       event.preventDefault();
-      const input = form.querySelector('.jb-answer-input') as HTMLInputElement | null;
-      const answer = input?.value.trim();
-      if (!answer) return;
-      void this.act(form.dataset.job || '', 'answer', { answer });
+      void this.submitAnswer(form);
     });
   }
 }

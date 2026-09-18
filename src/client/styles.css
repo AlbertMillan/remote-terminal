@@ -2724,9 +2724,13 @@ body {
   color: var(--text-secondary);
 }
 
+/* A parked run's open questions. The parse lives in decision-format.ts; this
+   is only what gives each part its own weight on the page. Text blocks carry a
+   measure, because the panel is far wider than anything is comfortable to read
+   across, and the model's own hard wraps no longer set the column. */
 .jb-question {
   margin: 0 14px 12px;
-  padding: 12px;
+  padding: 12px 14px 14px;
   border-radius: 6px;
   background: rgba(224, 175, 104, 0.1);
   border: 1px solid rgba(224, 175, 104, 0.28);
@@ -2734,28 +2738,166 @@ body {
 .jb-question-label {
   font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--warning);
-  margin-bottom: 6px;
-}
-.jb-question-text {
-  font-size: 12px;
-  color: var(--text-primary);
-  white-space: pre-wrap;
   margin-bottom: 10px;
 }
-.jb-answer { display: flex; gap: 8px; flex-wrap: wrap; }
+.jb-q-preamble,
+.jb-q-note {
+  max-width: 90ch;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.jb-q-note {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-subtle);
+}
+.jb-q-preamble p + p,
+.jb-q-note p + p,
+.jb-q-part-body p + p { margin-top: 8px; }
+
+/* Two questions sit side by side on a wide panel and stack on a narrow one.
+   The minimum column width is the point where a line stops being comfortable
+   to read, so the grid never trades legibility for filling the space. */
+.jb-q-cards {
+  display: grid;
+  /* min() and not a bare 460px: below that width the track would be wider than
+     the panel and the cards would run off the side of a phone screen. */
+  grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+/* A lone question must not stretch across the whole panel: one column is the
+   full width, and a 1400px line is no more readable than an unstructured one. */
+.jb-q-card { max-width: 700px; }
+
+/* One question. The whole point of the card is that the question outranks
+   everything explaining it. */
+.jb-q-card {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  border-radius: 6px;
+  background: rgba(26, 27, 38, 0.66);
+  border: 1px solid var(--border-subtle);
+}
+.jb-q-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.jb-q-num {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--warning);
+  background: rgba(224, 175, 104, 0.14);
+  border: 1px solid rgba(224, 175, 104, 0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.jb-q-text {
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.jb-q-part { margin-bottom: 10px; }
+.jb-q-part-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.jb-q-part-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.jb-q-options { list-style: none; margin: 0; padding: 0; }
+.jb-q-option {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.jb-q-opt {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(122, 162, 247, 0.12);
+  border-radius: 3px;
+  padding: 1px 0;
+}
+.jb-q-opt-text { color: var(--text-secondary); }
+
+/* What the run would do, set apart from what it observed. The answer box is
+   pushed to the bottom of the card so the boxes line up across a row. */
+.jb-q-rec {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  border-left: 3px solid var(--success);
+  background: rgba(158, 206, 106, 0.08);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.jb-q-rec.assumes {
+  border-left-color: var(--warning);
+  background: rgba(224, 175, 104, 0.08);
+}
+.jb-q-rec-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--success);
+  margin-right: 8px;
+}
+.jb-q-rec.assumes .jb-q-rec-label { color: var(--warning); }
+
 .jb-answer-input {
-  flex: 1 1 200px;
+  display: block;
+  width: 100%;
   min-width: 0;
-  padding: 7px 10px;
+  margin-top: auto;
+  padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
 }
 .jb-answer-input:focus { outline: none; border-color: var(--accent); }
+.jb-answer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* The fallback, for a detail this could not read as a question: the model's
+   own layout, minus the syntax it wrote it in. */
+.jb-question-text {
+  max-width: 90ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+.jb-question-text + .jb-answer .jb-answer-input { max-width: 90ch; margin-bottom: 8px; }
 
 .jb-spec {
   margin: 0 14px 12px;
