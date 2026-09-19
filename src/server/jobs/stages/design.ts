@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude, type UsageSink } from '../../agent/claude-run.js';
+import { RunAbortedError, runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { COMPANION_DIR } from '../../projects/project-store.js';
 import type { Job } from '../types.js';
 
@@ -77,15 +77,15 @@ WHAT TO DO
 One paragraph: what this feature does and why, in terms of observable behaviour.
 
 ## Design decisions
-The choices you made and WHY, including the alternatives you rejected. Each
-decision as a "- **<decision>** — <rationale>" bullet. This is the section the
-user reviews before approving, so a decision they would disagree with must be
-visible here, not buried in the plan.
+At most five bullets, one or two sentences each, as "- **<decision>** — <why>".
+This is the section the user reviews before approving, so a decision they would
+disagree with must be visible here — but a decision nobody would argue with
+needs no defence. Name a rejected alternative only where you nearly chose it.
 
 ## Planned changes
-The concrete edits, as a list of "- \`path/to/file.ts\` — <what changes>".
-Name files that already exist wherever possible. Anything you intend to create
-should say "(new)".
+One line per file: "- \`path/to/file.ts\` — <what changes>". Name files that
+already exist wherever possible; anything you intend to create says "(new)".
+No prose between the lines.
 
 ## Verification
 How to prove it works: the tests to add or run, and what to check by hand.
@@ -114,10 +114,37 @@ read — so a bare reference carries none of its meaning across:
 - Spell out any term, code or constant the answer turns on, rather than assuming
   the reader has it in front of them.
 
+LENGTH
+Match the spec to the size of the change, and err short. A change to one or two
+files should be done in about 40 lines; 120 lines is a hard ceiling whatever the
+feature. Cut every sentence that justifies a decision nobody would question,
+restates the code, or explains the same point a second way — a reviewer reads
+this to approve it, not to be convinced of it.
+
 STRICT CONSTRAINTS
 - Write ONLY ${specPath}. Do not modify any source file, and do not write code.
-- Be concrete and short. Every line should tell the implementer something they
-  could not infer from the feature title.`;
+- Be concrete. Every line should tell the implementer something they could not
+  infer from the feature title.`;
+}
+
+/**
+ * The follow-up sent to a RESUMED design session.
+ *
+ * The session already read the repository and wrote the spec, so this says only
+ * what changed: the answer. Re-running design instead means a fresh session
+ * that rediscovers everything — measured at 23 turns and 1.45M cache-read
+ * tokens on a one-file feature, to re-learn what the first pass already knew.
+ */
+function buildAnswerPrompt(specPath: string, answer: string): string {
+  return `The user has answered your open question:
+
+"${answer}"
+
+Fold that answer into ${specPath}: update the sections it affects and REMOVE the
+"${OPEN_QUESTION_MARKER}" section entirely. You already have what you need from
+the repository — re-read a file only if the answer genuinely turns on something
+you have not seen. Change nothing else, and keep the spec within its length
+budget.`;
 }
 
 /**
@@ -131,6 +158,11 @@ export async function runDesignStage(opts: {
   worktreePath: string;
   /** Answer to the previous pass's open question, when re-running after one. */
   answer?: string | null;
+  /**
+   * The session that asked the question, continued rather than replaced when
+   * an answer arrives.
+   */
+  resumeSessionId?: string | null;
   /** Records what the run consumed; see runner.ts. */
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
@@ -139,7 +171,16 @@ export async function runDesignStage(opts: {
   laneKey?: string;
   onSpawn?: () => void;
 }): Promise<DesignResult> {
-  const { job, worktreePath, answer = null, onUsage, signal, laneKey, onSpawn } = opts;
+  const {
+    job,
+    worktreePath,
+    answer = null,
+    resumeSessionId = null,
+    onUsage,
+    signal,
+    laneKey,
+    onSpawn,
+  } = opts;
 
   const slug = specSlugFor(job.title, job.featureId);
   const specRel = `${COMPANION_DIR}/${slug}.md`;
@@ -149,14 +190,11 @@ export async function runDesignStage(opts: {
 
   mkdirSync(dirname(specAbs), { recursive: true });
 
-  const prompt = buildDesignPrompt({ job, specPath: specRel, existingSpec, answer });
-
-  logger.info({ jobId: job.id, specRel }, 'design: running');
   // Deliberately no Bash: a design pass reads code, it does not execute it. The
   // model will reach for a shell anyway and be refused, which is fine — the
   // stage's contract is "a spec exists", verified below, so denials are not
   // treated as failure.
-  const result = await runClaude(worktreePath, prompt, [`${COMPANION_DIR}/**`], {
+  const runOptions = {
     allowedTools: ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
     timeoutMs: getConfig().jobs.stageTimeoutMs,
     signal,
@@ -164,7 +202,34 @@ export async function runDesignStage(opts: {
     onUsage,
     laneKey,
     onSpawn,
-  });
+  };
+
+  const fullPrompt = () => buildDesignPrompt({ job, specPath: specRel, existingSpec, answer });
+  const canResume = Boolean(answer && resumeSessionId);
+
+  logger.info({ jobId: job.id, specRel, resumed: canResume }, 'design: running');
+
+  let result;
+  if (canResume) {
+    try {
+      result = await runClaude(worktreePath, buildAnswerPrompt(specRel, answer as string), [
+        `${COMPANION_DIR}/**`,
+      ], { ...runOptions, resumeSessionId: resumeSessionId as string });
+    } catch (error) {
+      // A cancelled run is the user's decision, not a broken resume.
+      if (error instanceof RunAbortedError) throw error;
+      // The transcript can be gone, or the session unusable. Falling back to a
+      // fresh pass costs what the old behaviour always cost, so the worst case
+      // of resuming is the previous status quo.
+      logger.warn(
+        { jobId: job.id, error: (error as Error).message },
+        'design: resume failed, re-running the pass from scratch'
+      );
+      result = await runClaude(worktreePath, fullPrompt(), [`${COMPANION_DIR}/**`], runOptions);
+    }
+  } else {
+    result = await runClaude(worktreePath, fullPrompt(), [`${COMPANION_DIR}/**`], runOptions);
+  }
 
   if (!existsSync(specAbs)) {
     throw new Error('The design run finished without writing a spec');

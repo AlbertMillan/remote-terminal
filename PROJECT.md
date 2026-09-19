@@ -64,3 +64,5 @@ status: active
 
 ## Track: Pipeline throughput
 - [x] `f-qd41mv` P1 Per-project run lanes, queued-vs-running on the board, and `--strict-mcp-config` on stage runs
+- [x] `f-8kz2ht` P1 Resume the asking session on an answer, spec length budget, `--disable-slash-commands`
+- [ ] `f-3mw07r` P2 Trim CLAUDE.md — it costs 9.7k tokens on every turn of every stage run

@@ -319,6 +319,13 @@ export interface SpawnOptions {
    */
   onSpawn?: () => void;
   /**
+   * Continue this Claude session instead of starting a new one.
+   *
+   * The session is resolved from `cwd`, so it must be a session that ran in
+   * this same worktree — which every stage of a job does.
+   */
+  resumeSessionId?: string;
+  /**
    * Abort the run. Kills the child process tree if one is already running, and
    * skips spawning entirely if the run is still queued behind maxConcurrent —
    * which a registry of live child processes would miss.
@@ -399,6 +406,13 @@ export function spawnClaude(
         // definitions in its prompt. Measured at ~7.3k tokens per run on this
         // machine, on top of the startup cost of each server process.
         '--strict-mcp-config',
+        // Same argument for skills: a stage cannot invoke one, and the listing
+        // is ~2.4k tokens of every prompt. Both flags pay off per TURN, because
+        // the prefix is re-read on each one.
+        '--disable-slash-commands',
+        // Continuing the conversation that asked the question, rather than
+        // starting one that has to rediscover the repository. See design.ts.
+        ...(options.resumeSessionId ? ['--resume', options.resumeSessionId] : []),
         '--output-format',
         'json',
       ],

@@ -288,6 +288,9 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
     job,
     worktreePath,
     answer,
+    // Continue the conversation that asked, rather than starting one that has
+    // to rediscover the repository to apply a one-line answer.
+    resumeSessionId: job.claudeSessionId,
     onUsage: usageFor(job.id, 'design'),
     signal,
     ...runLane(job, 'design'),
@@ -371,11 +374,19 @@ async function executeImplement(job: Job, signal?: AbortSignal): Promise<void> {
   const specPath = specPathOf(job.id);
   if (!specPath) throw new Error('No approved spec found for this job');
 
+  // Consume the answer to a question THIS stage parked on. It used to be
+  // recorded on the job and read by nobody, so answering an implement question
+  // re-ran the identical prompt into the same wall.
+  const answer = job.pendingAnswer;
+  if (answer) updateJob(job.id, { pendingAnswer: null });
+
   const result = await runImplementStage({
     job,
     worktreePath,
     specPath,
     baseBranch: await baseBranchOf(job),
+    answer,
+    resumeSessionId: job.claudeSessionId,
     onUsage: usageFor(job.id, 'implement'),
     signal,
     ...runLane(job, 'implement'),

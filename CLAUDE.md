@@ -297,7 +297,24 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
   no MCP tool is callable from one — but without the flag each run still started every MCP
   server configured on the machine and carried all of their tool definitions in its prompt.
   Measured at ~7.3k tokens per run, on every run of every stage.
-- Covered by `tests/run-queue.test.ts`.
+- **An answered question RESUMES the session that asked it** (`--resume`, wired in
+  `design.ts` and `implement.ts`). A fresh pass rediscovers the repository to apply a
+  one-line answer — measured at 23 turns and 1.45M cache-read tokens on a one-file
+  feature. A failed resume falls back to the full pass, so the worst case is the old
+  behaviour; a `RunAbortedError` is re-thrown, or cancelling would be re-run at full cost.
+  `implement` also now *reads* `pendingAnswer`: it was recorded and consumed by nobody, so
+  answering an implement question re-ran the identical prompt into the same wall.
+- Runs pass `--disable-slash-commands` as well as `--strict-mcp-config`: a stage can invoke
+  neither a skill nor an MCP tool, and the two listings are ~2.4k and ~7.3k tokens of every
+  prompt — which the run re-reads on every turn.
+- The design prompt carries a **length budget** (~40 lines for a one or two file change,
+  120 hard ceiling, five decision bullets). Without one it produced a 154-line spec for a
+  fold/unfold button, and `implement` then pastes that spec into all of its turns.
+- Measured decomposition of a stage run's prompt in this repo: 29.3k harness (system prompt,
+  tool definitions, global CLAUDE.md) + 9.7k **this file** + 1.4k git/env. `--allowedTools`
+  changes none of it — the definitions are always present. Every token here is re-read on
+  every turn, so this file's size is a per-turn tax on every job.
+- Covered by `tests/run-queue.test.ts` and `tests/stage-resume.test.ts`.
 
 ## Reading a Parked Job's Question
 
