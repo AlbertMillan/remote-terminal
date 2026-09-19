@@ -2926,21 +2926,38 @@ body {
   overflow: hidden;
 }
 
+/* The head folds the list away; the count stays on it, so a folded pane still
+   says whether the run touched anything. */
 .jb-docs-head {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
   gap: 10px;
+  width: 100%;
   padding: 8px 12px;
   background: var(--bg-primary);
+  border: none;
   border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
-.jb-docs-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.jb-docs-head:hover { background: var(--bg-tertiary); }
+/* Keyboard focus lands back here after a fold, so it has to be visible. */
+.jb-docs-head:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.jb-docs-count {
+  margin-left: auto;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.jb-docs.collapsed .jb-docs-body { display: none; }
+.jb-docs.collapsed .jb-docs-head { border-bottom: 0; }
 
 .jb-doc-list { list-style: none; margin: 0; padding: 0; }
 .jb-doc + .jb-doc { border-top: 1px solid var(--border-subtle); }

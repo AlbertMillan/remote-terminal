@@ -242,8 +242,25 @@ export class JobBoard {
   private docBodies = new Map<string, { body: string; truncated: boolean }>();
   /** Jobs whose unchanged-document tail the user has unfolded. */
   private docsExpanded = new Set<string>();
+  /**
+   * Jobs whose document pane is folded away.
+   *
+   * Kept apart from the cache above on purpose: folding is presentational, and
+   * the list itself has to stay loaded whether or not it is on screen, because
+   * the references inside a parked question resolve against it.
+   */
+  private docsCollapsed = new Set<string>();
   /** A section to scroll to once the document it lives in has rendered. */
   private pendingAnchor: { jobId: string; section: string } | null = null;
+  /**
+   * A job whose fold control should get focus back after the next render.
+   *
+   * The head folds through render(), which replaces the board's HTML wholesale
+   * — so the button destroys itself on its own click and focus falls back to
+   * <body>. Without this a keyboard user cannot press Space twice to fold and
+   * unfold; they have to tab through the whole card again.
+   */
+  private refocusDocsHead: string | null = null;
   /** Diff text keyed by job id, fetched lazily at the merge gate. */
   private diffs = new Map<string, { diff: string; stat: DiffStat | null; truncated: boolean }>();
   /** Findings keyed by job id, loaded when a job parks at the review gate. */
@@ -366,6 +383,11 @@ export class JobBoard {
    * no park is readable without the thing it is about, and a question's
    * citations only become links once this list is here.
    *
+   * The pane itself starts FOLDED: this fetch is the board's initiative rather
+   * than a request to read the list. Folding only on this FIRST fetch is what
+   * the `!this.docs.has()` selection above buys — fold anywhere else and a poll
+   * re-folds a pane the user just opened.
+   *
    * A live job's list is refetched only when already on screen: it changes as
    * stages run, and a stale list of what a run touched is worse than none.
    */
@@ -377,6 +399,7 @@ export class JobBoard {
     await Promise.all([...parked, ...live].map((job) => this.fetchDocs(job.id)));
     for (const job of parked) {
       if (job.parkReason === 'question') this.expanded.add(job.id);
+      this.docsCollapsed.add(job.id);
     }
   }
 
@@ -397,6 +420,7 @@ export class JobBoard {
     this.openDoc.clear();
     this.docBodies.clear();
     this.docsExpanded.clear();
+    this.docsCollapsed.clear();
     this.diffs.clear();
     this.findings.clear();
     this.expanded.clear();
@@ -439,6 +463,18 @@ export class JobBoard {
       </div>`;
     this.applyPendingFocus(container);
     this.applyPendingAnchor(container);
+    this.applyRefocusDocsHead(container);
+  }
+
+  /** Put focus back on the fold control that its own render just destroyed. */
+  private applyRefocusDocsHead(container: HTMLElement): void {
+    const jobId = this.refocusDocsHead;
+    if (!jobId) return;
+    this.refocusDocsHead = null;
+    const head = [...container.querySelectorAll<HTMLButtonElement>('.jb-docs-head')].find(
+      (node) => node.dataset.job === jobId
+    );
+    head?.focus();
   }
 
   /**
@@ -745,34 +781,49 @@ ${usageTooltip(usageOf(s))}` : '')
    * the run did that the user had no way of knowing about; an unchanged one is
    * context a question cites. The unchanged tail folds away, because in a
    * docs-heavy repo it is long and nobody opens the end of it.
+   *
+   * The head is a disclosure control over the whole list, and the shell is
+   * rendered even for an empty one: a loaded pane with no header would be a
+   * pane with nothing to unfold it by. The count chip stays outside the folding
+   * body, because "3 changed by this run" is the line that makes anyone open it.
    */
   private renderDocs(job: Job, docs: JobDoc[]): string {
-    if (docs.length === 0) {
-      return '<div class="pw-hint">No documents for this job yet.</div>';
-    }
-
     const changed = docs.filter((d) => d.status !== 'unchanged');
     const unchanged = docs.filter((d) => d.status === 'unchanged');
     const showAll = this.docsExpanded.has(job.id);
     const shown = showAll ? unchanged : unchanged.slice(0, DOCS_SHOWN);
     const hidden = unchanged.length - shown.length;
+    const collapsed = this.docsCollapsed.has(job.id);
 
     const rows = [...changed, ...shown].map((doc) => this.renderDocRow(job, doc)).join('');
 
+    const body =
+      docs.length === 0
+        ? '<div class="pw-hint">No documents for this job yet.</div>'
+        : `<ul class="jb-doc-list">${rows}</ul>
+           ${
+             hidden > 0
+               ? `<button type="button" class="jb-doc-more" data-job="${escapeAttr(job.id)}">
+                    Show ${hidden} more document${hidden === 1 ? '' : 's'}
+                  </button>`
+               : ''
+           }`;
+
+    // aria-expanded on its own announces a state without saying whose, so the
+    // body carries an id for the head to point at.
+    const bodyId = `jb-docs-body-${escapeAttr(job.id)}`;
+
     return `
-      <div class="jb-docs">
-        <div class="jb-docs-head">
+      <div class="jb-docs${collapsed ? ' collapsed' : ''}">
+        <button type="button" class="jb-docs-head" data-job="${escapeAttr(job.id)}"
+                aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="${bodyId}">
           <span>Documents</span>
-          <span class="jb-docs-count">${changed.length} changed by this run</span>
-        </div>
-        <ul class="jb-doc-list">${rows}</ul>
-        ${
-          hidden > 0
-            ? `<button type="button" class="jb-doc-more" data-job="${escapeAttr(job.id)}">
-                 Show ${hidden} more document${hidden === 1 ? '' : 's'}
-               </button>`
-            : ''
-        }
+          <span class="jb-docs-count">${
+            docs.length === 0 ? 'no documents' : `${changed.length} changed by this run`
+          }</span>
+          <span class="jb-chevron">${collapsed ? '▸' : '▾'}</span>
+        </button>
+        <div class="jb-docs-body" id="${bodyId}">${body}</div>
       </div>`;
   }
 
@@ -983,19 +1034,21 @@ ${usageTooltip(usageOf(s))}` : '')
                  data-path="${escapeAttr(specPath)}">${shown ? 'Hide spec' : 'View spec'}</button>`
       );
     }
-    // Not gated on the implement stage: a design that only wrote documents has
-    // a diff worth reading, and it is the one thing that says what it changed.
     if (job.worktreePath) {
+      // Not gated on the implement stage: a design that only wrote documents
+      // has a diff worth reading, and it is the one thing that says what it
+      // changed.
       buttons.push(
         `<button class="btn-secondary jb-diff-btn" data-job="${id}">${
           this.diffs.has(job.id) ? 'Hide diff' : 'View diff'
         }</button>`
       );
-    }
-    // No hide for a job parked on a question: the documents are part of the
-    // decision, and dropping them would unlink the references in it.
-    if (job.worktreePath && job.parkReason !== 'question') {
-      const shown = this.docs.has(job.id);
+      // The entry point for a job whose list has never been fetched — there is
+      // no pane to click the chevron on yet. Offered on a job parked on a
+      // question too, now that hiding is a fold rather than a delete: the
+      // references in the question resolve against a list that stays loaded
+      // either way.
+      const shown = this.docs.has(job.id) && !this.docsCollapsed.has(job.id);
       buttons.push(
         `<button class="btn-secondary jb-docs-btn" data-job="${id}">${
           shown ? 'Hide documents' : 'View documents'
@@ -1095,6 +1148,7 @@ ${usageTooltip(usageOf(s))}` : '')
       }
       this.expanded.delete(jobId);
       this.docs.delete(jobId);
+      this.docsCollapsed.delete(jobId);
       this.openDoc.delete(jobId);
       this.diffs.delete(jobId);
       if (this.cwd) await this.load(this.cwd);
@@ -1128,6 +1182,8 @@ ${usageTooltip(usageOf(s))}` : '')
       return;
     }
     this.expanded.add(jobId);
+    // Opening a document is asking to read it — a pane folded away cannot show it.
+    this.docsCollapsed.delete(jobId);
     this.openDoc.set(jobId, { path, mode });
     // Rendered before the fetch so the row opens on the click and says it is
     // loading, rather than nothing happening while git runs.
@@ -1136,16 +1192,34 @@ ${usageTooltip(usageOf(s))}` : '')
     this.render();
   }
 
-  /** Show or hide a job's documents on request. */
+  /**
+   * Fold or unfold a job's document pane, fetching the list the first time.
+   *
+   * Nothing here discards the list: a question's references resolve against it,
+   * and specPathOf() reads which row is the spec, so hiding has to stay a class.
+   * Freshness is unaffected — a live job on screen is refetched by
+   * loadDocsForParked() on every poll, and a project switch clears the lot.
+   *
+   * Unfolding a cached list has to expand the card as well: the pane renders
+   * only inside renderBody(), while the button that got us here renders on
+   * every card. A job parked at the design or merge gate is cached and
+   * collapsed — without this, its button flips its own label and puts nothing
+   * on screen.
+   */
   private async toggleDocs(jobId: string): Promise<void> {
     if (this.docs.has(jobId)) {
-      this.docs.delete(jobId);
-      this.openDoc.delete(jobId);
-      this.docsExpanded.delete(jobId);
+      if (this.docsCollapsed.has(jobId)) {
+        this.docsCollapsed.delete(jobId);
+        this.expanded.add(jobId);
+      } else {
+        this.docsCollapsed.add(jobId);
+      }
       this.render();
       return;
     }
     this.expanded.add(jobId);
+    // Asking for a list that is not here yet is asking to see it.
+    this.docsCollapsed.delete(jobId);
     await this.fetchDocs(jobId);
     this.render();
   }
@@ -1182,6 +1256,11 @@ ${usageTooltip(usageOf(s))}` : '')
    */
   private async openReference(jobId: string, path: string, section: string): Promise<void> {
     if (section) this.pendingAnchor = { jobId, section };
+    // Needed here as well as in toggleDoc(): the early return below renders
+    // without going near it, and scrolling to a heading inside a folded pane
+    // silently does nothing. With parked panes starting folded, that is the
+    // normal path — every reference click begins on one.
+    this.docsCollapsed.delete(jobId);
     const open = this.openDoc.get(jobId);
     if (open?.path === path && open.mode === 'text') {
       this.render(); // already open — only the scroll is left to do
@@ -1344,6 +1423,15 @@ ${usageTooltip(usageOf(s))}` : '')
 
       const docsBtn = target.closest('.jb-docs-btn') as HTMLElement | null;
       if (docsBtn) return void this.toggleDocs(docsBtn.dataset.job || '');
+
+      // The pane's own chevron: the affordance once the list is on screen.
+      // Only this path asks for the focus back — the actions-row button is a
+      // different control, and moving focus off it would be a surprise.
+      const docsHead = target.closest('.jb-docs-head') as HTMLElement | null;
+      if (docsHead) {
+        this.refocusDocsHead = docsHead.dataset.job || '';
+        return void this.toggleDocs(docsHead.dataset.job || '');
+      }
 
       const diff = target.closest('.jb-diff-btn') as HTMLElement | null;
       if (diff) return void this.toggleDiff(diff.dataset.job || '');

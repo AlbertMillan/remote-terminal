@@ -33,6 +33,45 @@ unanswerable without **Take over**. Every job card now carries a document pane
   the containment check. A job with no worktree answers `{ docs: [] }`, never an error —
   the board still renders `done` and discarded rows.
 
+### Folding the pane
+
+The pane's head is a `<button class="jb-docs-head">` that folds the list away, and a pane
+the board loaded on its own (`loadDocsForParked()`) **starts folded** — so a parked card
+reads question → answer box → a one-line `Documents · N changed by this run`. Without it,
+the longest pane on the board sat above the boxes you had to type into.
+
+- **Folding is a class, not a delete.** `docsCollapsed` on `JobBoard` is presentational
+  state beside the `docs` cache; nothing discards the list any more. `toggleDocs()` used
+  to drop `docs`/`openDoc`/`docsExpanded`, which is exactly why a job parked on a question
+  could not be offered a hide button at all — `linked()` and `specPathOf()` read
+  `this.docs`, so dropping it unlinks every `§3.2` in the question. Now the button is
+  offered on every job with a worktree, and its label reads `Hide documents` only when the
+  list is loaded *and* unfolded.
+- **Unfolding a cached list expands the card too.** The pane renders only inside
+  `renderBody()`, which `renderJob()` emits for an expanded card, while the actions row
+  renders always. A job parked at the design or merge gate is cached *and* collapsed, so
+  without the `expanded.add()` its `View documents` flips its own label and puts nothing on
+  screen — and the merge gate is precisely the gate that is a decision about what the
+  branch changed.
+- **Only the first fetch folds.** `loadDocsForParked()` selects parked jobs with
+  `!this.docs.has(j.id)` and refetches live ones already cached, so the add to
+  `docsCollapsed` happens once. Folding inside `fetchDocs()` instead would let a poll
+  re-fold a pane the user had just opened.
+- **Anything that opens a document unfolds the pane** — `toggleDoc()`'s opening path *and*
+  the top of `openReference()`. `openReference()` needs its own: it early-returns with a
+  bare `render()` when the referenced document is already open, and `applyPendingAnchor()`
+  would then scroll to a heading inside a `display: none` container and silently do
+  nothing. With parked panes starting folded, that is every reference click, not an edge.
+- Folding goes through `render()` like every other board toggle, so `captureDrafts()` runs
+  and a half-typed decision survives it. `renderDocs()` always emits the `.jb-docs` shell,
+  even for an empty list — a loaded pane with no header has nothing to unfold it by.
+- That same wholesale `render()` destroys the head button on its own click, so the fold
+  path records `refocusDocsHead` and `applyRefocusDocsHead()` puts focus back — otherwise
+  focus falls to `<body>` and a keyboard user cannot press Space twice to fold and unfold.
+  Only the head sets it; moving focus off the actions-row button would be a surprise.
+
+Covered by `tests/job-board-docs-dom.test.ts`.
+
 ### Linking the references in a question
 
 `findReferences()` / `resolveReference()` in `decision-format.ts` turn `§3.2` and

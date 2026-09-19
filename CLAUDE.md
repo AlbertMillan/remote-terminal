@@ -164,6 +164,13 @@ before **merge**.
   parts of a card and dead in others.
 - Browser-supplied paths are untrusted: `resolveInWorktree()` resolves symlinks *before* the
   containment check.
+- Hiding the pane is a **class (`docsCollapsed`), never a delete**: `linked()` and
+  `specPathOf()` read `this.docs`, so dropping the list unlinks every `§3.2` in the
+  question. Unfolding a cached list must also `expanded.add()` — the pane renders only
+  inside `renderBody()`, so otherwise the button flips its own label and shows nothing.
+- Anything that opens a document unfolds the pane, `openReference()`'s early return
+  included — `applyPendingAnchor()` scrolls into a `display: none` container and silently
+  does nothing.
 
 ## Keyboard shortcuts
 
