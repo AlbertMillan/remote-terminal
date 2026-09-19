@@ -118,6 +118,10 @@ this to approve it, not to be convinced of it.
 
 STRICT CONSTRAINTS
 - Write ONLY ${specPath}. Do not modify any source file, and do not write code.
+- A visual mockup is allowed when a screen's layout is the thing in question:
+  write it as an HTML file NEXT TO the spec, under ${COMPANION_DIR}/, and link it
+  from the spec. Anything written outside ${COMPANION_DIR}/ is reverted after the
+  run, so a mockup put anywhere else is silently lost.
 - Be concrete. Every line should tell the implementer something they could not
   infer from the feature title.`;
 }

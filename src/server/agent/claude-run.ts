@@ -356,6 +356,32 @@ export interface RunOptions extends SpawnOptions {
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
 
 /**
+ * The built-in tools a run is given, derived from what it already allows.
+ *
+ * `--allowedTools` is a PERMISSION list: it decides what may be called, and
+ * changes not a single token of the prompt. `--tools` decides which definitions
+ * exist at all, and the difference is most of the prompt — the full built-in set
+ * costs ~22.7k tokens per turn against ~4.5k for the six a stage uses, and a
+ * stage re-reads that on every turn. The tools nobody here can call are the
+ * expensive ones: Workflow alone is ~8.6k, PowerShell ~4k, Agent ~2.5k.
+ *
+ * Permission patterns (`Bash(git *)`) reduce to their tool name, and MCP tool
+ * names are dropped: `--tools` names built-ins only.
+ *
+ * NOTE for whoever enables MCP for a stage (browser-driven QA is the likely
+ * one): dropping `--strict-mcp-config` while `--tools` omits `ToolSearch` makes
+ * every MCP tool load EAGERLY rather than deferred — measured at 134k prompt
+ * tokens against 28k. Scope it with `--mcp-config` to the single server needed,
+ * or keep `ToolSearch` in the set.
+ */
+export function builtinToolsFor(allowed: string[]): string[] {
+  const names = allowed
+    .map((t) => t.split('(')[0].trim())
+    .filter((t) => t && !t.includes('__'));
+  return [...new Set(names)];
+}
+
+/**
  * One headless `claude -p` invocation (no queue, no scope checks). Resolves with
  * the parsed result on a clean exit; rejects on non-zero exit / spawn error /
  * timeout.
@@ -367,7 +393,9 @@ export function spawnClaude(
 ): Promise<ClaudeRunResult> {
   const cfg = getConfig().projectLog;
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
-  const tools = (options.allowedTools ?? DEFAULT_TOOLS).join(',');
+  const allowed = options.allowedTools ?? DEFAULT_TOOLS;
+  const tools = allowed.join(',');
+  const builtins = builtinToolsFor(allowed).join(',');
 
   return new Promise<ClaudeRunResult>((resolve, reject) => {
     // Nothing to kill yet, so an already-aborted signal must short-circuit before
@@ -388,6 +416,10 @@ export function spawnClaude(
         'acceptEdits',
         '--allowedTools',
         tools,
+        // Which definitions exist at all — see builtinToolsFor above. This is
+        // the single largest term in a run's prompt.
+        '--tools',
+        builtins,
         // Do not load the user's MCP servers. A stage's allowlist is file tools
         // only, so no MCP tool is callable from one — but without this every run
         // still starts every configured server and carries all of their tool

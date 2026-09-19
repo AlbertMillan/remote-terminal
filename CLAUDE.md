@@ -117,9 +117,15 @@ before **merge**.
   default one. A global queue made one project's stage wait on another's.
 - A stage stamps `spawned_at` when its process actually starts; `started_at` is when it was
   admitted. The gap is queue wait, and showing it as work makes a job look hung.
-- Every run passes `--strict-mcp-config` and `--disable-slash-commands`: a stage can call
-  neither an MCP tool nor a skill, and the two listings cost ~7.3k and ~2.4k tokens of
-  **every turn**. `--allowedTools` changes no tokens; it is a safety measure only.
+- Every run passes `--tools`, `--strict-mcp-config` and `--disable-slash-commands`.
+  `--allowedTools` is a permission list and costs **no** tokens; `--tools` decides which
+  definitions exist at all and is the largest term in the prompt — the full built-in set is
+  ~22.7k tokens per turn against ~4.5k for the six a stage uses. `builtinToolsFor()` derives
+  it from the allowlist each run already declares, so the two cannot drift.
+- **Enabling MCP for a stage needs care** (browser-driven QA is the likely first). Dropping
+  `--strict-mcp-config` while `--tools` omits `ToolSearch` makes every MCP tool load
+  *eagerly* instead of deferred: measured at 134k prompt tokens against 28k. Scope it with
+  `--mcp-config` to the one server needed, or keep `ToolSearch` in the set.
 - An answered question **resumes the session that asked** (`--resume`). A failed resume
   falls back to the full pass; `RunAbortedError` is re-thrown so a cancel is never re-run.
 - Prompt-level scoping is advisory; enforcement is the post-run revert of anything touched

@@ -66,3 +66,4 @@ status: active
 - [x] `f-qd41mv` P1 Per-project run lanes, queued-vs-running on the board, and `--strict-mcp-config` on stage runs
 - [x] `f-8kz2ht` P1 Resume the asking session on an answer, spec length budget, `--disable-slash-commands`
 - [x] `f-3mw07r` P2 Trim CLAUDE.md — contracts stay, reasoning moves to docs/ (9.7k → 4.0k tokens per turn)
+- [x] `f-p2r9wq` P1 Per-stage `--tools` — drop definitions no run can call (~20k tokens per turn)
