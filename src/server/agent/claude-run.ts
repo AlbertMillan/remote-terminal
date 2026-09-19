@@ -9,16 +9,13 @@ const logger = createLogger('claude-run');
 const execFileAsync = promisify(execFile);
 
 /**
- * Shared machinery for running headless `claude -p` passes with enforced edit
- * scoping.
+ * The one hardened path for headless `claude -p` runs: session-log generation,
+ * PROJECT.md migration and every pipeline stage.
  *
- * Extracted from project-log.ts so the session-log generator, the PROJECT.md
- * migration, and the job pipeline all run through one hardened path rather than
- * three near-copies. The safety properties matter more than the convenience:
- * the prompt's "only modify X" rule is advisory, since --permission-mode
- * acceptEdits auto-approves writes and the CLI cannot path-restrict them. So
- * every run is bracketed by a working-tree diff that reverts anything touched
- * outside the allowed globs, turning prompt-only scoping into enforced scoping.
+ * A prompt's "only modify X" is ADVISORY — `--permission-mode acceptEdits`
+ * auto-approves writes and the CLI cannot path-restrict them. Enforcement is
+ * the working-tree diff taken around every run, which reverts anything touched
+ * outside the allowed globs. Keep both halves.
  */
 
 /**
@@ -63,34 +60,64 @@ function withSpent(error: Error, partial: ClaudeRunResult | null): Error {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency queue — caps simultaneous `claude -p` runs at maxConcurrent.
+// Concurrency queue — caps simultaneous `claude -p` runs, per lane.
 // ---------------------------------------------------------------------------
-let active = 0;
-const pending: (() => void)[] = [];
 
-export function runQueued<T>(task: () => Promise<T>): Promise<T> {
+/**
+ * Runs queue per LANE, not globally — otherwise one project's stage waits on
+ * another's, invisibly. See `docs/job-pipeline.md`.
+ *
+ * The lane is the project, passed by the job runner. Runs without one (the
+ * session-log generator, PROJECT.md migration) share the default lane: they are
+ * background work and should not multiply.
+ */
+const DEFAULT_LANE = '';
+
+interface Lane {
+  active: number;
+  pending: (() => void)[];
+}
+
+const lanes = new Map<string, Lane>();
+
+function laneFor(key: string): Lane {
+  let lane = lanes.get(key);
+  if (!lane) {
+    lane = { active: 0, pending: [] };
+    lanes.set(key, lane);
+  }
+  return lane;
+}
+
+export function runQueued<T>(task: () => Promise<T>, laneKey = DEFAULT_LANE): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const lane = laneFor(laneKey);
     const start = () => {
-      active++;
+      lane.active++;
       task()
         .then(resolve, reject)
         .finally(() => {
-          active--;
-          const next = pending.shift();
+          lane.active--;
+          const next = lane.pending.shift();
           if (next) next();
+          // An idle lane is dropped so a long-lived server does not accumulate
+          // one per project it has ever touched.
+          else if (lane.active === 0 && lane.pending.length === 0) lanes.delete(laneKey);
         });
     };
-    if (active < Math.max(1, getConfig().projectLog.maxConcurrent)) {
+    if (lane.active < Math.max(1, getConfig().projectLog.maxConcurrent)) {
       start();
     } else {
-      pending.push(start);
+      lane.pending.push(start);
     }
   });
 }
 
 /** Number of runs currently executing (for diagnostics and the job board). */
 export function activeRunCount(): number {
-  return active;
+  let total = 0;
+  for (const lane of lanes.values()) total += lane.active;
+  return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,16 +208,12 @@ function num(value: unknown): number {
 /**
  * Pull usage out of the envelope.
  *
- * `modelUsage` is the source of truth, not the top-level `usage` block: on a
- * multi-turn run — which every pipeline stage is — `usage` reports only the
- * final turn's input, while `modelUsage` accumulates the whole run. A measured
- * two-turn run reported usage.input_tokens=19 against modelUsage 967, so
- * reading `usage` would under-report input by an order of magnitude. The
- * top-level block is kept only as the fallback for a shape that lacks
- * modelUsage.
+ * Read `modelUsage`, NOT the top-level `usage`: on a multi-turn run — every
+ * stage is one — `usage` reports only the final turn (measured: 19 against
+ * modelUsage's 967). `usage` stays as the fallback for shapes lacking it.
  *
- * Tolerant by design throughout: a CLI version that renames or drops these
- * keys must degrade to zeros, not break the pipeline that merely reports them.
+ * Tolerant throughout: a CLI that renames these keys must degrade to zeros, not
+ * break the pipeline that merely reports them. See `docs/token-usage-feature.md`.
  */
 function parseUsage(envelope: {
   usage?: unknown;
@@ -278,6 +301,19 @@ export interface SpawnOptions {
   /** Override the run timeout; defaults to projectLog.timeoutMs. */
   timeoutMs?: number;
   /**
+   * Called once the process actually starts, which is NOT when the run was
+   * requested: it may have waited in its lane first. The timeout below is
+   * armed here too, so queue time never counts against a stage's budget.
+   */
+  onSpawn?: () => void;
+  /**
+   * Continue this Claude session instead of starting a new one.
+   *
+   * The session is resolved from `cwd`, so it must be a session that ran in
+   * this same worktree — which every stage of a job does.
+   */
+  resumeSessionId?: string;
+  /**
    * Abort the run. Kills the child process tree if one is already running, and
    * skips spawning entirely if the run is still queued behind maxConcurrent —
    * which a registry of live child processes would miss.
@@ -310,9 +346,40 @@ export interface RunOptions extends SpawnOptions {
    * than that we don't know.
    */
   onUsage?: UsageSink;
+  /**
+   * The queue lane this run belongs to — the project, for a pipeline stage.
+   * Runs in different lanes never wait for each other.
+   */
+  laneKey?: string;
 }
 
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
+
+/**
+ * The built-in tools a run is given, derived from what it already allows.
+ *
+ * `--allowedTools` is a PERMISSION list: it decides what may be called, and
+ * changes not a single token of the prompt. `--tools` decides which definitions
+ * exist at all, and the difference is most of the prompt — the full built-in set
+ * costs ~22.7k tokens per turn against ~4.5k for the six a stage uses, and a
+ * stage re-reads that on every turn. The tools nobody here can call are the
+ * expensive ones: Workflow alone is ~8.6k, PowerShell ~4k, Agent ~2.5k.
+ *
+ * Permission patterns (`Bash(git *)`) reduce to their tool name, and MCP tool
+ * names are dropped: `--tools` names built-ins only.
+ *
+ * NOTE for whoever enables MCP for a stage (browser-driven QA is the likely
+ * one): dropping `--strict-mcp-config` while `--tools` omits `ToolSearch` makes
+ * every MCP tool load EAGERLY rather than deferred — measured at 134k prompt
+ * tokens against 28k. Scope it with `--mcp-config` to the single server needed,
+ * or keep `ToolSearch` in the set.
+ */
+export function builtinToolsFor(allowed: string[]): string[] {
+  const names = allowed
+    .map((t) => t.split('(')[0].trim())
+    .filter((t) => t && !t.includes('__'));
+  return [...new Set(names)];
+}
 
 /**
  * One headless `claude -p` invocation (no queue, no scope checks). Resolves with
@@ -326,7 +393,9 @@ export function spawnClaude(
 ): Promise<ClaudeRunResult> {
   const cfg = getConfig().projectLog;
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
-  const tools = (options.allowedTools ?? DEFAULT_TOOLS).join(',');
+  const allowed = options.allowedTools ?? DEFAULT_TOOLS;
+  const tools = allowed.join(',');
+  const builtins = builtinToolsFor(allowed).join(',');
 
   return new Promise<ClaudeRunResult>((resolve, reject) => {
     // Nothing to kill yet, so an already-aborted signal must short-circuit before
@@ -341,9 +410,39 @@ export function spawnClaude(
     // resolve `claude`/`claude.cmd` from PATH on Windows).
     const child = spawn(
       cfg.claudeCommand,
-      ['-p', '--permission-mode', 'acceptEdits', '--allowedTools', tools, '--output-format', 'json'],
+      [
+        '-p',
+        '--permission-mode',
+        'acceptEdits',
+        '--allowedTools',
+        tools,
+        // Which definitions exist at all — see builtinToolsFor above. This is
+        // the single largest term in a run's prompt.
+        '--tools',
+        builtins,
+        // Do not load the user's MCP servers. A stage's allowlist is file tools
+        // only, so no MCP tool is callable from one — but without this every run
+        // still starts every configured server and carries all of their tool
+        // definitions in its prompt. Measured at ~7.3k tokens per run on this
+        // machine, on top of the startup cost of each server process.
+        '--strict-mcp-config',
+        // Same argument for skills: a stage cannot invoke one, and the listing
+        // is ~2.4k tokens of every prompt. Both flags pay off per TURN, because
+        // the prefix is re-read on each one.
+        '--disable-slash-commands',
+        // Continuing the conversation that asked the question, rather than
+        // starting one that has to rediscover the repository. See design.ts.
+        ...(options.resumeSessionId ? ['--resume', options.resumeSessionId] : []),
+        '--output-format',
+        'json',
+      ],
       { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
     );
+
+    // The run is now a real process. Until this point it was queued, and a
+    // stage that reports itself as running while it waits is the reason a job
+    // looks hung when it is merely behind something else.
+    options.onSpawn?.();
 
     let stdout = '';
     let stderr = '';
@@ -537,5 +636,5 @@ export async function runClaude(
       logger.warn({ cwd, reverted }, 'claude-run: reverted out-of-scope edits made by the run');
     }
     return result;
-  });
+  }, options.laneKey);
 }

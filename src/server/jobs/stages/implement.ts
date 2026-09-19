@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude, type UsageSink } from '../../agent/claude-run.js';
+import { RunAbortedError, runClaude, type UsageSink } from '../../agent/claude-run.js';
 import { COMPANION_DIR } from '../../projects/project-store.js';
 import { commitAll, diffStat } from '../worktree.js';
 import type { Job } from '../types.js';
@@ -28,15 +28,32 @@ export interface ImplementResult {
 /** Marker the stage writes when it cannot proceed without a decision. */
 export const BLOCKED_MARKER = '## Blocked';
 
-function buildImplementPrompt(opts: { job: Job; specPath: string; spec: string }): string {
-  const { job, specPath, spec } = opts;
+function buildImplementPrompt(opts: {
+  job: Job;
+  specPath: string;
+  spec: string;
+  answer?: string | null;
+}): string {
+  const { job, specPath, spec, answer = null } = opts;
+
+  // Only reached when the session that asked could not be resumed; the answer
+  // must still arrive, or the stage re-runs into the wall it stopped at.
+  const answered = answer
+    ? `
+A previous attempt stopped on a question, and the user answered it:
+
+"${answer}"
+
+Act on that answer, and remove the "${BLOCKED_MARKER}" block from the spec.
+`
+    : '';
 
   return `Implement the feature described by the approved spec below. The spec has
 already been reviewed and approved — follow it rather than redesigning it.
 
 Feature: ${job.title}
 Spec file: ${specPath}
-
+${answered}
 === APPROVED SPEC ===
 ${spec}
 === END SPEC ===
@@ -71,22 +88,58 @@ CONSTRAINTS
 }
 
 /**
+ * The follow-up sent to a RESUMED implement session.
+ *
+ * The run parked because the approved spec did not hold, and wrote what it
+ * found into the spec. It already has the codebase in context, so this carries
+ * only the decision it was waiting on.
+ */
+function buildAnswerPrompt(answer: string): string {
+  return `The user has answered the question you stopped on:
+
+"${answer}"
+
+Carry on from there: make the changes, run the tests and the project's lint or
+typecheck, and stay inside the approved spec's "Out of scope". Remove the
+"${BLOCKED_MARKER}" block you appended. Stop again only if this answer turns
+out not to resolve it.`;
+}
+
+/**
  * Run the implement pass in the job's worktree.
  *
- * Write scope is the whole worktree: this stage is supposed to change source.
- * Isolation comes from the worktree itself rather than from path globs — the
- * user's real tree is a different directory on a different branch.
+ * Write scope is the whole worktree — this stage is meant to change source.
+ * Isolation is the worktree itself, not path globs: the user's real tree is a
+ * different directory on a different branch.
  */
 export async function runImplementStage(opts: {
   job: Job;
   worktreePath: string;
   specPath: string;
   baseBranch: string;
+  /** The user's answer to the question this stage parked on, if any. */
+  answer?: string | null;
+  /** The session that asked it, continued rather than replaced. */
+  resumeSessionId?: string | null;
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<ImplementResult> {
-  const { job, worktreePath, specPath, baseBranch, onUsage, signal } = opts;
+  const {
+    job,
+    worktreePath,
+    specPath,
+    baseBranch,
+    answer = null,
+    resumeSessionId = null,
+    onUsage,
+    signal,
+    laneKey,
+    onSpawn,
+  } = opts;
 
   const specAbs = join(worktreePath, specPath);
   if (!existsSync(specAbs)) {
@@ -94,19 +147,44 @@ export async function runImplementStage(opts: {
   }
   const spec = readFileSync(specAbs, 'utf-8');
 
-  const prompt = buildImplementPrompt({ job, specPath, spec });
+  const canResume = Boolean(answer && resumeSessionId);
+  // Without a session to continue, the answer still has to reach the run: it
+  // was previously recorded on the job and then read by nobody, so answering an
+  // implement question re-ran the identical prompt into the same wall.
+  const fullPrompt = () => buildImplementPrompt({ job, specPath, spec, answer });
 
-  logger.info({ jobId: job.id }, 'implement: running');
+  logger.info({ jobId: job.id, resumed: canResume }, 'implement: running');
   // Bash is granted here so the run can actually execute the tests it writes.
   // `['**']` allows the whole worktree; the revert guard still catches writes
   // that escape it entirely.
-  const result = await runClaude(worktreePath, prompt, ['**'], {
+  const runOptions = {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
     timeoutMs: getConfig().jobs.stageTimeoutMs,
     signal,
     failOnDenial: false,
     onUsage,
-  });
+    laneKey,
+    onSpawn,
+  };
+
+  let result;
+  if (canResume) {
+    try {
+      result = await runClaude(worktreePath, buildAnswerPrompt(answer as string), ['**'], {
+        ...runOptions,
+        resumeSessionId: resumeSessionId as string,
+      });
+    } catch (error) {
+      if (error instanceof RunAbortedError) throw error;
+      logger.warn(
+        { jobId: job.id, error: (error as Error).message },
+        'implement: resume failed, re-running the stage from scratch'
+      );
+      result = await runClaude(worktreePath, fullPrompt(), ['**'], runOptions);
+    }
+  } else {
+    result = await runClaude(worktreePath, fullPrompt(), ['**'], runOptions);
+  }
 
   const updatedSpec = existsSync(specAbs) ? readFileSync(specAbs, 'utf-8') : spec;
   const openQuestion = extractBlocked(updatedSpec);

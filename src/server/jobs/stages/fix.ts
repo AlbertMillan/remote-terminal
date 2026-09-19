@@ -87,8 +87,12 @@ export async function runFixStage(opts: {
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<FixResult> {
-  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage, signal } = opts;
+  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage, signal, laneKey, onSpawn } =
+    opts;
 
   const prompt = buildFixPrompt({ selected, skipped });
 
@@ -99,6 +103,8 @@ export async function runFixStage(opts: {
     signal,
     failOnDenial: false,
     onUsage,
+    laneKey,
+    onSpawn,
   });
 
   await commitAll(worktreePath, `fix: review findings for ${title}`);

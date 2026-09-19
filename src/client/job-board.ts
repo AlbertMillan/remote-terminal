@@ -98,8 +98,34 @@ export interface JobStage {
   status: StageStatus;
   detail: string | null;
   startedAt: string | null;
+  /** When the agent process started; null while the stage is still queued. */
+  spawnedAt?: string | null;
   finishedAt: string | null;
   usage?: StageUsage;
+}
+
+/**
+ * A running stage whose process has not started yet is WAITING, not working.
+ *
+ * Runs queue per project, so a stage can be admitted and then sit behind
+ * another run in the same project. Reporting that as execution is what makes a
+ * job look hung: the elapsed time climbs, the stage says "running", and
+ * nothing is happening. Stages recorded before this existed have no
+ * `spawnedAt` at all and are shown as running, which is what they were.
+ */
+export function isQueued(stage: JobStage): boolean {
+  return stage.status === 'running' && stage.spawnedAt === null;
+}
+
+/** How long a stage has been doing what it is currently doing. */
+export function elapsedSince(iso: string | null, now = Date.now()): string {
+  if (!iso) return '';
+  const ms = now - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return `${Math.floor(ms / 1000)}s`;
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h${mins % 60}m`;
 }
 
 export interface Job {
@@ -353,24 +379,17 @@ export class JobBoard {
   }
 
   /**
-   * Fetch the documents a parked job is waiting on, before they are asked for.
+   * Fetch the documents a parked job is waiting on, before they are asked for —
+   * no park is readable without the thing it is about, and a question's
+   * citations only become links once this list is here.
    *
-   * Every park needs them: a question cites them by section, the design gate
-   * exists to review the spec, and the merge gate is a decision about what the
-   * branch changed. Same call the review gate makes for its findings, and for
-   * the same reason — the decision is not readable without the thing it is
-   * about. A job parked on a QUESTION is also unfolded, because its citations
-   * are only linkable once this list is here.
+   * The pane itself starts FOLDED: this fetch is the board's initiative rather
+   * than a request to read the list. Folding only on this FIRST fetch is what
+   * the `!this.docs.has()` selection above buys — fold anywhere else and a poll
+   * re-folds a pane the user just opened.
    *
-   * The pane itself starts FOLDED, though: this fetch is the board's initiative
-   * rather than a request to read the list, and on a parked question the answer
-   * box belongs above it. Folding happens only on this first fetch — the job is
-   * selected by `!this.docs.has()` — so a poll can never re-fold a pane the user
-   * has opened.
-   *
-   * A live job's list is refetched only when it is already on screen: it
-   * changes under the user as stages run, and a stale list of what a run
-   * touched is worse than no list.
+   * A live job's list is refetched only when already on screen: it changes as
+   * stages run, and a stale list of what a run touched is worse than none.
    */
   private async loadDocsForParked(): Promise<void> {
     const parked = this.jobs.filter((j) => j.status === 'parked' && !this.docs.has(j.id));
@@ -513,7 +532,16 @@ export class JobBoard {
   }
 
   private stateLabel(job: Job): string {
-    if (job.status === 'running') return `running · ${job.stage ?? ''}`;
+    if (job.status === 'running') {
+      const active = job.stages.find((s) => s.status === 'running');
+      if (active && isQueued(active)) {
+        // Named for what it is waiting on: another run in this same project.
+        const waited = elapsedSince(active.startedAt);
+        return `queued · ${active.name}${waited ? ` · ${waited}` : ''}`;
+      }
+      const ran = active ? elapsedSince(active.spawnedAt ?? active.startedAt) : '';
+      return `running · ${job.stage ?? ''}${ran ? ` · ${ran}` : ''}`;
+    }
     if (job.status === 'parked') {
       return job.parkReason === 'question' ? 'needs a decision' : `waiting · ${job.stage ?? ''}`;
     }
@@ -524,13 +552,17 @@ export class JobBoard {
     return `
       <div class="jb-pipeline">
         ${job.stages
-          .map(
-            (s) => `<span class="jb-stage ${s.status}" title="${escapeAttr(
-              `${s.name}: ${s.status}${s.detail ? ` — ${s.detail}` : ''}` +
+          .map((s) => {
+            const queued = isQueued(s);
+            const what = queued
+              ? `waiting for another run in this project to finish (${elapsedSince(s.startedAt)})`
+              : `${s.status}${s.detail ? ` — ${s.detail}` : ''}`;
+            return `<span class="jb-stage ${queued ? 'queued' : s.status}" title="${escapeAttr(
+              `${s.name}: ${what}` +
                 (usageOf(s).runCount > 0 ? `
 ${usageTooltip(usageOf(s))}` : '')
-            )}">${STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`
-          )
+            )}">${queued ? '⋯' : STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`;
+          })
           .join('')}
       </div>`;
   }
@@ -633,17 +665,11 @@ ${usageTooltip(usageOf(s))}` : '')
   }
 
   /**
-   * The decision a parked run is waiting on.
+   * The decision a parked run is waiting on: `job.detail` parsed
+   * (decision-format.ts) with each part rendered as its own element rather than
+   * printed as prose. See `docs/job-decisions.md`.
    *
-   * A stage that stops rather than guess writes one bullet per open question,
-   * each running the question, its context, the alternatives it weighed and its
-   * recommendation together as prose. Printed verbatim — which is what this used
-   * to do — the question you actually have to answer reads exactly like the
-   * paragraph explaining it, and the model's own hard wraps pin the text into a
-   * narrow column. So the detail is parsed (decision-format.ts) and every part
-   * rendered as its own element.
-   *
-   * Parsing is best-effort by design. A detail it cannot make sense of falls
+   * Parsing is best-effort by design — a detail it cannot make sense of falls
    * back to the text as written, never to a wrong reading of it.
    */
   private renderDecision(job: Job): string {
@@ -886,16 +912,11 @@ ${usageTooltip(usageOf(s))}` : '')
   /**
    * Escape a question's prose and turn its references into buttons.
    *
-   * One helper rather than a call at each site: escaping happens in eight
-   * places across a decision card, and linking in only some of them would make
-   * a reference clickable in the options and dead in the recommendation.
-   *
-   * Escaping and linking have to happen together — splicing anchors into
-   * already-escaped text would need offsets the escaping has already moved — so
-   * the raw string is walked once, escaping the gaps and wrapping the
-   * references. It only ever WRAPS: nothing the model wrote is dropped, and a
-   * reference that resolves to no document, or to more than one, is escaped
-   * like any other text.
+   * ONE helper, not a call per site: a decision card escapes in eight places,
+   * and linking in only some leaves refs live in the options and dead in the
+   * recommendation. Escaping and linking must happen together — splicing into
+   * escaped text needs offsets the escaping has already moved — and linking
+   * only ever WRAPS, so nothing the model wrote is dropped.
    */
   private linked(job: Job, raw: string): string {
     const refs = findReferences(raw);

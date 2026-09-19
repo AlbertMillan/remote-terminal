@@ -8,6 +8,7 @@ import {
   deleteJob,
   finishStage,
   getJob,
+  markStageSpawned,
   getJobWithStages,
   listJobsByStatus,
   startStage,
@@ -56,6 +57,23 @@ const logger = createLogger('job-runner');
  */
 function usageFor(jobId: string, stage: StageName): UsageSink {
   return (usage) => addStageUsage(jobId, stage, usage);
+}
+
+/**
+ * What a stage needs to take its turn in the queue and report when it gets one.
+ *
+ * The lane is the PROJECT, which is what makes the scheduler's promise true all
+ * the way down: it admits one job per project, and now their agent runs no
+ * longer serialise behind one another across projects. A stage of project A
+ * waiting on project B's run was invisible — the stage is marked running when
+ * it is admitted, minutes before its process exists — so the spawn is stamped
+ * as well, and the board reads the two apart.
+ */
+function runLane(job: Job, stage: StageName): { laneKey: string; onSpawn: () => void } {
+  return {
+    laneKey: job.projectCwd,
+    onSpawn: () => markStageSpawned(job.id, stage),
+  };
 }
 
 export class JobError extends Error {
@@ -270,8 +288,12 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
     job,
     worktreePath,
     answer,
+    // Continue the conversation that asked, rather than starting one that has
+    // to rediscover the repository to apply a one-line answer.
+    resumeSessionId: job.claudeSessionId,
     onUsage: usageFor(job.id, 'design'),
     signal,
+    ...runLane(job, 'design'),
   });
 
   if (result.claudeSessionId) {
@@ -352,13 +374,22 @@ async function executeImplement(job: Job, signal?: AbortSignal): Promise<void> {
   const specPath = specPathOf(job.id);
   if (!specPath) throw new Error('No approved spec found for this job');
 
+  // Consume the answer to a question THIS stage parked on. It used to be
+  // recorded on the job and read by nobody, so answering an implement question
+  // re-ran the identical prompt into the same wall.
+  const answer = job.pendingAnswer;
+  if (answer) updateJob(job.id, { pendingAnswer: null });
+
   const result = await runImplementStage({
     job,
     worktreePath,
     specPath,
     baseBranch: await baseBranchOf(job),
+    answer,
+    resumeSessionId: job.claudeSessionId,
     onUsage: usageFor(job.id, 'implement'),
     signal,
+    ...runLane(job, 'implement'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -420,6 +451,7 @@ async function executeReview(job: Job, signal?: AbortSignal): Promise<void> {
     specPath: specPathOf(job.id),
     onUsage: usageFor(job.id, 'review'),
     signal,
+    ...runLane(job, 'review'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -477,6 +509,7 @@ async function executeFix(job: Job, signal?: AbortSignal): Promise<void> {
     title: job.title,
     onUsage: usageFor(job.id, 'fix'),
     signal,
+    ...runLane(job, 'fix'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -512,6 +545,7 @@ async function executeQa(job: Job, signal?: AbortSignal): Promise<void> {
     isProcessRunning,
     onUsage: usageFor(job.id, 'qa'),
     signal,
+    ...runLane(job, 'qa'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -605,14 +639,11 @@ async function executeRebuild(job: Job): Promise<void> {
 /**
  * Park a job on a question the stage could not settle.
  *
- * `stage` is stepped back to the asking stage's PREDECESSOR, so once answered,
- * nextStage() resolves to the stage that asked and re-runs it. Without this the
- * job restarted from design, discarding an implementation to answer a question
- * integrate had raised.
- *
- * The asking stage's row is marked `needs_decision` rather than passed: a tick
- * beside a job that is waiting on the user is a lie, and `failed` would be one
- * too, since nothing went wrong.
+ * `stage` steps back to the asking stage's PREDECESSOR so that answering
+ * re-runs the stage that asked; without it the job restarted from design,
+ * discarding an implementation to answer an integrate question. The row is
+ * marked `needs_decision`: `passed` would put a tick beside a job waiting on
+ * the user, and `failed` would claim something went wrong.
  */
 function parkOnQuestion(job: Job, stage: StageName, question: string, stageDetail?: string): void {
   if (!stillLive(job.id)) return;
@@ -673,15 +704,10 @@ export function approveGate(jobId: string): JobWithStages {
 /**
  * Answer a parked question, re-running the stage that asked it.
  *
- * `stage` already points at that stage's predecessor (see parkOnQuestion), so
- * simply re-queueing resolves nextStage() back to the asking stage. The answer
- * is stored on the job, which is what lets it survive a restart and reach a
- * stage that may not run for minutes.
- *
- * Design and implement fold the answer into their prompts, so the decision ends
- * up in the spec and the code rather than only in a message. Integrate has
- * nothing to fold it into — answering there re-attempts the rebase, which is
- * what you want once Take over has resolved the conflict.
+ * The answer is stored on the job so it survives a restart and reaches a stage
+ * that may not run for minutes. Design and implement fold it into their runs;
+ * integrate has nothing to fold it into, so answering there just re-attempts
+ * the rebase — which is what you want once Take over has resolved the conflict.
  */
 export function answerQuestion(jobId: string, answer: string): JobWithStages {
   const job = getJob(jobId);
@@ -738,23 +764,12 @@ export function retryJob(jobId: string): JobWithStages {
 /**
  * Cancel a live job: stop whatever it is doing and tear down its worktree.
  *
- * Interrupting a stage mid-flight is supported, because dispatching the wrong
- * feature is an ordinary mistake and a job that dies in its first stage would
- * otherwise have no window in which it could be stopped at all.
- *
- * The step order is what makes it safe:
- *
- *  1. Mark `cancelled` FIRST, so the aborted stage's rejection arrives to find a
- *     job that is no longer live and is discarded by the `stillLive()` guard in
- *     runNextStage's catch rather than rewriting this status as `failed`.
- *  2. Abort the run — kills the `claude -p` process tree, or drops the run if it
- *     is still queued behind maxConcurrent.
- *  3. Await the stage unwinding. On Windows `git worktree remove` fails against
- *     files a dying process still holds open, so teardown must not race it.
- *  4. Tear down worktree and branch.
- *
- * Cancel is for live jobs only; a job that has already finished is cleaned up
- * with discardJob().
+ * The step order below is load-bearing — see `docs/job-pipeline.md`:
+ *  1. mark `cancelled` FIRST, or the aborted run's rejection rewrites it as `failed`;
+ *  2. abort the run;
+ *  3. await the stage unwinding — on Windows `git worktree remove` fails against
+ *     files a dying process still holds open;
+ *  4. tear down worktree and branch.
  */
 export async function cancelJob(jobId: string): Promise<JobWithStages> {
   const job = getJob(jobId);
@@ -795,21 +810,11 @@ export interface DiscardResult {
 /**
  * Discard a finished job: remove what it left behind and drop it off the board.
  *
- * The counterpart to cancelJob, split by status because the two mean different
- * things — Cancel stops a live job, Discard cleans up a job that has already
- * stopped. Offering one button for both is what left `failed` jobs permanently
- * stuck: the board rendered Cancel for them and the server rejected it with a 409.
- *
- * For a job that never merged this restores the project exactly. A job touches
- * the project outside its own worktree in precisely one place — the merge stage,
- * which runs `git merge --no-ff` and `git push` in the project directory. The
- * spec, the code, the review findings and the .gitignore rule all live inside the
- * worktree, so removing it and deleting the branch leaves nothing behind.
- *
- * A job whose merge DID land is the exception, and it is reported rather than
- * undone: that commit may already have been pushed and pulled by others, so
- * unwinding it is the user's call, not ours. `git revert -m 1 <merge>` is the
- * manual step; resetting the base branch is never done here.
+ * The counterpart to cancelJob, split by status — see `docs/job-pipeline.md`.
+ * Restores the project exactly only for a job that never merged: the merge stage
+ * is the one thing a job does outside its worktree. A landed merge is reported,
+ * never undone — it may already have been pushed, so `git revert -m 1 <merge>`
+ * is the user's call.
  */
 export async function discardJob(jobId: string): Promise<DiscardResult> {
   const job = getJobWithStages(jobId);

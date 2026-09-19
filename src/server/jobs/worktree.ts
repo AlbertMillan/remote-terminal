@@ -47,16 +47,11 @@ export function branchNameFor(jobId: string, title: string): string {
 }
 
 /**
- * Ensure `cwd` is a git repository, initialising one if the project has no VCS
- * at all.
+ * Ensure `cwd` is a git repository, initialising one if the project has no VCS.
  *
- * Projects with no repo still get the full pipeline — they just never push,
- * because there is nowhere to push to. Initialising gives the job something to
- * branch from and, more importantly, makes its work revertible: without a repo
- * there is no way to undo what a run did.
- *
- * Refuses to touch a Plastic SCM workspace: laying git over it would leave two
- * systems tracking one tree.
+ * A project with no repo still gets the full pipeline and simply never pushes.
+ * Initialising is what makes a run's work revertible at all. A Plastic SCM
+ * workspace is refused: git over it would leave two systems tracking one tree.
  */
 export async function ensureGitRepo(cwd: string): Promise<{ initialised: boolean }> {
   const kind = detectVcs(cwd);

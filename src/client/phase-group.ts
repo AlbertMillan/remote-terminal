@@ -1,15 +1,11 @@
 /**
- * Collapsible `.phase-group` sections.
+ * Collapsible `.phase-group` sections, shared by the session-log plan groups and
+ * the PROJECT.md track groups.
  *
- * Two surfaces render this widget from the same markup and the same CSS
- * (`.phase-group.collapsed .phase-list { display: none }`): the plan-progress
- * groups in the session-log view and the track groups on the PROJECT.md feature
- * board. Folding is presentational, so it is a class toggle on the group — not
- * a re-render — and this module is the one place that knows how to do it,
- * keeping `aria-expanded` in step with the class.
- *
- * Callers that need the fold to survive a later re-render keep their own state
- * and feed it back in at render time; this module never persists anything.
+ * Folding is presentational: a class toggle, never a re-render, and this module
+ * is the one place that keeps `aria-expanded` in step with the class. It
+ * persists nothing — callers that need a fold to survive a re-render hold that
+ * state themselves.
  */
 
 /** Mark a group folded or unfolded. Returns the state actually applied. */

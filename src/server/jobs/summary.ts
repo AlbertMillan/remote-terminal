@@ -86,16 +86,12 @@ function truncate(text: string | null): string | null {
 }
 
 /**
- * Every live job, plus ones that reached a terminal status recently.
+ * Every live job, plus ones that reached a terminal status recently. The window
+ * is applied by the query (see `LIVE_OR_RECENT` in store.ts), not here.
  *
- * The window is applied by the query, not here: this runs on every job write,
- * and filtering after the fact means reading the whole table each time to throw
- * most of it away.
- *
- * The client decides how long to *show* a finished job; this window only
- * decides how long one is still worth sending. They are different questions: a
- * client that reconnects after an hour must not be handed a job that finished
- * 59 minutes ago as news.
+ * This decides how long a finished job is worth SENDING; the client decides how
+ * long to show one. A client reconnecting after an hour must not be handed a job
+ * that finished 59 minutes ago as news.
  */
 export function buildJobsSummary(now: number = Date.now()): JobsSummary {
   const nameOf = nameResolver();

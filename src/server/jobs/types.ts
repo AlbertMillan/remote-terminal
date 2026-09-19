@@ -117,14 +117,10 @@ export interface Job {
 /**
  * What a stage (or a whole job) spent.
  *
- * Token counts are kept split rather than summed because a single total is
- * dominated by cache traffic — a typical stage run reads tens of thousands of
- * cached tokens against a few hundred of real input and output — so "N tokens"
- * would measure the cache, not the work.
- *
- * `costUsd` is what the run reports as `total_cost_usd`: the API list price of
- * those tokens. These runs bill against the Pro/Max subscription, so it is an
- * estimate of value consumed, not money charged. The UI labels it as such.
+ * Counts stay SPLIT, never summed: cache traffic dwarfs real input and output,
+ * so "N tokens" would measure the cache rather than the work. `costUsd` is the
+ * run's `total_cost_usd` — API list price, not money charged, since these bill
+ * against the subscription. The UI must keep labelling it as an estimate.
  */
 export interface StageUsage {
   inputTokens: number;
@@ -166,7 +162,14 @@ export interface JobStage {
   name: StageName;
   status: StageStatus;
   detail: string | null;
+  /** When the stage was admitted — it may wait in its project's run queue. */
   startedAt: string | null;
+  /**
+   * When this stage's agent process actually started, or null while it is
+   * still queued. The gap between the two is wait, not work, and a board that
+   * shows it as work is how a job behind another one looks hung.
+   */
+  spawnedAt: string | null;
   finishedAt: string | null;
   usage: StageUsage;
 }

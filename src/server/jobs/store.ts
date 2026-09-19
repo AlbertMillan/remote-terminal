@@ -51,6 +51,7 @@ interface StageRow {
   status: string;
   detail: string | null;
   started_at: string | null;
+  spawned_at: string | null;
   finished_at: string | null;
   input_tokens: number;
   output_tokens: number;
@@ -90,6 +91,7 @@ function toStage(row: StageRow): JobStage {
     status: row.status as StageStatus,
     detail: row.detail,
     startedAt: row.started_at,
+    spawnedAt: row.spawned_at,
     finishedAt: row.finished_at,
     usage: {
       inputTokens: row.input_tokens ?? 0,
@@ -176,16 +178,13 @@ export function listJobs(): JobWithStages[] {
 }
 
 /**
- * Jobs the live overlay feed cares about: everything still in flight, plus
- * anything that reached a terminal status since `since` (an ISO timestamp).
+ * Jobs the live overlay feed cares about: everything in flight, plus anything
+ * that reached a terminal status since `since` (an ISO timestamp).
  *
- * Filtered in SQL rather than after `listJobs()` because this runs on every
- * job write, several times per stage. Reading every job ever run — and all
- * eight stage rows of each — to then discard most of them is work that grows
- * with the table and is thrown away every time.
- *
- * `updated_at` is compared as text, which is exactly right for the ISO-8601
- * UTC strings the store writes: they sort lexicographically.
+ * Filtered in SQL, not after `listJobs()`: this runs on every job write, and
+ * reading every job and all eight of its stage rows to discard most of them is
+ * work that grows with the table. `updated_at` compares as text because the
+ * ISO-8601 UTC strings the store writes sort lexicographically.
  */
 const LIVE_OR_RECENT = `status IN ('queued', 'running', 'parked') OR updated_at > ?`;
 
@@ -297,6 +296,7 @@ export interface StagePatch {
   status?: StageStatus;
   detail?: string | null;
   startedAt?: string | null;
+  spawnedAt?: string | null;
   finishedAt?: string | null;
 }
 
@@ -314,6 +314,10 @@ export function updateStage(jobId: string, name: StageName, patch: StagePatch): 
   if (patch.startedAt !== undefined) {
     sets.push('started_at = ?');
     values.push(patch.startedAt);
+  }
+  if (patch.spawnedAt !== undefined) {
+    sets.push('spawned_at = ?');
+    values.push(patch.spawnedAt);
   }
   if (patch.finishedAt !== undefined) {
     sets.push('finished_at = ?');
@@ -371,14 +375,26 @@ export function addStageUsage(
   }
 }
 
-/** Mark a stage running and stamp its start. */
+/**
+ * Mark a stage running and stamp its start.
+ *
+ * `spawnedAt` is deliberately cleared: a stage that is re-run (an answered
+ * question, a retry) would otherwise inherit the previous run's spawn time and
+ * report itself as executing before its process exists.
+ */
 export function startStage(jobId: string, name: StageName): void {
   updateStage(jobId, name, {
     status: 'running',
     detail: null,
     startedAt: new Date().toISOString(),
+    spawnedAt: null,
     finishedAt: null,
   });
+}
+
+/** Stamp the moment this stage's agent process actually started. */
+export function markStageSpawned(jobId: string, name: StageName): void {
+  updateStage(jobId, name, { spawnedAt: new Date().toISOString() });
 }
 
 /** Mark a stage finished with an outcome and optional explanation. */
