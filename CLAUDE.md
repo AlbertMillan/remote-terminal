@@ -317,6 +317,15 @@ paragraphs, `(a)/(b)/(c)` options, and what the run would do — and `renderDeci
   the answer was actually accepted.
 - The card grid's `minmax(min(460px, 100%), 1fr)` needs the `min()`: with a bare `460px`
   the track is wider than the panel on a phone and the cards run off the side.
+- **The question has to be self-contained, and `buildDesignPrompt` says so.** The run reads
+  the repo; the person answering sees one paragraph on a card. A real question this stage
+  asked opened "Question 2 is unanswerable with `bizumIn === 0`" — where Question 2 was
+  item 2 of a numbered list in `SPEC.md`, a document the reader had never opened and which
+  the spec itself only ever *referenced*. The prompt now requires the cited line to be
+  quoted into the question, files named by path, and any constant the answer turns on
+  spelled out. Parsing cannot substitute for this: the same spec's own numbered list is a
+  *steps* list whose item 2 is `npm run aspsps`, so resolving "Question 2" against numbered
+  items would have answered confidently and wrongly.
 
 ## Reading a Job's Documents
 

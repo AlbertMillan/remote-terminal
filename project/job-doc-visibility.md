@@ -104,6 +104,21 @@ clickable where they resolve unambiguously.
   `done` or discarded job has had its worktree removed, and the board still
   renders those rows. `mode=diff` on an untracked file likewise returns an
   empty diff with the file's text still available.
+- **The design prompt requires self-contained questions** (added after the
+  first pass shipped). Reading the delivered cards turned up a reference the
+  pane cannot help with: "Question 2 is unanswerable with `bizumIn === 0`",
+  where Question 2 is item 2 of a numbered list in `SPEC.md` — restated in
+  `project/phase-0-bank-feed-spike.md`, and never defined in the spec the run
+  wrote. Three separate reasons the reader is stuck: the reference is not
+  `§`-shaped, the index holds headings rather than list items, and two
+  documents hold an item 2 so uniqueness fails anyway.
+  Rejected: indexing numbered list items. The same spec's own numbered list is
+  a *steps* list ("each step is the verification for the one before") whose
+  item 2 is `npm run aspsps`, and it is a **changed** document, which the
+  resolution ladder prefers first — so the feature would have answered
+  "Question 2 = npm run aspsps" with full confidence, in the one place the
+  design forbids guessing. Quoting at the source costs a few prompt lines and
+  also covers references to things no document defines.
 
 ## Planned changes
 
@@ -160,10 +175,9 @@ clickable where they resolve unambiguously.
 
 ## Out of scope
 
-- **Changing any stage's prompt.** A question could be made self-contained by
-  telling the design pass to quote what it cites; that was considered and
-  deliberately left out, so questions keep citing sections by number and the
-  reader is the whole remedy.
+- Changing any stage's prompt **other than design's** — implement, integrate,
+  review and fix ask questions too, and their prompts are working; widening the
+  rule to them is a separate call.
 - Editing documents from the board.
 - A markdown renderer.
 - Searching documents across jobs or projects.

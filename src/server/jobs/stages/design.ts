@@ -15,6 +15,12 @@ const logger = createLogger('stage-design');
  * the wrong thing correctly. The stage must therefore surface its *decisions*,
  * not just its conclusions, and it must stop rather than guess when something
  * is genuinely ambiguous.
+ *
+ * A question it parks on must also be *self-contained*. The run reads the repo;
+ * the person answering sees one paragraph on a card. "Question 2 is unanswerable
+ * with bizumIn === 0" is a real question this stage asked, where Question 2 was
+ * item 2 of a list in a document the reader had never opened — so the prompt
+ * requires the cited line to be quoted into the question itself.
  */
 
 /** Marker the stage writes when it needs a human decision before continuing. */
@@ -96,6 +102,17 @@ ${OPEN_QUESTION_MARKER}
 Ask only about decisions that would change what gets built and that the code
 cannot settle. A question you can answer by reading the repo is not an open
 question. If there is nothing genuinely ambiguous, omit this section entirely.
+
+Write every question so it can be answered WITHOUT opening anything. The person
+answering sees your question and nothing else — not this spec, not the files you
+read — so a bare reference carries none of its meaning across:
+
+- Citing a section, a numbered item or another document? QUOTE the line it says,
+  in the question itself. "§3.2", "Question 2" and "the spec" are unanswerable
+  on their own.
+- Refer to files by their path, and say what you changed in each one you edited.
+- Spell out any term, code or constant the answer turns on, rather than assuming
+  the reader has it in front of them.
 
 STRICT CONSTRAINTS
 - Write ONLY ${specPath}. Do not modify any source file, and do not write code.
