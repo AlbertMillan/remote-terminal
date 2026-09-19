@@ -135,8 +135,11 @@ export async function runDesignStage(opts: {
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<DesignResult> {
-  const { job, worktreePath, answer = null, onUsage, signal } = opts;
+  const { job, worktreePath, answer = null, onUsage, signal, laneKey, onSpawn } = opts;
 
   const slug = specSlugFor(job.title, job.featureId);
   const specRel = `${COMPANION_DIR}/${slug}.md`;
@@ -159,6 +162,8 @@ export async function runDesignStage(opts: {
     signal,
     failOnDenial: false,
     onUsage,
+    laneKey,
+    onSpawn,
   });
 
   if (!existsSync(specAbs)) {

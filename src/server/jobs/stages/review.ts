@@ -126,8 +126,11 @@ export async function runReviewStage(opts: {
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<ReviewResult> {
-  const { jobId, worktreePath, baseBranch, specPath, onUsage, signal } = opts;
+  const { jobId, worktreePath, baseBranch, specPath, onUsage, signal, laneKey, onSpawn } = opts;
 
   const fullDiff = await diffAgainst(worktreePath, baseBranch);
   if (!fullDiff.trim()) {
@@ -164,6 +167,8 @@ export async function runReviewStage(opts: {
       signal,
       failOnDenial: false,
       onUsage,
+      laneKey,
+      onSpawn,
     }
   );
 

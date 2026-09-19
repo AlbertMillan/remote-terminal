@@ -63,34 +63,69 @@ function withSpent(error: Error, partial: ClaudeRunResult | null): Error {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency queue — caps simultaneous `claude -p` runs at maxConcurrent.
+// Concurrency queue — caps simultaneous `claude -p` runs, per lane.
 // ---------------------------------------------------------------------------
-let active = 0;
-const pending: (() => void)[] = [];
 
-export function runQueued<T>(task: () => Promise<T>): Promise<T> {
+/**
+ * Runs queue per LANE, not globally.
+ *
+ * A single global queue made the scheduler's promise a lie: it admits one job
+ * per project, but every one of their agent runs then serialised behind one
+ * another, so a stage in project A sat "running" for minutes while project B's
+ * stage held the only slot. The wait was invisible — the stage was marked
+ * running the moment it was admitted, and the process did not exist yet.
+ *
+ * The lane is the project, passed by the job runner. Everything without one
+ * (the session-log generator, PROJECT.md migration) shares the default lane,
+ * which is what those want: they are background work and should not multiply.
+ */
+const DEFAULT_LANE = '';
+
+interface Lane {
+  active: number;
+  pending: (() => void)[];
+}
+
+const lanes = new Map<string, Lane>();
+
+function laneFor(key: string): Lane {
+  let lane = lanes.get(key);
+  if (!lane) {
+    lane = { active: 0, pending: [] };
+    lanes.set(key, lane);
+  }
+  return lane;
+}
+
+export function runQueued<T>(task: () => Promise<T>, laneKey = DEFAULT_LANE): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const lane = laneFor(laneKey);
     const start = () => {
-      active++;
+      lane.active++;
       task()
         .then(resolve, reject)
         .finally(() => {
-          active--;
-          const next = pending.shift();
+          lane.active--;
+          const next = lane.pending.shift();
           if (next) next();
+          // An idle lane is dropped so a long-lived server does not accumulate
+          // one per project it has ever touched.
+          else if (lane.active === 0 && lane.pending.length === 0) lanes.delete(laneKey);
         });
     };
-    if (active < Math.max(1, getConfig().projectLog.maxConcurrent)) {
+    if (lane.active < Math.max(1, getConfig().projectLog.maxConcurrent)) {
       start();
     } else {
-      pending.push(start);
+      lane.pending.push(start);
     }
   });
 }
 
 /** Number of runs currently executing (for diagnostics and the job board). */
 export function activeRunCount(): number {
-  return active;
+  let total = 0;
+  for (const lane of lanes.values()) total += lane.active;
+  return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +313,12 @@ export interface SpawnOptions {
   /** Override the run timeout; defaults to projectLog.timeoutMs. */
   timeoutMs?: number;
   /**
+   * Called once the process actually starts, which is NOT when the run was
+   * requested: it may have waited in its lane first. The timeout below is
+   * armed here too, so queue time never counts against a stage's budget.
+   */
+  onSpawn?: () => void;
+  /**
    * Abort the run. Kills the child process tree if one is already running, and
    * skips spawning entirely if the run is still queued behind maxConcurrent —
    * which a registry of live child processes would miss.
@@ -310,6 +351,11 @@ export interface RunOptions extends SpawnOptions {
    * than that we don't know.
    */
   onUsage?: UsageSink;
+  /**
+   * The queue lane this run belongs to — the project, for a pipeline stage.
+   * Runs in different lanes never wait for each other.
+   */
+  laneKey?: string;
 }
 
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'];
@@ -341,9 +387,28 @@ export function spawnClaude(
     // resolve `claude`/`claude.cmd` from PATH on Windows).
     const child = spawn(
       cfg.claudeCommand,
-      ['-p', '--permission-mode', 'acceptEdits', '--allowedTools', tools, '--output-format', 'json'],
+      [
+        '-p',
+        '--permission-mode',
+        'acceptEdits',
+        '--allowedTools',
+        tools,
+        // Do not load the user's MCP servers. A stage's allowlist is file tools
+        // only, so no MCP tool is callable from one — but without this every run
+        // still starts every configured server and carries all of their tool
+        // definitions in its prompt. Measured at ~7.3k tokens per run on this
+        // machine, on top of the startup cost of each server process.
+        '--strict-mcp-config',
+        '--output-format',
+        'json',
+      ],
       { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
     );
+
+    // The run is now a real process. Until this point it was queued, and a
+    // stage that reports itself as running while it waits is the reason a job
+    // looks hung when it is merely behind something else.
+    options.onSpawn?.();
 
     let stdout = '';
     let stderr = '';
@@ -537,5 +602,5 @@ export async function runClaude(
       logger.warn({ cwd, reverted }, 'claude-run: reverted out-of-scope edits made by the run');
     }
     return result;
-  });
+  }, options.laneKey);
 }

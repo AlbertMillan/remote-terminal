@@ -140,8 +140,11 @@ export async function runQaStage(opts: {
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<QaResult> {
-  const { jobId, worktreePath, isProcessRunning, onUsage, signal } = opts;
+  const { jobId, worktreePath, isProcessRunning, onUsage, signal, laneKey, onSpawn } = opts;
 
   const qa = readQaDoc(worktreePath);
   // PROJECT.md's verify list is the other source of declared commands, so a
@@ -171,6 +174,8 @@ export async function runQaStage(opts: {
         signal,
         failOnDenial: false,
         onUsage,
+        laneKey,
+        onSpawn,
       });
       claudeSessionId = result.sessionId;
 

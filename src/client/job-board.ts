@@ -98,8 +98,34 @@ export interface JobStage {
   status: StageStatus;
   detail: string | null;
   startedAt: string | null;
+  /** When the agent process started; null while the stage is still queued. */
+  spawnedAt?: string | null;
   finishedAt: string | null;
   usage?: StageUsage;
+}
+
+/**
+ * A running stage whose process has not started yet is WAITING, not working.
+ *
+ * Runs queue per project, so a stage can be admitted and then sit behind
+ * another run in the same project. Reporting that as execution is what makes a
+ * job look hung: the elapsed time climbs, the stage says "running", and
+ * nothing is happening. Stages recorded before this existed have no
+ * `spawnedAt` at all and are shown as running, which is what they were.
+ */
+export function isQueued(stage: JobStage): boolean {
+  return stage.status === 'running' && stage.spawnedAt === null;
+}
+
+/** How long a stage has been doing what it is currently doing. */
+export function elapsedSince(iso: string | null, now = Date.now()): string {
+  if (!iso) return '';
+  const ms = now - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return `${Math.floor(ms / 1000)}s`;
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h${mins % 60}m`;
 }
 
 export interface Job {
@@ -476,7 +502,16 @@ export class JobBoard {
   }
 
   private stateLabel(job: Job): string {
-    if (job.status === 'running') return `running · ${job.stage ?? ''}`;
+    if (job.status === 'running') {
+      const active = job.stages.find((s) => s.status === 'running');
+      if (active && isQueued(active)) {
+        // Named for what it is waiting on: another run in this same project.
+        const waited = elapsedSince(active.startedAt);
+        return `queued · ${active.name}${waited ? ` · ${waited}` : ''}`;
+      }
+      const ran = active ? elapsedSince(active.spawnedAt ?? active.startedAt) : '';
+      return `running · ${job.stage ?? ''}${ran ? ` · ${ran}` : ''}`;
+    }
     if (job.status === 'parked') {
       return job.parkReason === 'question' ? 'needs a decision' : `waiting · ${job.stage ?? ''}`;
     }
@@ -487,13 +522,17 @@ export class JobBoard {
     return `
       <div class="jb-pipeline">
         ${job.stages
-          .map(
-            (s) => `<span class="jb-stage ${s.status}" title="${escapeAttr(
-              `${s.name}: ${s.status}${s.detail ? ` — ${s.detail}` : ''}` +
+          .map((s) => {
+            const queued = isQueued(s);
+            const what = queued
+              ? `waiting for another run in this project to finish (${elapsedSince(s.startedAt)})`
+              : `${s.status}${s.detail ? ` — ${s.detail}` : ''}`;
+            return `<span class="jb-stage ${queued ? 'queued' : s.status}" title="${escapeAttr(
+              `${s.name}: ${what}` +
                 (usageOf(s).runCount > 0 ? `
 ${usageTooltip(usageOf(s))}` : '')
-            )}">${STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`
-          )
+            )}">${queued ? '⋯' : STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`;
+          })
           .join('')}
       </div>`;
   }

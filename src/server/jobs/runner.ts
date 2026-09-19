@@ -8,6 +8,7 @@ import {
   deleteJob,
   finishStage,
   getJob,
+  markStageSpawned,
   getJobWithStages,
   listJobsByStatus,
   startStage,
@@ -56,6 +57,23 @@ const logger = createLogger('job-runner');
  */
 function usageFor(jobId: string, stage: StageName): UsageSink {
   return (usage) => addStageUsage(jobId, stage, usage);
+}
+
+/**
+ * What a stage needs to take its turn in the queue and report when it gets one.
+ *
+ * The lane is the PROJECT, which is what makes the scheduler's promise true all
+ * the way down: it admits one job per project, and now their agent runs no
+ * longer serialise behind one another across projects. A stage of project A
+ * waiting on project B's run was invisible — the stage is marked running when
+ * it is admitted, minutes before its process exists — so the spawn is stamped
+ * as well, and the board reads the two apart.
+ */
+function runLane(job: Job, stage: StageName): { laneKey: string; onSpawn: () => void } {
+  return {
+    laneKey: job.projectCwd,
+    onSpawn: () => markStageSpawned(job.id, stage),
+  };
 }
 
 export class JobError extends Error {
@@ -272,6 +290,7 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
     answer,
     onUsage: usageFor(job.id, 'design'),
     signal,
+    ...runLane(job, 'design'),
   });
 
   if (result.claudeSessionId) {
@@ -359,6 +378,7 @@ async function executeImplement(job: Job, signal?: AbortSignal): Promise<void> {
     baseBranch: await baseBranchOf(job),
     onUsage: usageFor(job.id, 'implement'),
     signal,
+    ...runLane(job, 'implement'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -420,6 +440,7 @@ async function executeReview(job: Job, signal?: AbortSignal): Promise<void> {
     specPath: specPathOf(job.id),
     onUsage: usageFor(job.id, 'review'),
     signal,
+    ...runLane(job, 'review'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -477,6 +498,7 @@ async function executeFix(job: Job, signal?: AbortSignal): Promise<void> {
     title: job.title,
     onUsage: usageFor(job.id, 'fix'),
     signal,
+    ...runLane(job, 'fix'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
@@ -512,6 +534,7 @@ async function executeQa(job: Job, signal?: AbortSignal): Promise<void> {
     isProcessRunning,
     onUsage: usageFor(job.id, 'qa'),
     signal,
+    ...runLane(job, 'qa'),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });

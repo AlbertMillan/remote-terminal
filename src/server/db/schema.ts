@@ -222,6 +222,20 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE job_stages ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;
       `,
     },
+    {
+      // When the stage's agent process actually started, as opposed to when the
+      // stage was admitted (started_at). A stage waits in its project's run
+      // queue first, and reporting that wait as execution is what made a job
+      // behind another one look hung.
+      //
+      // Added rather than redefining started_at: every existing row would
+      // otherwise claim it never ran, and the elapsed time a user reads on the
+      // board would jump for jobs that are already finished.
+      name: '013_add_stage_spawned_at',
+      sql: `
+        ALTER TABLE job_stages ADD COLUMN spawned_at TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

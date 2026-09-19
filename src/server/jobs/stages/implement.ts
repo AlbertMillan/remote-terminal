@@ -85,8 +85,11 @@ export async function runImplementStage(opts: {
   onUsage?: UsageSink;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
+  /** Queue lane and spawn notification; see runner.ts. */
+  laneKey?: string;
+  onSpawn?: () => void;
 }): Promise<ImplementResult> {
-  const { job, worktreePath, specPath, baseBranch, onUsage, signal } = opts;
+  const { job, worktreePath, specPath, baseBranch, onUsage, signal, laneKey, onSpawn } = opts;
 
   const specAbs = join(worktreePath, specPath);
   if (!existsSync(specAbs)) {
@@ -106,6 +109,8 @@ export async function runImplementStage(opts: {
     signal,
     failOnDenial: false,
     onUsage,
+    laneKey,
+    onSpawn,
   });
 
   const updatedSpec = existsSync(specAbs) ? readFileSync(specAbs, 'utf-8') : spec;

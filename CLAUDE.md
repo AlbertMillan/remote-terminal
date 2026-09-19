@@ -279,6 +279,25 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
   envelope's `usage` block: on a multi-turn run `usage` reports only the final turn.
   See `docs/token-usage-feature.md`.
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
+- **Agent runs queue per PROJECT, not globally** (`runQueued(task, laneKey)` in
+  `agent/claude-run.ts`, lane supplied by `runLane()` in `runner.ts`). One global queue made
+  the scheduler's promise untrue below the job level: it admits one job per project, then
+  every stage of every project serialised behind a single slot, so a stage in project A sat
+  for minutes while project B held it. Runs with no lane — the session-log generator, the
+  PROJECT.md migration — share the default lane on purpose, being background work that
+  should not multiply. Per-lane depth is still `projectLog.maxConcurrent`.
+- **A stage records `spawned_at` as well as `started_at`.** `started_at` is when the stage was
+  admitted; `spawned_at` is when its process actually began. Everything between the two is
+  queue wait, and reporting it as execution is what made a job behind another one look hung —
+  the board reads them apart via `isQueued()` and shows `queued · implement · 5m`. The stage
+  timeout is armed at spawn, so queue time has never counted against a stage's 20-minute
+  budget. `startStage()` clears `spawned_at`, or a re-run (an answered question, a retry)
+  would inherit the previous run's spawn time.
+- **Headless runs pass `--strict-mcp-config`.** Every stage's allowlist is file tools only, so
+  no MCP tool is callable from one — but without the flag each run still started every MCP
+  server configured on the machine and carried all of their tool definitions in its prompt.
+  Measured at ~7.3k tokens per run, on every run of every stage.
+- Covered by `tests/run-queue.test.ts`.
 
 ## Reading a Parked Job's Question
 

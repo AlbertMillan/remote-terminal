@@ -166,7 +166,14 @@ export interface JobStage {
   name: StageName;
   status: StageStatus;
   detail: string | null;
+  /** When the stage was admitted — it may wait in its project's run queue. */
   startedAt: string | null;
+  /**
+   * When this stage's agent process actually started, or null while it is
+   * still queued. The gap between the two is wait, not work, and a board that
+   * shows it as work is how a job behind another one looks hung.
+   */
+  spawnedAt: string | null;
   finishedAt: string | null;
   usage: StageUsage;
 }

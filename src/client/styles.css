@@ -3099,6 +3099,9 @@ body {
 .jb-diff .d-file { color: var(--text-primary); font-weight: 700; }
 .jb-diff .d-meta { color: var(--text-muted); }
 
+/* A stage admitted but still waiting for its turn in the project's run queue. */
+.jb-stage.queued { color: var(--text-muted); opacity: 0.85; font-style: italic; }
+
 /* Review gate: findings checklist */
 
 .jb-findings {

@@ -51,6 +51,7 @@ interface StageRow {
   status: string;
   detail: string | null;
   started_at: string | null;
+  spawned_at: string | null;
   finished_at: string | null;
   input_tokens: number;
   output_tokens: number;
@@ -90,6 +91,7 @@ function toStage(row: StageRow): JobStage {
     status: row.status as StageStatus,
     detail: row.detail,
     startedAt: row.started_at,
+    spawnedAt: row.spawned_at,
     finishedAt: row.finished_at,
     usage: {
       inputTokens: row.input_tokens ?? 0,
@@ -297,6 +299,7 @@ export interface StagePatch {
   status?: StageStatus;
   detail?: string | null;
   startedAt?: string | null;
+  spawnedAt?: string | null;
   finishedAt?: string | null;
 }
 
@@ -314,6 +317,10 @@ export function updateStage(jobId: string, name: StageName, patch: StagePatch): 
   if (patch.startedAt !== undefined) {
     sets.push('started_at = ?');
     values.push(patch.startedAt);
+  }
+  if (patch.spawnedAt !== undefined) {
+    sets.push('spawned_at = ?');
+    values.push(patch.spawnedAt);
   }
   if (patch.finishedAt !== undefined) {
     sets.push('finished_at = ?');
@@ -371,14 +378,26 @@ export function addStageUsage(
   }
 }
 
-/** Mark a stage running and stamp its start. */
+/**
+ * Mark a stage running and stamp its start.
+ *
+ * `spawnedAt` is deliberately cleared: a stage that is re-run (an answered
+ * question, a retry) would otherwise inherit the previous run's spawn time and
+ * report itself as executing before its process exists.
+ */
 export function startStage(jobId: string, name: StageName): void {
   updateStage(jobId, name, {
     status: 'running',
     detail: null,
     startedAt: new Date().toISOString(),
+    spawnedAt: null,
     finishedAt: null,
   });
+}
+
+/** Stamp the moment this stage's agent process actually started. */
+export function markStageSpawned(jobId: string, name: StageName): void {
+  updateStage(jobId, name, { spawnedAt: new Date().toISOString() });
 }
 
 /** Mark a stage finished with an outcome and optional explanation. */
