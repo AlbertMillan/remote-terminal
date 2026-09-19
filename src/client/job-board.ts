@@ -1,5 +1,11 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
-import { parseDecision, stripMarks, type DecisionCard } from './decision-format.js';
+import {
+  findReferences,
+  parseDecision,
+  resolveReference,
+  stripMarks,
+  type DecisionCard,
+} from './decision-format.js';
 
 /**
  * Client for the job pipeline: dispatching a feature, watching its stages, and
@@ -148,6 +154,28 @@ export interface DiffStat {
   deletions: number;
 }
 
+/** Mirrors JobDoc in src/server/jobs/docs.ts. */
+export interface JobDoc {
+  path: string;
+  status: 'added' | 'edited' | 'deleted' | 'renamed' | 'unchanged';
+  insertions: number;
+  deletions: number;
+  isSpec: boolean;
+  headings: string[];
+}
+
+/** How a document row describes itself, once you know what the run did to it. */
+const DOC_STATUS_LABEL: Record<JobDoc['status'], string> = {
+  added: 'written by this run',
+  edited: 'edited by this run',
+  deleted: 'deleted by this run',
+  renamed: 'renamed by this run',
+  unchanged: 'read-only',
+};
+
+/** Unchanged documents past this point are folded away until asked for. */
+const DOCS_SHOWN = 8;
+
 /**
  * A POST that carries no body.
  *
@@ -175,8 +203,21 @@ export class JobBoard {
   private usage: StageUsage | null = null;
   private cwd: string | null = null;
   private pollTimer: number | null = null;
-  /** Spec text keyed by job id, fetched lazily when a gate is opened. */
-  private specs = new Map<string, string>();
+  /**
+   * The documents behind each job, keyed by job id.
+   *
+   * Loaded eagerly for a job parked on a question — the question cites them, so
+   * the card is not readable without them — and on request for anything else.
+   */
+  private docs = new Map<string, JobDoc[]>();
+  /** Which document is open on a job, and whether as text or as this job's diff. */
+  private openDoc = new Map<string, { path: string; mode: 'text' | 'diff' }>();
+  /** Document bodies, keyed `jobId|mode|path`. */
+  private docBodies = new Map<string, { body: string; truncated: boolean }>();
+  /** Jobs whose unchanged-document tail the user has unfolded. */
+  private docsExpanded = new Set<string>();
+  /** A section to scroll to once the document it lives in has rendered. */
+  private pendingAnchor: { jobId: string; section: string } | null = null;
   /** Diff text keyed by job id, fetched lazily at the merge gate. */
   private diffs = new Map<string, { diff: string; stat: DiffStat | null; truncated: boolean }>();
   /** Findings keyed by job id, loaded when a job parks at the review gate. */
@@ -264,7 +305,7 @@ export class JobBoard {
 
     this.jobs = jobs;
     this.usage = usage;
-    await this.loadFindingsForGates();
+    await Promise.all([this.loadFindingsForGates(), this.loadDocsForParked()]);
     if (token !== this.loadToken) return;
 
     this.render();
@@ -294,9 +335,48 @@ export class JobBoard {
     );
   }
 
+  /**
+   * Fetch the documents a parked job is waiting on, before they are asked for.
+   *
+   * Every park needs them: a question cites them by section, the design gate
+   * exists to review the spec, and the merge gate is a decision about what the
+   * branch changed. Same call the review gate makes for its findings, and for
+   * the same reason — the decision is not readable without the thing it is
+   * about. A job parked on a QUESTION is also unfolded, because its citations
+   * are only linkable once this list is here.
+   *
+   * A live job's list is refetched only when it is already on screen: it
+   * changes under the user as stages run, and a stale list of what a run
+   * touched is worse than no list.
+   */
+  private async loadDocsForParked(): Promise<void> {
+    const parked = this.jobs.filter((j) => j.status === 'parked' && !this.docs.has(j.id));
+    const live = this.jobs.filter(
+      (j) => (j.status === 'running' || j.status === 'queued') && this.docs.has(j.id)
+    );
+    await Promise.all([...parked, ...live].map((job) => this.fetchDocs(job.id)));
+    for (const job of parked) {
+      if (job.parkReason === 'question') this.expanded.add(job.id);
+    }
+  }
+
+  /** Load a job's document list into the cache. Empty on any failure. */
+  private async fetchDocs(jobId: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/docs`);
+      const data = (await res.json()) as { docs: JobDoc[] };
+      this.docs.set(jobId, data.docs || []);
+    } catch {
+      this.docs.set(jobId, []);
+    }
+  }
+
   /** Drop every per-job detail cache. */
   private forgetCachedDetail(): void {
-    this.specs.clear();
+    this.docs.clear();
+    this.openDoc.clear();
+    this.docBodies.clear();
+    this.docsExpanded.clear();
     this.diffs.clear();
     this.findings.clear();
     this.expanded.clear();
@@ -338,6 +418,7 @@ export class JobBoard {
         ${this.jobs.map((job) => this.renderJob(job)).join('')}
       </div>`;
     this.applyPendingFocus(container);
+    this.applyPendingAnchor(container);
   }
 
   /**
@@ -418,7 +499,6 @@ ${usageTooltip(usageOf(s))}` : '')
   }
 
   private renderBody(job: Job): string {
-    const spec = this.specs.get(job.id);
     const parts: string[] = [];
 
     if (job.parkReason === 'question' && job.detail) {
@@ -427,13 +507,8 @@ ${usageTooltip(usageOf(s))}` : '')
       parts.push(`<div class="jb-detail">${escapeHtml(job.detail)}</div>`);
     }
 
-    if (spec !== undefined) {
-      parts.push(
-        spec
-          ? `<pre class="jb-spec">${escapeHtml(spec)}</pre>`
-          : '<div class="pw-hint">No spec written yet.</div>'
-      );
-    }
+    const docs = this.docs.get(job.id);
+    if (docs !== undefined) parts.push(this.renderDocs(job, docs));
 
     const notRun = job.stages.filter((st) => st.status === 'skipped' && st.detail);
     if (notRun.length > 0) {
@@ -551,7 +626,7 @@ ${usageTooltip(usageOf(s))}` : '')
       return `
         <div class="jb-question">
           ${head()}
-          <div class="jb-question-text">${escapeHtml(this.plainDetail(detail))}</div>
+          <div class="jb-question-text">${this.linked(job, this.plainDetail(detail))}</div>
           ${form(`<input type="text" class="jb-answer-input" data-index="1"
                    value="${escapeAttr(this.answerDrafts.get(`${job.id}#1`) || '')}"
                    placeholder="Your decision…" aria-label="Answer" maxlength="500" />`)}
@@ -568,7 +643,11 @@ ${usageTooltip(usageOf(s))}` : '')
     return `
       <div class="jb-question">
         ${head(parsed.questionCount > 1 ? ` · ${parsed.questionCount} questions` : '')}
-        ${parsed.preamble.length ? `<div class="jb-q-preamble">${this.paragraphs(parsed.preamble)}</div>` : ''}
+        ${
+          parsed.preamble.length
+            ? `<div class="jb-q-preamble">${this.paragraphs(job, parsed.preamble)}</div>`
+            : ''
+        }
         ${form(`<div class="jb-q-cards">${cards}</div>`)}
       </div>`;
   }
@@ -583,7 +662,7 @@ ${usageTooltip(usageOf(s))}` : '')
     // A block that asks nothing is something the run wanted said alongside the
     // questions. It keeps its text and does not pretend to need an answer.
     if (number === null) {
-      return `<div class="jb-q-note">${this.paragraphs(card.context)}</div>`;
+      return `<div class="jb-q-note">${this.paragraphs(job, card.context)}</div>`;
     }
 
     const part = (label: string, body: string): string => `
@@ -597,7 +676,7 @@ ${usageTooltip(usageOf(s))}` : '')
         (option) => `
         <li class="jb-q-option">
           <span class="jb-q-opt">${escapeHtml(option.label)}</span>
-          <span class="jb-q-opt-text">${escapeHtml(option.text)}</span>
+          <span class="jb-q-opt-text">${this.linked(job, option.text)}</span>
         </li>`
       )
       .join('');
@@ -611,15 +690,15 @@ ${usageTooltip(usageOf(s))}` : '')
       <div class="jb-q-card">
         <div class="jb-q-head">
           <span class="jb-q-num">Q${number}</span>
-          <span class="jb-q-text">${escapeHtml(card.question)}</span>
+          <span class="jb-q-text">${this.linked(job, card.question)}</span>
         </div>
-        ${card.context.length ? part('Context', this.paragraphs(card.context)) : ''}
+        ${card.context.length ? part('Context', this.paragraphs(job, card.context)) : ''}
         ${card.options.length ? part('Options', `<ul class="jb-q-options">${options}</ul>`) : ''}
         ${
           rec
             ? `<div class="jb-q-rec ${rec.kind}">
                  <span class="jb-q-rec-label">${recLabel}</span>
-                 <span class="jb-q-rec-text">${escapeHtml(rec.text)}</span>
+                 <span class="jb-q-rec-text">${this.linked(job, rec.text)}</span>
                </div>`
             : ''
         }
@@ -631,8 +710,160 @@ ${usageTooltip(usageOf(s))}` : '')
       </div>`;
   }
 
-  private paragraphs(parts: string[]): string {
-    return parts.map((p) => `<p>${escapeHtml(p)}</p>`).join('');
+  /**
+   * The documents behind this job: what its branch changed, and the markdown it
+   * could have been reading.
+   *
+   * The two are marked differently on purpose. A changed document is something
+   * the run did that the user had no way of knowing about; an unchanged one is
+   * context a question cites. The unchanged tail folds away, because in a
+   * docs-heavy repo it is long and nobody opens the end of it.
+   */
+  private renderDocs(job: Job, docs: JobDoc[]): string {
+    if (docs.length === 0) {
+      return '<div class="pw-hint">No documents for this job yet.</div>';
+    }
+
+    const changed = docs.filter((d) => d.status !== 'unchanged');
+    const unchanged = docs.filter((d) => d.status === 'unchanged');
+    const showAll = this.docsExpanded.has(job.id);
+    const shown = showAll ? unchanged : unchanged.slice(0, DOCS_SHOWN);
+    const hidden = unchanged.length - shown.length;
+
+    const rows = [...changed, ...shown].map((doc) => this.renderDocRow(job, doc)).join('');
+
+    return `
+      <div class="jb-docs">
+        <div class="jb-docs-head">
+          <span>Documents</span>
+          <span class="jb-docs-count">${changed.length} changed by this run</span>
+        </div>
+        <ul class="jb-doc-list">${rows}</ul>
+        ${
+          hidden > 0
+            ? `<button type="button" class="jb-doc-more" data-job="${escapeAttr(job.id)}">
+                 Show ${hidden} more document${hidden === 1 ? '' : 's'}
+               </button>`
+            : ''
+        }
+      </div>`;
+  }
+
+  private renderDocRow(job: Job, doc: JobDoc): string {
+    const open = this.openDoc.get(job.id);
+    const isOpen = open?.path === doc.path;
+    const changed = doc.status !== 'unchanged';
+    const stat =
+      changed && (doc.insertions || doc.deletions)
+        ? `<span class="jb-doc-stat">+${doc.insertions} −${doc.deletions}</span>`
+        : '';
+
+    return `
+      <li class="jb-doc ${changed ? 'changed' : 'unchanged'}${isOpen ? ' open' : ''}">
+        <button type="button" class="jb-doc-row" data-job="${escapeAttr(job.id)}"
+                data-path="${escapeAttr(doc.path)}">
+          <span class="jb-doc-mark" aria-hidden="true">${changed ? '●' : '○'}</span>
+          <span class="jb-doc-path">${escapeHtml(doc.path)}</span>
+          ${doc.isSpec ? '<span class="jb-doc-tag">spec</span>' : ''}
+          ${stat}
+          <span class="jb-doc-status">${DOC_STATUS_LABEL[doc.status]}</span>
+        </button>
+        ${isOpen ? this.renderDocView(job, doc, open.mode) : ''}
+      </li>`;
+  }
+
+  private renderDocView(job: Job, doc: JobDoc, mode: 'text' | 'diff'): string {
+    const cached = this.docBodies.get(`${job.id}|${mode}|${doc.path}`);
+    const changed = doc.status !== 'unchanged';
+    const tab = (value: 'text' | 'diff', label: string): string => `
+      <button type="button" class="jb-doc-tab${mode === value ? ' on' : ''}"
+              data-job="${escapeAttr(job.id)}" data-path="${escapeAttr(doc.path)}"
+              data-mode="${value}">${label}</button>`;
+
+    const body = !cached
+      ? '<div class="pw-hint">Loading…</div>'
+      : !cached.body.trim()
+        ? `<div class="pw-hint">${
+            mode === 'diff'
+              ? 'This run has not committed a change to this file.'
+              : 'This file is empty.'
+          }</div>`
+        : mode === 'diff'
+          ? `<pre class="jb-diff">${this.highlightDiff(cached.body)}</pre>`
+          : `<pre class="jb-doc-body">${this.renderDocText(cached.body)}</pre>`;
+
+    return `
+      <div class="jb-doc-view" data-doc="${escapeAttr(doc.path)}">
+        <div class="jb-doc-tabs">
+          ${tab('text', 'text')}
+          ${changed ? tab('diff', 'diff') : ''}
+          ${cached?.truncated ? '<span class="jb-doc-trunc">truncated</span>' : ''}
+        </div>
+        ${body}
+      </div>`;
+  }
+
+  /**
+   * Document text, with its numbered headings marked.
+   *
+   * Only the headings become elements — enough for a reference to scroll to one
+   * and for the eye to find it, without pretending to render markdown.
+   */
+  private renderDocText(text: string): string {
+    return text
+      .split('\n')
+      .map((line) => {
+        // Kept in step with headingNumbers() in src/server/jobs/docs.ts: a
+        // single-level number counts only under a `#`, where the file has
+        // already said the line is a heading.
+        const match =
+          /^\s{0,3}#{1,6}\s*§?\s*(\d+(?:\.\d+)*)[.)]?\s+\S/.exec(line) ??
+          /^\s{0,3}§?\s*(\d+(?:\.\d+)+)[.)]?\s+\S/.exec(line);
+        if (!match) return escapeHtml(line);
+        return `<span class="jb-doc-h" data-section="${escapeAttr(match[1])}">${escapeHtml(
+          line
+        )}</span>`;
+      })
+      .join('\n');
+  }
+
+  private paragraphs(job: Job, parts: string[]): string {
+    return parts.map((p) => `<p>${this.linked(job, p)}</p>`).join('');
+  }
+
+  /**
+   * Escape a question's prose and turn its references into buttons.
+   *
+   * One helper rather than a call at each site: escaping happens in eight
+   * places across a decision card, and linking in only some of them would make
+   * a reference clickable in the options and dead in the recommendation.
+   *
+   * Escaping and linking have to happen together — splicing anchors into
+   * already-escaped text would need offsets the escaping has already moved — so
+   * the raw string is walked once, escaping the gaps and wrapping the
+   * references. It only ever WRAPS: nothing the model wrote is dropped, and a
+   * reference that resolves to no document, or to more than one, is escaped
+   * like any other text.
+   */
+  private linked(job: Job, raw: string): string {
+    const refs = findReferences(raw);
+    if (refs.length === 0) return escapeHtml(raw);
+
+    const docs = this.docs.get(job.id) || [];
+    let out = '';
+    let at = 0;
+    for (const ref of refs) {
+      out += escapeHtml(raw.slice(at, ref.start));
+      const target = resolveReference(ref, docs);
+      out += target
+        ? `<button type="button" class="jb-ref" data-job="${escapeAttr(job.id)}"
+                   data-path="${escapeAttr(target.path)}"
+                   data-section="${escapeAttr(ref.kind === 'section' ? ref.value : '')}"
+                   title="Open ${escapeAttr(target.path)}">${escapeHtml(ref.raw)}</button>`
+        : escapeHtml(ref.raw);
+      at = ref.end;
+    }
+    return out + escapeHtml(raw.slice(at));
   }
 
   /** The detail as the model laid it out, minus the syntax it wrote it in. */
@@ -718,18 +949,34 @@ ${usageTooltip(usageOf(s))}` : '')
             : 'Approve';
       buttons.push(`<button class="btn-primary jb-approve" data-job="${id}">${label}</button>`);
     }
-    if (job.stages.some((s) => s.name === 'design' && s.status === 'passed')) {
-      const shown = this.specs.has(job.id);
+    // The spec is a row in the document pane, so this is a shortcut to it
+    // rather than a second viewer — two surfaces on one file drift apart the
+    // first time either changes. Offered for a design that parked on a question
+    // too: that spec is exactly what the question is about.
+    const specPath = this.specPathOf(job);
+    if (specPath) {
+      const shown = this.openDoc.get(job.id)?.path === specPath;
       buttons.push(
-        `<button class="btn-secondary jb-spec-btn" data-job="${id}">${
-          shown ? 'Hide spec' : 'View spec'
-        }</button>`
+        `<button class="btn-secondary jb-spec-btn" data-job="${id}"
+                 data-path="${escapeAttr(specPath)}">${shown ? 'Hide spec' : 'View spec'}</button>`
       );
     }
-    if (job.stages.some((s) => s.name === 'implement' && s.status === 'passed')) {
+    // Not gated on the implement stage: a design that only wrote documents has
+    // a diff worth reading, and it is the one thing that says what it changed.
+    if (job.worktreePath) {
       buttons.push(
         `<button class="btn-secondary jb-diff-btn" data-job="${id}">${
           this.diffs.has(job.id) ? 'Hide diff' : 'View diff'
+        }</button>`
+      );
+    }
+    // No hide for a job parked on a question: the documents are part of the
+    // decision, and dropping them would unlink the references in it.
+    if (job.worktreePath && job.parkReason !== 'question') {
+      const shown = this.docs.has(job.id);
+      buttons.push(
+        `<button class="btn-secondary jb-docs-btn" data-job="${id}">${
+          shown ? 'Hide documents' : 'View documents'
         }</button>`
       );
     }
@@ -825,7 +1072,8 @@ ${usageTooltip(usageOf(s))}` : '')
         );
       }
       this.expanded.delete(jobId);
-      this.specs.delete(jobId);
+      this.docs.delete(jobId);
+      this.openDoc.delete(jobId);
       this.diffs.delete(jobId);
       if (this.cwd) await this.load(this.cwd);
     } catch (error) {
@@ -833,21 +1081,108 @@ ${usageTooltip(usageOf(s))}` : '')
     }
   }
 
-  private async toggleSpec(jobId: string): Promise<void> {
-    if (this.specs.has(jobId)) {
-      this.specs.delete(jobId);
+  /**
+   * Which document is this job's spec, as the server marked it.
+   *
+   * Read from the document list rather than recomputed from the stage: whether
+   * a parked design's detail holds a spec path is the server's rule
+   * (routes.ts), and a second copy of that rule here is how the two drift.
+   */
+  private specPathOf(job: Job): string | null {
+    return (this.docs.get(job.id) || []).find((d) => d.isSpec)?.path ?? null;
+  }
+
+  /** Open a document on a job's card, or close it if it is already open. */
+  private async toggleDoc(
+    jobId: string,
+    path: string,
+    mode: 'text' | 'diff' = 'text'
+  ): Promise<void> {
+    if (!path) return;
+    const open = this.openDoc.get(jobId);
+    if (open && open.path === path && open.mode === mode) {
+      this.openDoc.delete(jobId);
       this.render();
       return;
     }
     this.expanded.add(jobId);
-    try {
-      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/spec`);
-      const data = (await res.json()) as { spec: string | null };
-      this.specs.set(jobId, data.spec || '');
-    } catch {
-      this.specs.set(jobId, '');
-    }
+    this.openDoc.set(jobId, { path, mode });
+    // Rendered before the fetch so the row opens on the click and says it is
+    // loading, rather than nothing happening while git runs.
     this.render();
+    await this.fetchDocBody(jobId, path, mode);
+    this.render();
+  }
+
+  /** Show or hide a job's documents on request. */
+  private async toggleDocs(jobId: string): Promise<void> {
+    if (this.docs.has(jobId)) {
+      this.docs.delete(jobId);
+      this.openDoc.delete(jobId);
+      this.docsExpanded.delete(jobId);
+      this.render();
+      return;
+    }
+    this.expanded.add(jobId);
+    await this.fetchDocs(jobId);
+    this.render();
+  }
+
+  private async fetchDocBody(jobId: string, path: string, mode: 'text' | 'diff'): Promise<void> {
+    const key = `${jobId}|${mode}|${path}`;
+    if (this.docBodies.has(key)) return;
+    try {
+      const res = await fetch(
+        `/api/jobs/${encodeURIComponent(jobId)}/file?path=${encodeURIComponent(path)}` +
+          (mode === 'diff' ? '&mode=diff' : '')
+      );
+      const data = (await res.json()) as {
+        text?: string | null;
+        diff?: string | null;
+        truncated?: boolean;
+      };
+      this.docBodies.set(key, {
+        body: (mode === 'diff' ? data.diff : data.text) || '',
+        truncated: Boolean(data.truncated),
+      });
+    } catch {
+      this.docBodies.set(key, { body: '', truncated: false });
+    }
+  }
+
+  /**
+   * Follow a reference out of a question into the document it names.
+   *
+   * The scroll cannot happen here: the body is still being fetched, and the
+   * render that puts it on the page comes later. So the section is remembered
+   * and applied by whichever render brings it into existence — the same shape
+   * as the overlay's focusJob.
+   */
+  private async openReference(jobId: string, path: string, section: string): Promise<void> {
+    if (section) this.pendingAnchor = { jobId, section };
+    const open = this.openDoc.get(jobId);
+    if (open?.path === path && open.mode === 'text') {
+      this.render(); // already open — only the scroll is left to do
+      return;
+    }
+    await this.toggleDoc(jobId, path, 'text');
+  }
+
+  /** Scroll to a referenced section once its document is on the page. */
+  private applyPendingAnchor(container: HTMLElement): void {
+    const pending = this.pendingAnchor;
+    if (!pending) return;
+    const card = [...container.querySelectorAll<HTMLElement>('.jb-job')].find(
+      (node) => node.dataset.job === pending.jobId
+    );
+    const heading = [...(card?.querySelectorAll<HTMLElement>('.jb-doc-h') ?? [])].find(
+      (node) => node.dataset.section === pending.section
+    );
+    if (!heading) return;
+    this.pendingAnchor = null;
+    heading.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    heading.classList.add('jb-doc-h-hit');
+    window.setTimeout(() => heading.classList.remove('jb-doc-h-hit'), 2000);
   }
 
   /** Say whether approving will apply fixes or move straight on. */
@@ -955,7 +1290,38 @@ ${usageTooltip(usageOf(s))}` : '')
       }
 
       const spec = target.closest('.jb-spec-btn') as HTMLElement | null;
-      if (spec) return void this.toggleSpec(spec.dataset.job || '');
+      if (spec) return void this.toggleDoc(spec.dataset.job || '', spec.dataset.path || '');
+
+      const ref = target.closest('.jb-ref') as HTMLElement | null;
+      if (ref) {
+        return void this.openReference(
+          ref.dataset.job || '',
+          ref.dataset.path || '',
+          ref.dataset.section || ''
+        );
+      }
+
+      const docTab = target.closest('.jb-doc-tab') as HTMLElement | null;
+      if (docTab) {
+        return void this.toggleDoc(
+          docTab.dataset.job || '',
+          docTab.dataset.path || '',
+          docTab.dataset.mode === 'diff' ? 'diff' : 'text'
+        );
+      }
+
+      const docRow = target.closest('.jb-doc-row') as HTMLElement | null;
+      if (docRow) return void this.toggleDoc(docRow.dataset.job || '', docRow.dataset.path || '');
+
+      const more = target.closest('.jb-doc-more') as HTMLElement | null;
+      if (more) {
+        this.docsExpanded.add(more.dataset.job || '');
+        this.render();
+        return;
+      }
+
+      const docsBtn = target.closest('.jb-docs-btn') as HTMLElement | null;
+      if (docsBtn) return void this.toggleDocs(docsBtn.dataset.job || '');
 
       const diff = target.closest('.jb-diff-btn') as HTMLElement | null;
       if (diff) return void this.toggleDiff(diff.dataset.job || '');

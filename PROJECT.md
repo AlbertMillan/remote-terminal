@@ -57,3 +57,6 @@ status: active
 
 ## Track: Live job status
 - [x] `f-7d386y` P1 Live job overlay — pushed cross-project job cards over the terminal, toggled from Settings → project/live-job-overlay.md
+
+## Track: Job document visibility
+- [x] `f-i7coxf` P1 Read a parked job's documents from the board — spec, changed files and context docs, with linked §-refs → project/job-doc-visibility.md

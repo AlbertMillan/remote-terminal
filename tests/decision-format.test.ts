@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseDecision, stripMarks } from '../src/client/decision-format.js';
+import {
+  findReferences,
+  parseDecision,
+  resolveReference,
+  stripMarks,
+  type ReferenceTarget,
+} from '../src/client/decision-format.js';
 
 /**
  * The text a real parked job carried, hard wraps and all. Everything this
@@ -154,5 +160,120 @@ describe('stripMarks', () => {
   it('strips single-asterisk emphasis without touching maths', () => {
     expect(stripMarks('both halves *and* the code')).toBe('both halves and the code');
     expect(stripMarks('2 * 3 * 4')).toBe('2 * 3 * 4');
+  });
+});
+
+/**
+ * References, and the ladder that decides whether one becomes a link.
+ *
+ * The rule is the same one every other rule in this file follows: degrade to
+ * plain text, never to a wrong match. A reference that jumps to the wrong
+ * document is worse than one that does not jump at all, because the user
+ * answers the question believing they have read the thing it is about.
+ */
+const DOCS: ReferenceTarget[] = [
+  { path: 'project/feature.md', status: 'added', headings: ['3.2', '6.9'] },
+  { path: 'PROJECT.md', status: 'unchanged', headings: ['1.1', '3.2'] },
+  { path: 'docs/legacy.md', status: 'unchanged', headings: ['7.4'] },
+];
+
+describe('findReferences', () => {
+  it('finds section markers and paths, in order', () => {
+    const refs = findReferences('record it against §6.9 and see project/feature.md');
+    expect(refs.map((r) => [r.kind, r.value])).toEqual([
+      ['section', '6.9'],
+      ['path', 'project/feature.md'],
+    ]);
+  });
+
+  it('accepts a space after the section mark', () => {
+    expect(findReferences('see § 3.2 for this').map((r) => r.value)).toEqual(['3.2']);
+  });
+
+  it('never matches an identifier, a version or an abbreviation', () => {
+    expect(findReferences('MAX_HISTORICAL_DAYS=730 is 0.5 of it, e.g. this')).toEqual([]);
+  });
+
+  it('reports offsets that slice the original string back out', () => {
+    const text = 'treat §3.2 as settled';
+    const [ref] = findReferences(text);
+    expect(text.slice(ref.start, ref.end)).toBe(ref.raw);
+  });
+
+  it('never returns overlapping ranges', () => {
+    const refs = findReferences('see docs/3.2/notes.md and §3.2');
+    for (let i = 1; i < refs.length; i++) {
+      expect(refs[i].start).toBeGreaterThanOrEqual(refs[i - 1].end);
+    }
+  });
+});
+
+describe('resolveReference', () => {
+  const section = (value: string) =>
+    ({ start: 0, end: 0, raw: `§${value}`, kind: 'section', value }) as const;
+
+  it('prefers a document this job changed when several share a heading', () => {
+    // 3.2 is in both the new spec and PROJECT.md; the question is about what
+    // the run just wrote, so global uniqueness would link nothing useful here.
+    expect(resolveReference(section('3.2'), DOCS)?.path).toBe('project/feature.md');
+  });
+
+  it('falls back to a unique match among unchanged documents', () => {
+    expect(resolveReference(section('7.4'), DOCS)?.path).toBe('docs/legacy.md');
+  });
+
+  it('refuses to guess when nothing matches', () => {
+    expect(resolveReference(section('9.9'), DOCS)).toBeNull();
+  });
+
+  it('refuses to guess when two unchanged documents match', () => {
+    const ambiguous: ReferenceTarget[] = [
+      { path: 'a.md', status: 'unchanged', headings: ['4.1'] },
+      { path: 'b.md', status: 'unchanged', headings: ['4.1'] },
+    ];
+    expect(resolveReference(section('4.1'), ambiguous)).toBeNull();
+  });
+
+  it('resolves a path exactly, or by a unique filename', () => {
+    const [full] = findReferences('open project/feature.md');
+    expect(resolveReference(full, DOCS)?.path).toBe('project/feature.md');
+    const [bare] = findReferences('open feature.md');
+    expect(resolveReference(bare, DOCS)?.path).toBe('project/feature.md');
+    const [missing] = findReferences('open nowhere.md');
+    expect(resolveReference(missing, DOCS)).toBeNull();
+  });
+});
+
+describe('linking preserves the text', () => {
+  /** What the board does: escape the gaps, wrap the references. */
+  function link(raw: string): string {
+    const refs = findReferences(raw);
+    let out = '';
+    let at = 0;
+    for (const ref of refs) {
+      out += raw.slice(at, ref.start);
+      out += resolveReference(ref, DOCS) ? `<b>${ref.raw}</b>` : ref.raw;
+      at = ref.end;
+    }
+    return out + raw.slice(at);
+  }
+
+  it('drops nothing the model wrote', () => {
+    const body = parseDecision(REAL)!;
+    const strings = [
+      ...body.cards.map((c) => c.question),
+      ...body.cards.flatMap((c) => c.context),
+      ...body.cards.flatMap((c) => c.options.map((o) => o.text)),
+      ...body.cards.map((c) => c.recommendation?.text ?? ''),
+    ];
+    for (const text of strings) {
+      expect(link(text).replace(/<\/?b>/g, '')).toBe(text);
+    }
+  });
+
+  it('links the §-references in the real parked question', () => {
+    const assumed = parseDecision(REAL)!.cards[1].recommendation!.text;
+    expect(link(assumed)).toContain('<b>§6.9</b>');
+    expect(link(assumed)).toContain('<b>§3.2</b>');
   });
 });

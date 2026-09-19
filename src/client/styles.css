@@ -2542,10 +2542,28 @@ body {
   flex: 0 0 auto;
   font-size: 10px;
   color: var(--accent);
+  background: none;
   border: 1px solid var(--border-subtle);
   border-radius: 3px;
   padding: 1px 5px;
-  cursor: help;
+  cursor: pointer;
+}
+.pw-spec:hover { border-color: var(--accent); }
+
+.pw-spec-body {
+  flex: 1 0 100%;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
 }
 
 .pw-delete {
@@ -2899,8 +2917,105 @@ body {
 }
 .jb-question-text + .jb-answer .jb-answer-input { max-width: 90ch; margin-bottom: 8px; }
 
-.jb-spec {
+/* Documents behind a job: what the run changed, and what it read. */
+
+.jb-docs {
   margin: 0 14px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.jb-docs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.jb-docs-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.jb-doc-list { list-style: none; margin: 0; padding: 0; }
+.jb-doc + .jb-doc { border-top: 1px solid var(--border-subtle); }
+
+.jb-doc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.jb-doc-row:hover { background: var(--bg-tertiary); }
+
+/* Filled = this run changed it, and that is the half you had no way to know. */
+.jb-doc-mark { flex: 0 0 auto; font-size: 9px; color: var(--text-muted); }
+.jb-doc.changed .jb-doc-mark { color: var(--accent); }
+
+.jb-doc-path {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.jb-doc.changed .jb-doc-path { color: var(--text-primary); }
+
+.jb-doc-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.jb-doc-stat {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.jb-doc-status {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.jb-doc-view { padding: 0 12px 10px; }
+
+.jb-doc-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 8px;
+}
+.jb-doc-tab {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.jb-doc-tab.on { color: var(--accent); border-color: var(--accent); }
+.jb-doc-trunc { font-size: 10px; color: var(--warning); }
+
+.jb-doc-body {
+  margin: 0;
   padding: 12px;
   border-radius: 6px;
   background: var(--bg-primary);
@@ -2913,6 +3028,37 @@ body {
   max-height: 420px;
   overflow: auto;
 }
+.jb-doc-h { color: var(--text-primary); font-weight: 600; }
+.jb-doc-h-hit {
+  background: rgba(122, 162, 247, 0.18);
+  border-radius: 3px;
+}
+
+.jb-doc-more {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.jb-doc-more:hover { color: var(--accent); }
+
+/* A reference in a question, where it resolves to exactly one document. */
+.jb-ref {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.jb-ref:hover { text-decoration: underline solid; }
 
 .jb-actions {
   display: flex;

@@ -284,7 +284,11 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
   if (result.openQuestion) {
     // A question the design pass could not settle. Park on it rather than let
     // it guess — this is the whole point of the gate.
-    parkOnQuestion(job, 'design', result.openQuestion);
+    //
+    // The spec path is recorded even here, so the board can show the document
+    // the question is about. It is safe to do so because what gates implement
+    // is the stage's STATUS, not whether this field looks like a path.
+    parkOnQuestion(job, 'design', result.openQuestion, result.specPath);
     return;
   }
 
@@ -304,9 +308,11 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
 /**
  * The spec path recorded by the design stage, needed by implement.
  *
- * Only a `passed` design has a usable spec: a design that stopped on a question
- * is recorded as `needs_decision`, so no sentinel string is needed to tell the
- * two apart.
+ * The `passed` check is the guard that stops implement building off a spec the
+ * user never approved, and it is the ONLY thing standing there: a design that
+ * parked on a question records its spec path too (so the board can show the
+ * document being asked about), so the two states are no longer told apart by
+ * what this field happens to contain.
  */
 function specPathOf(jobId: string): string | null {
   const stages = getJobWithStages(jobId)?.stages ?? [];

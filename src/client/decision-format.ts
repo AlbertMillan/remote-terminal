@@ -270,3 +270,106 @@ export function parseDecision(detail: string): ParsedDecision | null {
 
   return { preamble: listed ? paragraphs(preamble) : [], cards, questionCount };
 }
+
+// --- References -----------------------------------------------------------
+
+/**
+ * A pointer a question makes at a document: "§3.2", "project/QA.md".
+ *
+ * A stage that parks writes about documents it wrote or read inside its own
+ * worktree, and cites them by section. Those citations are the one part of a
+ * question the user cannot act on by reading harder, so they are turned into
+ * something openable — but only where they resolve to exactly one document.
+ */
+export interface TextReference {
+  /** Offsets into the string this was found in, so the caller can splice. */
+  start: number;
+  end: number;
+  /** Exactly as written, including the `§`. */
+  raw: string;
+  kind: 'section' | 'path';
+  /** "3.2" for a section; the path as written for a path. */
+  value: string;
+}
+
+/** The document shape reference resolution needs; JobDoc satisfies it. */
+export interface ReferenceTarget {
+  path: string;
+  status: string;
+  headings: string[];
+}
+
+/** "§3.2", "§ 6.9" — the section marker with its number. */
+const SECTION_PATTERN = /§\s?(\d+(?:\.\d+)*)/g;
+
+/**
+ * A path-shaped token: either something with a directory in it, or a bare
+ * markdown filename. Deliberately NOT bare words with dots — "e.g." and "0.5"
+ * are not files, and a token that resolves to nothing renders as written.
+ */
+const PATH_PATTERN =
+  /(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}|\b[A-Za-z0-9_-]+\.(?:md|markdown)\b/g;
+
+/**
+ * Every reference in a string, in order and never overlapping.
+ *
+ * Finding one is not the same as linking it: the caller resolves each against
+ * the documents it actually has, and anything that does not resolve stays plain
+ * text. Identifiers like MAX_HISTORICAL_DAYS are not matched at all — there is
+ * no target for them, and a wrong jump is worse than none.
+ */
+export function findReferences(text: string): TextReference[] {
+  const found: TextReference[] = [];
+
+  for (const [pattern, kind] of [
+    [SECTION_PATTERN, 'section'],
+    [PATH_PATTERN, 'path'],
+  ] as [RegExp, TextReference['kind']][]) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      found.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        raw: match[0],
+        kind,
+        value: kind === 'section' ? match[1] : match[0],
+      });
+    }
+  }
+
+  found.sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept: TextReference[] = [];
+  for (const ref of found) {
+    if (kept.length > 0 && ref.start < kept[kept.length - 1].end) continue;
+    kept.push(ref);
+  }
+  return kept;
+}
+
+/**
+ * The one document a reference points at, or null.
+ *
+ * Sections resolve on a ladder that never guesses: a heading unique among the
+ * documents THIS JOB CHANGED wins, because a question is nearly always about
+ * what the run just wrote; failing that, one unique across every document it
+ * has; failing that, nothing. Requiring global uniqueness alone would link
+ * almost nothing in a repo where several documents number their sections.
+ */
+export function resolveReference(
+  ref: TextReference,
+  docs: ReferenceTarget[]
+): ReferenceTarget | null {
+  if (ref.kind === 'path') {
+    const exact = docs.filter((d) => d.path === ref.value);
+    if (exact.length === 1) return exact[0];
+    const suffix = docs.filter((d) => d.path.endsWith(`/${ref.value}`));
+    return suffix.length === 1 ? suffix[0] : null;
+  }
+
+  const holds = (doc: ReferenceTarget): boolean => doc.headings.includes(ref.value);
+  const changed = docs.filter((d) => d.status !== 'unchanged' && holds(d));
+  if (changed.length === 1) return changed[0];
+  const all = docs.filter(holds);
+  return all.length === 1 ? all[0] : null;
+}

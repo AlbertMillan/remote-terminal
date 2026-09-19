@@ -233,6 +233,94 @@ export async function diffAgainst(worktreePath: string, baseBranch: string): Pro
   return (await git(worktreePath, ['diff', 'HEAD'])) || '';
 }
 
+/** One file this job's branch changed, as the document list reports it. */
+export interface ChangedFile {
+  path: string;
+  status: 'added' | 'edited' | 'deleted' | 'renamed';
+  insertions: number;
+  deletions: number;
+}
+
+const NAME_STATUS: Record<string, ChangedFile['status']> = {
+  A: 'added',
+  M: 'edited',
+  D: 'deleted',
+  R: 'renamed',
+  C: 'added',
+};
+
+/**
+ * Per-file breakdown of the job branch, for the document list.
+ *
+ * Falls back to the working tree exactly as `diffAgainst` does. The two are
+ * shown side by side on the same card, so a mid-stage job whose diff pane has
+ * content must not have an empty document list beside it.
+ */
+export async function diffNumstat(
+  worktreePath: string,
+  baseBranch: string
+): Promise<ChangedFile[]> {
+  const read = async (...range: string[]): Promise<ChangedFile[]> => {
+    const numstat = (await git(worktreePath, ['diff', '--numstat', ...range])) || '';
+    if (!numstat.trim()) return [];
+    const names = (await git(worktreePath, ['diff', '--name-status', ...range])) || '';
+
+    const statuses = new Map<string, ChangedFile['status']>();
+    for (const line of names.split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      // A rename is "R096\told\tnew" — the last field is always the path now.
+      const code = parts[0].trim().charAt(0);
+      statuses.set(parts[parts.length - 1], NAME_STATUS[code] ?? 'edited');
+    }
+
+    const files: ChangedFile[] = [];
+    for (const line of numstat.split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 3) continue;
+      const path = parts[parts.length - 1];
+      files.push({
+        path,
+        status: statuses.get(path) ?? 'edited',
+        // "-" for a binary file; reported as zero rather than NaN.
+        insertions: Number(parts[0]) || 0,
+        deletions: Number(parts[1]) || 0,
+      });
+    }
+    return files;
+  };
+
+  const committed = await read(`${baseBranch}...HEAD`);
+  return committed.length > 0 ? committed : read('HEAD');
+}
+
+/** Every markdown file in the worktree, tracked or newly written but not ignored. */
+export async function listMarkdown(worktreePath: string): Promise<string[]> {
+  const out =
+    (await git(worktreePath, [
+      'ls-files',
+      '--cached',
+      '--others',
+      '--exclude-standard',
+      '--',
+      '*.md',
+      '*.markdown',
+    ])) || '';
+  // --cached and --others can name the same path; git does not dedupe for us.
+  return [...new Set(out.split('\n').map((l) => l.trim()).filter(Boolean))];
+}
+
+/** This job's diff for one file. Empty when the file is new and uncommitted. */
+export async function fileDiff(
+  worktreePath: string,
+  baseBranch: string,
+  path: string
+): Promise<string> {
+  const out = await git(worktreePath, ['diff', `${baseBranch}...HEAD`, '--', path]);
+  if (out && out.trim()) return out;
+  return (await git(worktreePath, ['diff', 'HEAD', '--', path])) || '';
+}
+
 /** Short stat summary of the job branch, for the board. */
 export async function diffStat(
   worktreePath: string,

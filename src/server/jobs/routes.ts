@@ -1,6 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { findWorkspaceProject } from '../projects/workspace.js';
 import { capabilitiesFor, detectVcs } from '../projects/vcs.js';
@@ -15,7 +13,8 @@ import {
 } from './runner.js';
 import { getJobWithStages, listJobs, listJobsForProject } from './store.js';
 import { sumUsage } from './types.js';
-import { diffAgainst, diffStat, hasRemote } from './worktree.js';
+import { diffAgainst, diffStat, fileDiff, hasRemote } from './worktree.js';
+import { listJobDocs, readDoc, resolveInWorktree } from './docs.js';
 import { applySelection, readFindings, writeFindings } from './findings.js';
 
 const logger = createLogger('job-routes');
@@ -38,32 +37,13 @@ export function registerJobRoutes(app: FastifyInstance): void {
     return { job };
   });
 
-  // The spec a job's design stage produced, read from its worktree.
-  app.get<{ Params: { id: string } }>('/api/jobs/:id/spec', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
-
-    const specStage = job.stages.find((s) => s.name === 'design');
-    const specRel = specStage?.status === 'passed' ? specStage.detail : null;
-    if (!job.worktreePath || !specRel) {
-      return { spec: null, path: null };
-    }
-    const abs = join(job.worktreePath, specRel);
-    if (!existsSync(abs)) return { spec: null, path: specRel };
-    try {
-      return { spec: readFileSync(abs, 'utf-8'), path: specRel };
-    } catch {
-      return { spec: null, path: specRel };
-    }
-  });
-
   // The job branch's diff against its base, for review before approving a merge.
   app.get<{ Params: { id: string } }>('/api/jobs/:id/diff', async (request, reply) => {
     const job = getJobWithStages(request.params.id);
     if (!job) return reply.status(404).send({ error: 'Unknown job' });
     if (!job.worktreePath) return { diff: '', stat: null };
 
-    const base = await baseBranchFor(job.projectCwd);
+    const base = await baseBranchFor(job);
     const [diff, stat] = await Promise.all([
       diffAgainst(job.worktreePath, base),
       diffStat(job.worktreePath, base),
@@ -74,6 +54,49 @@ export function registerJobRoutes(app: FastifyInstance): void {
       stat,
     };
   });
+
+  // The documents behind a job's question: what its branch changed, plus the
+  // markdown it could have been reading. Empty — never an error — for a job
+  // whose worktree has been torn down, since the board still renders those rows.
+  app.get<{ Params: { id: string } }>('/api/jobs/:id/docs', async (request, reply) => {
+    const job = getJobWithStages(request.params.id);
+    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    if (!job.worktreePath) return { docs: [] };
+
+    const base = await baseBranchFor(job);
+    return { docs: await listJobDocs(job.worktreePath, base, specPathOf(job)) };
+  });
+
+  // One document, as text or as this job's diff for it.
+  app.get<{ Params: { id: string }; Querystring: { path?: string; mode?: string } }>(
+    '/api/jobs/:id/file',
+    async (request, reply) => {
+      const job = getJobWithStages(request.params.id);
+      if (!job) return reply.status(404).send({ error: 'Unknown job' });
+      const rel = request.query?.path;
+      if (!rel) return reply.status(400).send({ error: 'path required' });
+      if (!job.worktreePath) return { text: null, diff: null, path: rel };
+
+      if (request.query?.mode === 'diff') {
+        // Resolved first so a path outside the worktree never reaches git, and
+        // so an untracked file answers with an empty diff rather than an error.
+        if (!resolveInWorktree(job.worktreePath, rel)) {
+          return reply.status(400).send({ error: 'Path is outside this job' });
+        }
+        const base = await baseBranchFor(job);
+        const diff = await fileDiff(job.worktreePath, base, rel);
+        return {
+          diff: diff.slice(0, MAX_DIFF_CHARS),
+          truncated: diff.length > MAX_DIFF_CHARS,
+          path: rel,
+        };
+      }
+
+      const read = readDoc(job.worktreePath, rel);
+      if (!read) return reply.status(404).send({ error: 'Could not read that file' });
+      return { text: read.text, truncated: read.truncated, path: rel };
+    }
+  );
 
   // Review findings for the gate. Returns an empty list rather than 404 when a
   // job has not been reviewed yet, so the UI has one code path.
@@ -186,10 +209,34 @@ export function registerJobRoutes(app: FastifyInstance): void {
   logger.info('Job pipeline routes registered');
 }
 
-/** The branch a job's work is compared and merged against. */
-async function baseBranchFor(cwd: string): Promise<string> {
+/**
+ * Which document is this job's spec.
+ *
+ * A design that parked on a question records its spec path just as a passed one
+ * does — the spec exists (the stage throws without one) and is committed before
+ * the park, and it is the document the question is asking about. Whether the
+ * spec is APPROVED is a different question, answered by the stage status in
+ * runner.ts, which is what gates the implement stage.
+ */
+function specPathOf(job: { stages: { name: string; status: string; detail: string | null }[] }): string | null {
+  const design = job.stages.find((s) => s.name === 'design');
+  if (!design) return null;
+  return design.status === 'passed' || design.status === 'needs_decision' ? design.detail : null;
+}
+
+/**
+ * The branch a job's work is compared and merged against.
+ *
+ * The branch recorded when the worktree was created, exactly as the runner's
+ * baseBranchOf() resolves it. Reading the project's CURRENT branch instead —
+ * which this did — means a job that sat parked while the user switched branches
+ * is measured against whatever they happen to be on now, so both the diff and
+ * the document list report a changed-set that was never this job's.
+ */
+async function baseBranchFor(job: { baseBranch: string | null; projectCwd: string }): Promise<string> {
+  if (job.baseBranch) return job.baseBranch;
   const { currentBranch } = await import('./worktree.js');
-  return (await currentBranch(cwd)) || 'main';
+  return (await currentBranch(job.projectCwd)) || 'main';
 }
 
 function withJob<T>(

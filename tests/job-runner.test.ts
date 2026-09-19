@@ -210,7 +210,12 @@ describe('questions re-run the stage that asked (finding 2)', () => {
     expect(parked.parkReason).toBe('question');
     expect(parked.detail).toBe('Which option?');
     // The asking stage is recorded as needing a decision, not passed (finding 8).
-    expect(parked.stages.find((s) => s.name === 'design')!.status).toBe('needs_decision');
+    const design = parked.stages.find((s) => s.name === 'design')!;
+    expect(design.status).toBe('needs_decision');
+    // The spec path is recorded even here, so the board can show the document
+    // the question is about. What keeps implement from building off an
+    // unapproved spec is the STATUS above, not this field's contents.
+    expect(design.detail).toBe('project/x.md');
 
     stageResults.design.openQuestion = null;
     stageResults.calls = [];

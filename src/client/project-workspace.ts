@@ -117,6 +117,14 @@ export class ProjectWorkspace {
   private qaDocs = new Map<string, QaDoc | null>();
   private qaBusy = new Set<string>();
   /**
+   * Specs the user has opened, keyed `cwd|featureId`.
+   *
+   * A feature's spec is a file on disk that the board only ever pointed at
+   * through a tooltip. `undefined` means not fetched, `null` means fetched and
+   * unreadable — the two say different things to the reader.
+   */
+  private specs = new Map<string, string | null>();
+  /**
    * Tracks the user has folded away, keyed by (cwd, track). Held here rather
    * than in the DOM because every mutation re-renders the whole board, and
    * persisted so a long index doesn't unfold itself on every reload.
@@ -523,7 +531,8 @@ export class ProjectWorkspace {
               title="Click to rename">${escapeHtml(f.title)}</span>
         ${
           f.spec
-            ? `<span class="pw-spec" title="${escapeAttr(f.spec)}">spec</span>`
+            ? `<button class="pw-spec" data-cwd="${cwd}" data-id="${id}"
+                       title="${escapeAttr(f.spec)}">spec</button>`
             : ''
         }
         ${
@@ -537,7 +546,52 @@ export class ProjectWorkspace {
         }
         <button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
                 title="Remove this feature" aria-label="Remove">×</button>
+        ${this.renderSpec(project, f)}
       </li>`;
+  }
+
+  /**
+   * A feature's spec, once its chip has been clicked.
+   *
+   * Shown as text rather than rendered markdown, exactly as the job board
+   * shows a document: the client has no markdown renderer and this is not the
+   * place to gain one.
+   */
+  private renderSpec(project: WorkspaceProject, f: Feature): string {
+    const spec = this.specs.get(this.specKey(project.cwd, f.id));
+    if (spec === undefined) return '';
+    return spec
+      ? `<pre class="pw-spec-body">${escapeHtml(spec)}</pre>`
+      : `<div class="pw-hint pw-spec-body">Could not read ${escapeHtml(f.spec || 'the spec')}.</div>`;
+  }
+
+  private specKey(cwd: string, featureId: string): string {
+    return `${cwd}|${featureId}`;
+  }
+
+  /**
+   * Open or close a feature's spec.
+   *
+   * Served by /api/projects/detail, which already resolves a named feature's
+   * spec through the registry guard — it had simply never had a caller.
+   */
+  async toggleSpec(cwd: string, featureId: string): Promise<void> {
+    const key = this.specKey(cwd, featureId);
+    if (this.specs.has(key)) {
+      this.specs.delete(key);
+      this.refreshDetail(cwd);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/projects/detail?cwd=${encodeURIComponent(cwd)}&feature=${encodeURIComponent(featureId)}`
+      );
+      const data = (await res.json()) as { spec: string | null };
+      this.specs.set(key, data.spec);
+    } catch {
+      this.specs.set(key, null);
+    }
+    this.refreshDetail(cwd);
   }
 
   private renderAddRow(project: WorkspaceProject): string {
@@ -723,6 +777,12 @@ export class ProjectWorkspace {
       const status = target.closest('.pw-status') as HTMLElement | null;
       if (status) {
         void this.cycleStatus(status.dataset.cwd || '', status.dataset.id || '');
+        return;
+      }
+
+      const spec = target.closest('.pw-spec') as HTMLElement | null;
+      if (spec) {
+        void this.toggleSpec(spec.dataset.cwd || '', spec.dataset.id || '');
         return;
       }
 
