@@ -2947,6 +2947,8 @@ body {
   color: var(--text-muted);
 }
 .jb-docs-head:hover { background: var(--bg-tertiary); }
+/* Keyboard focus lands back here after a fold, so it has to be visible. */
+.jb-docs-head:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .jb-docs-count {
   margin-left: auto;
   font-weight: 400;

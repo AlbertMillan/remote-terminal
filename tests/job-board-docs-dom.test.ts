@@ -100,6 +100,7 @@ const settle = (): Promise<void> => new Promise((resolve) => window.setTimeout(r
 
 const pane = () => document.querySelector<HTMLElement>('.jb-docs')!;
 const head = () => document.querySelector<HTMLButtonElement>('.jb-docs-head')!;
+const docsBtn = () => document.querySelector<HTMLButtonElement>('.jb-docs-btn')!;
 const folded = () => pane().classList.contains('collapsed');
 const docsFetches = () => calls.filter((url) => url.endsWith('/docs')).length;
 
@@ -144,6 +145,46 @@ describe('a pane the board loaded on its own', () => {
   });
 });
 
+/**
+ * The documents button on the actions row, on the cards whose body is NOT
+ * already open. A parked question is unfolded by loadDocsForParked(); every
+ * other job with a worktree arrives collapsed, and the pane only renders inside
+ * the card body — so the button has to expand the card as well as unfold.
+ */
+describe('the documents button on a collapsed card', () => {
+  it('opens the pane on one click at the merge gate, where the list is already cached', async () => {
+    jobs = [parkedJob({ parkReason: 'gate', gate: 'merge', stage: 'qa', detail: null })];
+    const board = mount();
+    await board.load(CWD);
+
+    // Cached by the board's own fetch, but nothing of it is on screen yet.
+    expect(document.querySelector('.jb-docs')).toBeNull();
+    expect(docsBtn().textContent).toBe('View documents');
+
+    docsBtn().click();
+    expect(pane()).not.toBeNull();
+    expect(folded()).toBe(false);
+    expect(docsBtn().textContent).toBe('Hide documents');
+  });
+
+  it('fetches and shows the list for a finished job', async () => {
+    jobs = [parkedJob({ status: 'done', stage: 'merge', parkReason: null, detail: null })];
+    const board = mount();
+    await board.load(CWD);
+
+    // Not parked, so the board never fetched for it.
+    expect(docsFetches()).toBe(0);
+    expect(document.querySelector('.jb-docs')).toBeNull();
+
+    docsBtn().click();
+    await settle();
+
+    expect(docsFetches()).toBe(1);
+    expect(folded()).toBe(false);
+    expect(document.querySelectorAll('.jb-doc-row')).toHaveLength(2);
+  });
+});
+
 describe('the pane header', () => {
   it('folds and unfolds without fetching the list again', async () => {
     const board = mount();
@@ -159,6 +200,20 @@ describe('the pane header', () => {
     expect(folded()).toBe(true);
     expect(head().getAttribute('aria-expanded')).toBe('false');
     expect(docsFetches()).toBe(fetched);
+  });
+
+  it('keeps the keyboard on the control it just replaced, and says what it controls', async () => {
+    const board = mount();
+    await board.load(CWD);
+
+    const body = document.querySelector<HTMLElement>('.jb-docs-body')!;
+    expect(head().getAttribute('aria-controls')).toBe(body.id);
+    expect(body.id).not.toBe('');
+
+    head().click();
+    // render() replaced the button; a keyboard user has to be able to press
+    // Space again without tabbing back through the card.
+    expect(document.activeElement).toBe(head());
   });
 
   it('is still there to click when the list came back empty', async () => {

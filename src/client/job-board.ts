@@ -226,6 +226,15 @@ export class JobBoard {
   private docsCollapsed = new Set<string>();
   /** A section to scroll to once the document it lives in has rendered. */
   private pendingAnchor: { jobId: string; section: string } | null = null;
+  /**
+   * A job whose fold control should get focus back after the next render.
+   *
+   * The head folds through render(), which replaces the board's HTML wholesale
+   * — so the button destroys itself on its own click and focus falls back to
+   * <body>. Without this a keyboard user cannot press Space twice to fold and
+   * unfold; they have to tab through the whole card again.
+   */
+  private refocusDocsHead: string | null = null;
   /** Diff text keyed by job id, fetched lazily at the merge gate. */
   private diffs = new Map<string, { diff: string; stat: DiffStat | null; truncated: boolean }>();
   /** Findings keyed by job id, loaded when a job parks at the review gate. */
@@ -435,6 +444,18 @@ export class JobBoard {
       </div>`;
     this.applyPendingFocus(container);
     this.applyPendingAnchor(container);
+    this.applyRefocusDocsHead(container);
+  }
+
+  /** Put focus back on the fold control that its own render just destroyed. */
+  private applyRefocusDocsHead(container: HTMLElement): void {
+    const jobId = this.refocusDocsHead;
+    if (!jobId) return;
+    this.refocusDocsHead = null;
+    const head = [...container.querySelectorAll<HTMLButtonElement>('.jb-docs-head')].find(
+      (node) => node.dataset.job === jobId
+    );
+    head?.focus();
   }
 
   /**
@@ -762,17 +783,21 @@ ${usageTooltip(usageOf(s))}` : '')
                : ''
            }`;
 
+    // aria-expanded on its own announces a state without saying whose, so the
+    // body carries an id for the head to point at.
+    const bodyId = `jb-docs-body-${escapeAttr(job.id)}`;
+
     return `
       <div class="jb-docs${collapsed ? ' collapsed' : ''}">
         <button type="button" class="jb-docs-head" data-job="${escapeAttr(job.id)}"
-                aria-expanded="${collapsed ? 'false' : 'true'}">
+                aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="${bodyId}">
           <span>Documents</span>
           <span class="jb-docs-count">${
             docs.length === 0 ? 'no documents' : `${changed.length} changed by this run`
           }</span>
           <span class="jb-chevron">${collapsed ? '▸' : '▾'}</span>
         </button>
-        <div class="jb-docs-body">${body}</div>
+        <div class="jb-docs-body" id="${bodyId}">${body}</div>
       </div>`;
   }
 
@@ -988,20 +1013,20 @@ ${usageTooltip(usageOf(s))}` : '')
                  data-path="${escapeAttr(specPath)}">${shown ? 'Hide spec' : 'View spec'}</button>`
       );
     }
-    // Not gated on the implement stage: a design that only wrote documents has
-    // a diff worth reading, and it is the one thing that says what it changed.
     if (job.worktreePath) {
+      // Not gated on the implement stage: a design that only wrote documents
+      // has a diff worth reading, and it is the one thing that says what it
+      // changed.
       buttons.push(
         `<button class="btn-secondary jb-diff-btn" data-job="${id}">${
           this.diffs.has(job.id) ? 'Hide diff' : 'View diff'
         }</button>`
       );
-    }
-    // The entry point for a job whose list has never been fetched — there is no
-    // pane to click the chevron on yet. Offered on a job parked on a question
-    // too, now that hiding is a fold rather than a delete: the references in the
-    // question resolve against a list that stays loaded either way.
-    if (job.worktreePath) {
+      // The entry point for a job whose list has never been fetched — there is
+      // no pane to click the chevron on yet. Offered on a job parked on a
+      // question too, now that hiding is a fold rather than a delete: the
+      // references in the question resolve against a list that stays loaded
+      // either way.
       const shown = this.docs.has(job.id) && !this.docsCollapsed.has(job.id);
       buttons.push(
         `<button class="btn-secondary jb-docs-btn" data-job="${id}">${
@@ -1153,11 +1178,21 @@ ${usageTooltip(usageOf(s))}` : '')
    * and specPathOf() reads which row is the spec, so hiding has to stay a class.
    * Freshness is unaffected — a live job on screen is refetched by
    * loadDocsForParked() on every poll, and a project switch clears the lot.
+   *
+   * Unfolding a cached list has to expand the card as well: the pane renders
+   * only inside renderBody(), while the button that got us here renders on
+   * every card. A job parked at the design or merge gate is cached and
+   * collapsed — without this, its button flips its own label and puts nothing
+   * on screen.
    */
   private async toggleDocs(jobId: string): Promise<void> {
     if (this.docs.has(jobId)) {
-      if (this.docsCollapsed.has(jobId)) this.docsCollapsed.delete(jobId);
-      else this.docsCollapsed.add(jobId);
+      if (this.docsCollapsed.has(jobId)) {
+        this.docsCollapsed.delete(jobId);
+        this.expanded.add(jobId);
+      } else {
+        this.docsCollapsed.add(jobId);
+      }
       this.render();
       return;
     }
@@ -1369,8 +1404,13 @@ ${usageTooltip(usageOf(s))}` : '')
       if (docsBtn) return void this.toggleDocs(docsBtn.dataset.job || '');
 
       // The pane's own chevron: the affordance once the list is on screen.
+      // Only this path asks for the focus back — the actions-row button is a
+      // different control, and moving focus off it would be a surprise.
       const docsHead = target.closest('.jb-docs-head') as HTMLElement | null;
-      if (docsHead) return void this.toggleDocs(docsHead.dataset.job || '');
+      if (docsHead) {
+        this.refocusDocsHead = docsHead.dataset.job || '';
+        return void this.toggleDocs(docsHead.dataset.job || '');
+      }
 
       const diff = target.closest('.jb-diff-btn') as HTMLElement | null;
       if (diff) return void this.toggleDiff(diff.dataset.job || '');
