@@ -60,7 +60,7 @@ status: active
 
 ## Track: Job document visibility
 - [x] `f-i7coxf` P1 Read a parked job's documents from the board — spec, changed files and context docs, with linked §-refs → project/job-doc-visibility.md
-- [ ] `f-omtgly` P2 Add a dropdown button to  toggle the show/hide the document list on-demand
+- [x] `f-omtgly` P2 Add a dropdown button to  toggle the show/hide the document list on-demand → project/add-a-dropdown-button-to-toggle-the-show-hide-th.md
 
 ## Track: Pipeline throughput
 - [x] `f-qd41mv` P1 Per-project run lanes, queued-vs-running on the board, and `--strict-mcp-config` on stage runs
