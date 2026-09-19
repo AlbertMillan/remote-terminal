@@ -11,16 +11,11 @@ const logger = createLogger('stage-design');
 /**
  * Design stage: turn a feature into an agreed spec before any code is written.
  *
- * This is the first gate for a reason — the expensive failure mode is building
- * the wrong thing correctly. The stage must therefore surface its *decisions*,
- * not just its conclusions, and it must stop rather than guess when something
- * is genuinely ambiguous.
- *
- * A question it parks on must also be *self-contained*. The run reads the repo;
- * the person answering sees one paragraph on a card. "Question 2 is unanswerable
- * with bizumIn === 0" is a real question this stage asked, where Question 2 was
- * item 2 of a list in a document the reader had never opened — so the prompt
- * requires the cited line to be quoted into the question itself.
+ * The expensive failure is building the wrong thing correctly, so the stage
+ * surfaces its DECISIONS rather than just its conclusions, and stops rather than
+ * guess. A question it parks on must be answerable with nothing but itself in
+ * front of you — hence the quoting rule in the prompt below.
+ * See `docs/job-decisions.md`.
  */
 
 /** Marker the stage writes when it needs a human decision before continuing. */

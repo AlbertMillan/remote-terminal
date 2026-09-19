@@ -1,32 +1,16 @@
 /**
  * Strip the environment markers a parent `claude` process stamps onto its children.
  *
- * Claude Code sets `CLAUDE_CODE_CHILD_SESSION=1` (plus a handful of other
- * session-scoped variables) on every subprocess it spawns, so that a *nested*
- * `claude` knows it is not the top-level session and does not write a transcript
- * over its parent's. That is right for a nested invocation and wrong for us: the
- * server hands out interactive terminals, and a `claude` started in one is a
- * top-level session of its own.
+ * A server started from inside a claude-remote terminal inherits that
+ * conversation's markers, and every PTY it then hands out silently skips saving
+ * its transcript — breaking Fork, `--resume` history, take-over and SESSION-LOG
+ * at once. Stripped at boot (`scrubProcessEnv`, which also covers `spawnClaude`)
+ * and again at the PTY chokepoint. Story: `docs/windows-auto-start.md`.
  *
- * The markers reach the server whenever it is started from inside a claude-remote
- * terminal -- which is exactly how restart-server.ps1 is meant to be used. The VBS
- * launcher detaches the *process tree*, so the restart survives the session that
- * asked for it, but a detached process still inherits the *environment*. From
- * there `createPty` spreads `process.env` into every PTY and the whole server
- * hands out sessions that refuse to save transcripts, which quietly breaks Fork
- * (it copies the JSONL), `--resume` history, job take-over, and SESSION-LOG
- * generation.
- *
- * So the markers are removed from `process.env` once at boot (`scrubProcessEnv`),
- * which also covers `spawnClaude` in agent/claude-run.ts since it inherits the
- * server's environment implicitly, and again at the PTY chokepoint so a terminal
- * is clean regardless of what the server process picked up.
- *
- * This is a denylist of *session-scoped* markers, deliberately not a `CLAUDE_*`
- * wildcard: variables a user sets for themselves (ANTHROPIC_API_KEY,
- * CLAUDE_CONFIG_DIR, CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, their own `CLAUDE`
- * path entry) must survive into the terminal untouched. CLAUDE_CODE_EXECPATH
- * survives too -- it points at the `claude` binary, not at a conversation.
+ * This list is a denylist of *session-scoped* markers and must never become a
+ * `CLAUDE_*` wildcard: ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR,
+ * CLAUDE_CODE_FORCE_SESSION_PERSISTENCE and CLAUDE_CODE_EXECPATH are the user's
+ * own settings and have to survive into the terminal untouched.
  */
 export const INHERITED_CLAUDE_SESSION_VARS = [
   /** The marker that turns transcript saving off. The reason this file exists. */

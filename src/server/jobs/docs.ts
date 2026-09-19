@@ -6,18 +6,12 @@ import { diffNumstat, listMarkdown, type ChangedFile } from './worktree.js';
 const logger = createLogger('job-docs');
 
 /**
- * The documents behind a job's question.
+ * The documents behind a job's question — none of which are in the user's
+ * checkout. See `docs/job-documents.md`.
  *
- * A stage writes its spec — and may edit other docs — inside the job's
- * worktree, commits them to the job branch, and then parks asking about what it
- * wrote. None of that is in the user's checkout, so without this the question
- * cites sections of a file that exists only on a branch they have never seen.
- *
- * Two kinds of document are listed, and the difference is the point:
- *  - what this branch CHANGED, from the diff — exact, and the part the user had
- *    no way of knowing about;
- *  - the markdown that was already there — the context a question cites when it
- *    only READ a file.
+ * Two kinds, and the difference is the point: what this branch CHANGED (from
+ * the diff, exact) and the markdown that was already there (the context a
+ * question cites when the run only READ a file).
  */
 
 /** Don't ship a whole book to the browser; the viewer is for documents. */

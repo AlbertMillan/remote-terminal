@@ -5,18 +5,15 @@ import { join } from 'path';
  * Recover a real working directory from a ~/.claude/projects/<slug> directory
  * name.
  *
- * Claude Code slugifies the cwd by replacing every path separator — and `:`,
- * `_` and spaces — with `-`, which is lossy: "NodeProjects-ideas-atlas" could be
- * ".../NodeProjects/ideas/atlas" or ".../NodeProjects/ideas-atlas". The normal
- * path (project-discovery.ts) sidesteps this by reading the `cwd` field out of a
- * transcript line, but that only works while a transcript still exists — and on
- * a real machine most directories outlive their transcripts (19 of 27 here),
- * which would silently drop those projects from the board.
+ * The slug is lossy — separators, `:`, `_` and spaces all become `-`, so
+ * "NodeProjects-ideas-atlas" could be ".../ideas/atlas" or ".../ideas-atlas".
+ * Reading `cwd` out of a transcript (project-discovery.ts) is exact but only
+ * works while a transcript exists, and most directories outlive theirs.
  *
- * So resolve the ambiguity against the filesystem: walk the slug segment by
- * segment, and at each step accept only a directory that actually exists,
- * treating `-`, `_` and spaces as interchangeable. Ambiguity that the filesystem
- * cannot settle is rare, and we take the first consistent match.
+ * So the ambiguity is resolved against the filesystem: walk the slug segment by
+ * segment, accepting only a directory that exists, treating `-`, `_` and spaces
+ * as interchangeable. What the filesystem cannot settle takes the first
+ * consistent match.
  */
 
 /**

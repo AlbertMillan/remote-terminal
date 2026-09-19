@@ -30,19 +30,15 @@ export interface MigrateResult {
  * Instructions for converting a project's existing plan docs into the canonical
  * index.
  *
- * This carries over the hard-won guidance from the phases manifest prompt: real
- * plans use no single convention — H3 headings rather than checkboxes, ids of
- * "Phase N" / "M-N" / "SU-N" / "DS-N", status expressed as "✅ shipped"
- * suffixes or a prose blockquote — and a single project often runs several
- * independent tracks that must never be conflated. So the model interprets,
- * rather than us trying to parse every dialect.
+ * A model interprets the project's existing plan docs because real ones follow
+ * no single convention (H3 headings, "Phase N"/"M-N"/"SU-N" ids, "✅ shipped"
+ * suffixes), and one project often runs several tracks that must not be merged.
  *
- * The crucial difference from the old manifest: this runs ONCE per project. After
- * migration the file is authoritative and the server reads and writes it
- * deterministically, so a UI edit is never overwritten by a later agent pass.
- *
- * Feature ids are deliberately NOT requested from the model — the server assigns
- * them afterwards, which guarantees they are well-formed and unique.
+ * This runs ONCE per project: afterwards the file is authoritative and the
+ * server reads and writes it deterministically, so a UI edit is never
+ * overwritten by a later agent pass. Feature ids are deliberately NOT asked of
+ * the model — the server assigns them, which is what makes them well-formed and
+ * unique.
  */
 function buildMigratePrompt(opts: {
   cwd: string;

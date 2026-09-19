@@ -5,14 +5,11 @@ const logger = createLogger('job-events');
 /**
  * "Something about a job changed" — nothing more.
  *
- * Deliberately payload-free. Subscribers rebuild the whole summary from the
- * store, so a burst of writes inside one stage transition cannot deliver a
- * half-applied view, and no caller has to remember which fields a listener
- * cares about.
+ * Deliberately payload-free: subscribers rebuild from the store, so a burst of
+ * writes inside one stage transition cannot deliver a half-applied view.
  *
- * Lives here rather than in the WebSocket layer because `store.ts` fires it:
- * the data layer must not import the transport. Mirrors `notificationService`,
- * which the same handler already subscribes to.
+ * Lives here rather than in the WebSocket layer because `store.ts` fires it —
+ * the data layer must not import the transport.
  */
 
 type ChangeCallback = () => void;

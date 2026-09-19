@@ -178,16 +178,13 @@ export function listJobs(): JobWithStages[] {
 }
 
 /**
- * Jobs the live overlay feed cares about: everything still in flight, plus
- * anything that reached a terminal status since `since` (an ISO timestamp).
+ * Jobs the live overlay feed cares about: everything in flight, plus anything
+ * that reached a terminal status since `since` (an ISO timestamp).
  *
- * Filtered in SQL rather than after `listJobs()` because this runs on every
- * job write, several times per stage. Reading every job ever run — and all
- * eight stage rows of each — to then discard most of them is work that grows
- * with the table and is thrown away every time.
- *
- * `updated_at` is compared as text, which is exactly right for the ISO-8601
- * UTC strings the store writes: they sort lexicographically.
+ * Filtered in SQL, not after `listJobs()`: this runs on every job write, and
+ * reading every job and all eight of its stage rows to discard most of them is
+ * work that grows with the table. `updated_at` compares as text because the
+ * ISO-8601 UTC strings the store writes sort lexicographically.
  */
 const LIVE_OR_RECENT = `status IN ('queued', 'running', 'parked') OR updated_at > ?`;
 

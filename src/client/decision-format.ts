@@ -1,22 +1,13 @@
 /**
  * Turn a parked job's question text into something you can decide from.
  *
- * A stage that stops rather than guess writes free prose, and it always has the
- * same shape: one bullet per open question, each leading with the question
- * itself, then the context, then the alternatives it weighed, then what it
- * would do. Rendered verbatim that is a wall of text — the question, the thing
- * you actually have to answer, sits level with everything else.
+ * A parser over prose, NOT a markdown renderer — the client has never had one
+ * and does not gain one here. See `docs/job-decisions.md`.
  *
- * So this pulls those parts out and the board renders each as its own element.
- * It is a parser over prose, not a markdown renderer: the client has never had
- * one and does not gain one here. Inline marks left in the extracted strings
- * are stripped (`stripMarks`), because the structure already says what the
- * emphasis was for.
- *
- * Every rule below degrades to "no match", never to a wrong match: a block with
- * no question stays whole as a plain note, and a detail with no questions at
- * all returns null so the caller can fall back to showing the text as written.
- * Nothing the model wrote is ever dropped.
+ * Two invariants every rule below has to keep: it degrades to "no match", never
+ * to a wrong match, and nothing the model wrote is ever dropped. A block with no
+ * question stays whole as a note; a detail with none returns null so the caller
+ * shows the text as written.
  *
  * Pure string work, no DOM, so it is covered by tests/decision-format.test.ts.
  */

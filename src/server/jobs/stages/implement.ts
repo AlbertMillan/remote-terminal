@@ -88,13 +88,6 @@ CONSTRAINTS
 }
 
 /**
- * Run the implement pass in the job's worktree.
- *
- * Write scope is the whole worktree: this stage is supposed to change source.
- * Isolation comes from the worktree itself rather than from path globs — the
- * user's real tree is a different directory on a different branch.
- */
-/**
  * The follow-up sent to a RESUMED implement session.
  *
  * The run parked because the approved spec did not hold, and wrote what it
@@ -112,6 +105,13 @@ typecheck, and stay inside the approved spec's "Out of scope". Remove the
 out not to resolve it.`;
 }
 
+/**
+ * Run the implement pass in the job's worktree.
+ *
+ * Write scope is the whole worktree — this stage is meant to change source.
+ * Isolation is the worktree itself, not path globs: the user's real tree is a
+ * different directory on a different branch.
+ */
 export async function runImplementStage(opts: {
   job: Job;
   worktreePath: string;

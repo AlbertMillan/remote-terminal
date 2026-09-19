@@ -362,18 +362,12 @@ export class JobBoard {
   }
 
   /**
-   * Fetch the documents a parked job is waiting on, before they are asked for.
+   * Fetch the documents a parked job is waiting on, before they are asked for —
+   * no park is readable without the thing it is about, and a question's
+   * citations only become links once this list is here.
    *
-   * Every park needs them: a question cites them by section, the design gate
-   * exists to review the spec, and the merge gate is a decision about what the
-   * branch changed. Same call the review gate makes for its findings, and for
-   * the same reason — the decision is not readable without the thing it is
-   * about. A job parked on a QUESTION is also unfolded, because its citations
-   * are only linkable once this list is here.
-   *
-   * A live job's list is refetched only when it is already on screen: it
-   * changes under the user as stages run, and a stale list of what a run
-   * touched is worse than no list.
+   * A live job's list is refetched only when already on screen: it changes as
+   * stages run, and a stale list of what a run touched is worse than none.
    */
   private async loadDocsForParked(): Promise<void> {
     const parked = this.jobs.filter((j) => j.status === 'parked' && !this.docs.has(j.id));
@@ -635,17 +629,11 @@ ${usageTooltip(usageOf(s))}` : '')
   }
 
   /**
-   * The decision a parked run is waiting on.
+   * The decision a parked run is waiting on: `job.detail` parsed
+   * (decision-format.ts) with each part rendered as its own element rather than
+   * printed as prose. See `docs/job-decisions.md`.
    *
-   * A stage that stops rather than guess writes one bullet per open question,
-   * each running the question, its context, the alternatives it weighed and its
-   * recommendation together as prose. Printed verbatim — which is what this used
-   * to do — the question you actually have to answer reads exactly like the
-   * paragraph explaining it, and the model's own hard wraps pin the text into a
-   * narrow column. So the detail is parsed (decision-format.ts) and every part
-   * rendered as its own element.
-   *
-   * Parsing is best-effort by design. A detail it cannot make sense of falls
+   * Parsing is best-effort by design — a detail it cannot make sense of falls
    * back to the text as written, never to a wrong reading of it.
    */
   private renderDecision(job: Job): string {
@@ -873,16 +861,11 @@ ${usageTooltip(usageOf(s))}` : '')
   /**
    * Escape a question's prose and turn its references into buttons.
    *
-   * One helper rather than a call at each site: escaping happens in eight
-   * places across a decision card, and linking in only some of them would make
-   * a reference clickable in the options and dead in the recommendation.
-   *
-   * Escaping and linking have to happen together — splicing anchors into
-   * already-escaped text would need offsets the escaping has already moved — so
-   * the raw string is walked once, escaping the gaps and wrapping the
-   * references. It only ever WRAPS: nothing the model wrote is dropped, and a
-   * reference that resolves to no document, or to more than one, is escaped
-   * like any other text.
+   * ONE helper, not a call per site: a decision card escapes in eight places,
+   * and linking in only some leaves refs live in the options and dead in the
+   * recommendation. Escaping and linking must happen together — splicing into
+   * escaped text needs offsets the escaping has already moved — and linking
+   * only ever WRAPS, so nothing the model wrote is dropped.
    */
   private linked(job: Job, raw: string): string {
     const refs = findReferences(raw);

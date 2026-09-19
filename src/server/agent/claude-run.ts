@@ -9,16 +9,13 @@ const logger = createLogger('claude-run');
 const execFileAsync = promisify(execFile);
 
 /**
- * Shared machinery for running headless `claude -p` passes with enforced edit
- * scoping.
+ * The one hardened path for headless `claude -p` runs: session-log generation,
+ * PROJECT.md migration and every pipeline stage.
  *
- * Extracted from project-log.ts so the session-log generator, the PROJECT.md
- * migration, and the job pipeline all run through one hardened path rather than
- * three near-copies. The safety properties matter more than the convenience:
- * the prompt's "only modify X" rule is advisory, since --permission-mode
- * acceptEdits auto-approves writes and the CLI cannot path-restrict them. So
- * every run is bracketed by a working-tree diff that reverts anything touched
- * outside the allowed globs, turning prompt-only scoping into enforced scoping.
+ * A prompt's "only modify X" is ADVISORY — `--permission-mode acceptEdits`
+ * auto-approves writes and the CLI cannot path-restrict them. Enforcement is
+ * the working-tree diff taken around every run, which reverts anything touched
+ * outside the allowed globs. Keep both halves.
  */
 
 /**
@@ -67,17 +64,12 @@ function withSpent(error: Error, partial: ClaudeRunResult | null): Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Runs queue per LANE, not globally.
+ * Runs queue per LANE, not globally — otherwise one project's stage waits on
+ * another's, invisibly. See `docs/job-pipeline.md`.
  *
- * A single global queue made the scheduler's promise a lie: it admits one job
- * per project, but every one of their agent runs then serialised behind one
- * another, so a stage in project A sat "running" for minutes while project B's
- * stage held the only slot. The wait was invisible — the stage was marked
- * running the moment it was admitted, and the process did not exist yet.
- *
- * The lane is the project, passed by the job runner. Everything without one
- * (the session-log generator, PROJECT.md migration) shares the default lane,
- * which is what those want: they are background work and should not multiply.
+ * The lane is the project, passed by the job runner. Runs without one (the
+ * session-log generator, PROJECT.md migration) share the default lane: they are
+ * background work and should not multiply.
  */
 const DEFAULT_LANE = '';
 
@@ -216,16 +208,12 @@ function num(value: unknown): number {
 /**
  * Pull usage out of the envelope.
  *
- * `modelUsage` is the source of truth, not the top-level `usage` block: on a
- * multi-turn run — which every pipeline stage is — `usage` reports only the
- * final turn's input, while `modelUsage` accumulates the whole run. A measured
- * two-turn run reported usage.input_tokens=19 against modelUsage 967, so
- * reading `usage` would under-report input by an order of magnitude. The
- * top-level block is kept only as the fallback for a shape that lacks
- * modelUsage.
+ * Read `modelUsage`, NOT the top-level `usage`: on a multi-turn run — every
+ * stage is one — `usage` reports only the final turn (measured: 19 against
+ * modelUsage's 967). `usage` stays as the fallback for shapes lacking it.
  *
- * Tolerant by design throughout: a CLI version that renames or drops these
- * keys must degrade to zeros, not break the pipeline that merely reports them.
+ * Tolerant throughout: a CLI that renames these keys must degrade to zeros, not
+ * break the pipeline that merely reports them. See `docs/token-usage-feature.md`.
  */
 function parseUsage(envelope: {
   usage?: unknown;

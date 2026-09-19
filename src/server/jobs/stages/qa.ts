@@ -12,15 +12,13 @@ const logger = createLogger('stage-qa');
 /**
  * QA stage: verify the change actually works.
  *
- * Two layers, deliberately distinct:
- *  - declared commands run deterministically with no agent involved, so their
- *    pass/fail is something you can trust at a merge gate; and
- *  - the flows in QA.md are exercised by an agent, which catches what no
- *    declared command covers but cannot be a hard gate on its own.
+ * Two layers kept distinct — declared commands run with no agent involved, so
+ * their pass/fail can be trusted at a merge gate; QA.md's flows are exercised by
+ * an agent, which catches more but cannot be a hard gate alone.
  *
  * The rule that matters most: an unverified change is NEVER reported as
- * verified. When a declared driver is unreachable the check is skipped with the
- * reason attached, and the board says so.
+ * verified. An unreachable driver is skipped WITH its reason, and the board
+ * says so.
  */
 
 export type CheckStatus = 'passed' | 'failed' | 'skipped';

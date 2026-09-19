@@ -86,16 +86,12 @@ function dedupeByKey(paths: string[]): string[] {
 }
 
 /**
- * Working directories recovered from ~/.claude/projects directory names.
+ * Working directories recovered from ~/.claude/projects directory names —
+ * projects whose transcripts were deleted, which discoverProjects() cannot see.
  *
- * discoverProjects() decodes a project's real cwd from a transcript line, so a
- * directory whose transcripts have been deleted disappears from it entirely.
- * Decoding the slug against the filesystem recovers those, and drops the ones
- * whose directory is genuinely gone.
- *
- * Cached on the same short TTL as discoverProjects(), because each decode walks
- * the filesystem segment by segment — roughly a hundred readdir calls across a
- * machine's worth of slugs — and this sits on the board's poll path.
+ * Cached on the same short TTL as discoverProjects(): each decode walks the
+ * filesystem segment by segment (~100 readdir calls across a machine's slugs)
+ * and this sits on the board's poll path.
  */
 const SLUG_CACHE_TTL_MS = 5000;
 let slugCache: { at: number; cwds: string[] } | null = null;
@@ -144,15 +140,13 @@ function countFeatures(features: Feature[]): FeatureCounts {
 /**
  * Assemble the project board.
  *
- * Discovery reports every directory Claude Code has run in, which over-counts
- * (one Unity project appears five times). The registry's roll-up rules fold
- * those into canonical projects; anything unmatched stays standalone, because
- * nothing is ever hidden from this board.
+ * Discovery over-counts (one Unity project appears five times); the registry's
+ * roll-up rules fold those into canonical projects, and anything unmatched stays
+ * standalone — nothing is ever hidden from this board.
  *
- * PROJECT.md is re-read from disk on every call — it is a human-owned file that
- * agents and editors also write, so a cached parse would go stale. The files are
- * small, and getProjectBoard() already established that reading them all per
- * request is cheap.
+ * PROJECT.md is re-read from disk on every call and must stay that way: it is a
+ * human-owned file that agents and editors also write, so a cached parse goes
+ * stale.
  */
 export function getWorkspaceBoard(registry: Registry = loadRegistry()): WorkspaceProject[] {
   const discovered = discoverProjects();
