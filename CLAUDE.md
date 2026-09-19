@@ -346,7 +346,9 @@ unanswerable without **Take over**. Every job card now carries a document pane
   swept into the branch by the next stage's `commitAll` and land in the merge.
 - `/api/jobs/:id/docs` marks the spec row itself (`isSpec`), so the client never needs its
   own copy of "which stage states mean the detail is a path". This replaced a separate
-  `/api/jobs/:id/spec` route.
+  `/api/jobs/:id/spec` route. `specPathOf()` falls back to `specSlugFor()` when the
+  recorded detail is not a path — jobs parked *before* the path was recorded carry the old
+  `"Needs a decision"` label, and those are exactly the ones waiting on an answer now.
 - Browser-supplied paths are untrusted: `resolveInWorktree()` resolves symlinks *before*
   the containment check. A job with no worktree answers `{ docs: [] }`, never an error —
   the board still renders `done` and discarded rows.
