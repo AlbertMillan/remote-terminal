@@ -140,13 +140,23 @@ ticked by default.
 - **Which merges.** A landed track's `merge_sha`, and a job's `merge_sha` when it merged
   straight into main. Jobs that merged into one of the track's own branches are covered
   by the track's merge, or disappear with an unlanded branch.
-- **Finding a merge by its message.** A job whose row has no sha falls back to its exact
-  subject, `Merge job: <title>`, used only when exactly one merge commit on HEAD carries
-  it. The same lookup runs for features that have no job row left. Discarding a done job
-  deletes its row and its `merge_sha` with it, and that is the normal end of a job's
-  life, so this is the common case rather than an edge.
+- **Finding a merge by its trailers.** Discarding a done job deletes its row and its
+  `merge_sha` with it, and that is the normal end of a job's life. So every job merge
+  also carries `Job-Id: <id>` and, for a feature's job, `Feature: <f-id>` in its commit
+  message (`src/server/jobs/merge-trailers.ts`). A job row without a sha is found by its
+  `Job-Id`. Every merge carrying one of the track's feature ids is the track's: that
+  includes discarded jobs, and earlier runs of a feature that has a job now. A feature id
+  is unique, so this needs no uniqueness check.
+- **Finding a merge by its message.** A merge from before trailers existed falls back to
+  its exact subject, `Merge job: <title>`, used only when exactly one merge on the
+  branch carries it **and has no trailer**. A merge with a trailer is recorded as some
+  job's, so a same-titled feature in another track never matches it by title.
+- **First-parent only.** The trailer and subject lookups read
+  `git log --first-parent --merges`. A job merged into a track branch is reachable from
+  main once the track lands, and reverting it on top of the land would revert it twice.
 - **Skipped merges** are listed under "Revert by hand": two merges sharing the subject,
-  a merge not on the current branch, or a job whose base isn't the checked-out branch.
+  two carrying one job id, a merge not on the current branch, or a job whose base isn't
+  the checked-out branch.
 
 **Step order** (the comment on `executeTrackDelete` has the same list):
 

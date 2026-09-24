@@ -161,15 +161,19 @@ before **merge**.
   `mutateProjectDoc` — merge the file instead and every land conflicts on it.
 - A job whose `baseBranch` is a track branch merges **in the track worktree** (`mergeCwd`)
   and never pushes; that branch is checked out there, so merging in the project fails.
-- Record `merge_sha` on every job merge and land. Delete track reverts by sha; the
-  `Merge job: <title>` message is shared by same-titled jobs.
+- Record `merge_sha` on every job merge and land, and give every job merge the
+  `Job-Id`/`Feature` trailers (`jobs/merge-trailers.ts`). Discard deletes the row and its
+  sha, and the `Merge job: <title>` message is shared by same-titled jobs; the trailers
+  survive both.
 - `track_branches` is unique only among **unlanded** rows (partial index). A landed row
   keeps its `merge_sha` for Delete; making it plainly unique blocks reopening a track.
 - Land refuses while a live session's cwd is inside the worktree — on Windows the open
   shell makes `git worktree remove` fail half-way.
-- Delete track reverts only merges tied to the track by a recorded sha or a **unique**
-  exact `Merge job: <title>` subject; never tick a guess by default, or unrelated work is
-  reverted. A discarded job has no row, so the subject lookup is the common path.
+- Delete track reverts only merges tied to the track by a recorded sha, a trailer, or a
+  **unique** exact `Merge job: <title>` subject on a merge with no trailer; never tick a
+  guess by default, or unrelated work is reverted. Trailer and subject lookups read only
+  `--first-parent` merges: once a track lands, its job merges are reachable from main,
+  and reverting them on top of the land reverts them twice.
 - Its step order is load-bearing: preflight clean → cancel → revert `--no-commit` →
   (conflict: `revert --abort` + `reset --hard` preflight HEAD) → teardown → file edits →
   one commit. Tearing down before the revert makes a conflict unrecoverable.

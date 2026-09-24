@@ -1,6 +1,7 @@
 import { createLogger } from '../../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
 import { hasRemote } from '../worktree.js';
+import { jobMergeMessageArgs } from '../merge-trailers.js';
 
 const logger = createLogger('stage-merge');
 
@@ -32,6 +33,9 @@ export async function runMergeStage(opts: {
   branch: string;
   baseBranch: string;
   title: string;
+  /** Written into the merge commit as trailers (merge-trailers.ts). */
+  jobId: string;
+  featureId: string | null;
   /** Where `baseBranch` is checked out, when not the project itself. */
   mergeCwd?: string;
 }): Promise<MergeResult> {
@@ -67,8 +71,7 @@ export async function runMergeStage(opts: {
     'merge',
     '--no-ff',
     branch,
-    '-m',
-    `Merge job: ${title}`,
+    ...jobMergeMessageArgs(title, { jobId: opts.jobId, featureId: opts.featureId }),
   ]);
 
   if (merged === null) {

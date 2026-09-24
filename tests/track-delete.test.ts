@@ -23,6 +23,7 @@ const { initDatabase, closeDatabase, getDatabase } = await import('../src/server
 const tracks = await import('../src/server/projects/track-branches.js');
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const store = await import('../src/server/jobs/store.js');
+const { jobMergeMessageArgs } = await import('../src/server/jobs/merge-trailers.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -46,15 +47,26 @@ function commitFile(cwd: string, rel: string, content: string, message: string):
   git(cwd, 'commit', '-q', '-m', message);
 }
 
-/** A job-style merge straight into main: a branch, one commit, `merge --no-ff`. */
-function mergeLikeAJob(title: string, file: string): string {
+/**
+ * A job-style merge straight into main: a branch, one commit, `merge --no-ff`.
+ * With `ids`, the message is the merge stage's own, trailers included; without,
+ * it is a merge from before trailers existed.
+ */
+function mergeLikeAJob(
+  title: string,
+  file: string,
+  ids?: { jobId: string; featureId: string | null },
+  cwd = repo
+): string {
   const branch = `job/${Math.random().toString(36).slice(2, 8)}`;
-  git(repo, 'checkout', '-q', '-b', branch);
-  commitFile(repo, file, `export const x = '${title}';\n`, `implement ${title}`);
-  git(repo, 'checkout', '-q', 'main');
-  git(repo, 'merge', '-q', '--no-ff', branch, '-m', `Merge job: ${title}`);
-  git(repo, 'branch', '-q', '-D', branch);
-  return git(repo, 'rev-parse', 'HEAD');
+  const base = git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD');
+  git(cwd, 'checkout', '-q', '-b', branch);
+  commitFile(cwd, file, `export const x = '${title}';\n`, `implement ${title}`);
+  git(cwd, 'checkout', '-q', base);
+  const message = ids ? jobMergeMessageArgs(title, ids) : ['-m', `Merge job: ${title}`];
+  git(cwd, 'merge', '-q', '--no-ff', branch, ...message);
+  git(cwd, 'branch', '-q', '-D', branch);
+  return git(cwd, 'rev-parse', 'HEAD');
 }
 
 const deps = () => ({
@@ -146,6 +158,18 @@ describe('a landed track', () => {
     expect(git(repo, 'status', '--porcelain')).toBe('');
   });
 
+  it('reverts only the land, not a job merged into the track branch before it', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    mergeLikeAJob('First step', 'src/first.ts', { jobId: 'job-in-track', featureId: 'f-aaaaaa' }, t.worktreePath);
+    const landed = await tracks.landTrack(project(), 'Alpha', []);
+
+    const { plan, result } = await planAndRun();
+
+    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[landed.mergeSha, 'track']]);
+    expect(existsSync(join(repo, 'src', 'first.ts'))).toBe(false);
+    expect(result.reverted).toEqual([landed.mergeSha]);
+  });
+
   it('changes nothing when the revert conflicts, and names the file', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     commitFile(t.worktreePath, 'shared.ts', 'line 1\nline 2 by the track\nline 3\n', 'work');
@@ -206,6 +230,47 @@ describe('jobs merged straight into main', () => {
 
     expect(plan.merges).toEqual([]);
     expect(plan.unresolved).toMatchObject([{ title: 'First step' }]);
+  });
+
+  it('finds a discarded job’s merge by its feature trailer, even when another track’s job shares the title', async () => {
+    const ours = mergeLikeAJob('First step', 'src/ours.ts', { jobId: 'job-gone', featureId: 'f-aaaaaa' });
+    mergeLikeAJob('First step', 'src/theirs.ts', { jobId: 'job-other', featureId: 'f-cccccc' });
+
+    const plan = await planTrackDelete(project(), 'Alpha', []);
+
+    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[ours, 'trailer']]);
+    expect(plan.unresolved).toEqual([]);
+  });
+
+  it('finds every earlier run of a feature that has a job now', async () => {
+    const earlier = mergeLikeAJob('Second step', 'src/v1.ts', { jobId: 'job-v1', featureId: 'f-bbbbbb' });
+    const live = store.createJob({ projectCwd: repo, featureId: 'f-bbbbbb', title: 'Second step' });
+    store.updateJob(live.id, { status: 'parked' });
+
+    const plan = await planTrackDelete(project(), 'Alpha', []);
+
+    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[earlier, 'trailer']]);
+  });
+
+  it('finds a job whose row has no sha by its job id trailer', async () => {
+    const done = store.createJob({ projectCwd: repo, featureId: 'f-aaaaaa', title: 'First step' });
+    const sha = mergeLikeAJob('First step', 'src/first.ts', { jobId: done.id, featureId: 'f-aaaaaa' });
+    store.updateJob(done.id, { status: 'done', baseBranch: 'main' });
+    store.finishStage(done.id, 'merge', 'passed', 'merged');
+
+    const plan = await planTrackDelete(project(), 'Alpha', []);
+
+    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[sha, 'trailer']]);
+  });
+
+  it('never matches a merge that carries a trailer by its message alone', async () => {
+    // Beta's feature, same title as Alpha's: its trailer says whose it is.
+    mergeLikeAJob('First step', 'src/beta.ts', { jobId: 'job-beta', featureId: 'f-cccccc' });
+
+    const plan = await planTrackDelete(project(), 'Alpha', []);
+
+    expect(plan.merges).toEqual([]);
+    expect(plan.unresolved).toEqual([]);
   });
 
   it('refuses before touching anything when a revert meets a dirty checkout', async () => {

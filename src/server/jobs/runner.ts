@@ -614,6 +614,8 @@ async function executeMerge(job: Job): Promise<void> {
       branch: job.branch as string,
       baseBranch,
       title: job.title,
+      jobId: job.id,
+      featureId: job.featureId,
       mergeCwd,
     });
 

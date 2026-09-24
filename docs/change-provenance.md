@@ -17,15 +17,18 @@ does damage, for the user who works the other way.
 | | Job-built | Session-built |
 |---|---|---|
 | Where the work happens | `~/.claude-remote/worktrees/<job>`, on its own branch | The session's cwd: main, a track worktree, anywhere |
-| What records it | Job row, `baseBranch`, `merge_sha`, the `Merge job: <title>` subject | Transcripts, dirty files, commits made during the session's time window |
+| What records it | Job row, `baseBranch`, `merge_sha`, the merge commit's `Job-Id`/`Feature` trailers | Transcripts, dirty files, commits made during the session's time window |
 | Confidence | **Record**: exact | **Inference**: a guess |
 | Who answers questions | Nobody. The job parks at a gate and resumes the session that asked | The person at the keyboard |
 | Lifecycle | Cancel / Discard, the per-project lane queue, the project try-lock | A live PTY. On Windows its open cwd holds the directory |
 | When it ends | At merge, and at discard the row and its `merge_sha` are deleted | Never, explicitly. The transcript and the edits just stay |
 
-A job's records can also disappear. Discarding a done job deletes its row, and that is
-the normal end of a job's life, so "look it up by sha" falls back to the exact subject
-more often than not (see `track-branches.md`, *Finding a merge by its message*).
+A job's database records can also disappear. Discarding a done job deletes its row and
+its `merge_sha`, and that is the normal end of a job's life. That's why the merge commit
+itself carries the job and feature ids as trailers (`jobs/merge-trailers.ts`): git keeps
+them through a discard, a lost database or a re-clone. Only merges from before trailers
+existed still fall back to the exact subject (see `track-branches.md`, *Finding a merge
+by its trailers*).
 
 ## Where this has already come up
 
@@ -65,7 +68,20 @@ more often than not (see `track-branches.md`, *Finding a merge by its message*).
 
 Most of the session-side machinery (transcript scans, time windows, detecting
 `cat >> PROJECT.md`) exists because a session records nothing about what it is working
-on. Recording that when the session starts would turn some guesses into records. For
-example, a session opened on a track could store the track on its row, or its commits
-could carry a track trailer. This hasn't been designed yet. Before adding a new
-inference, check whether a small record would do the job instead.
+on. Recording what it changes as it changes it would turn those guesses into records.
+
+Just storing a session's track on its row was considered (2026-09-24) and dropped:
+- a session in a track worktree is already tied to its track exactly, by its cwd;
+- the guessed case is a session in the main checkout, which only the user can assign to
+  a track;
+- `sessions.claude_session_id` is overwritten on every resume, so a record has to be
+  keyed by transcript id;
+- even then it would only settle *which* sessions, not *what they changed*.
+
+The likely shape is a `PostToolUse` hook that posts each Write/Edit/Bash call to the
+server (PTYs already carry `CLAUDE_REMOTE_SESSION_ID`), with HEAD and `git status`
+recorded around each Bash call. That covers shell edits and the commits a session
+actually made. Open questions: the hook is optional user config, two sessions in one
+checkout make before/after comparisons ambiguous, and it costs a `git status` per call.
+It hasn't been designed yet. Before adding a new inference, check whether a small record
+would do the job instead.

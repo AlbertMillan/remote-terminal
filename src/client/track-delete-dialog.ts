@@ -18,7 +18,7 @@ export interface TrackDeletePlan {
   discard: { id: string; title: string; status: string }[];
   branch: { name: string; worktreePath: string; uncommittedFiles: number; sessionsToClose: number } | null;
   currentBranch: string | null;
-  merges: { sha: string; subject: string; via: 'track' | 'job' | 'message'; baseBranch: string }[];
+  merges: { sha: string; subject: string; via: 'track' | 'job' | 'trailer' | 'message'; baseBranch: string }[];
   unresolved: { title: string; reason: string }[];
   specs: {
     path: string;
@@ -39,6 +39,7 @@ export interface TrackDeletePlan {
 const VIA_LABEL: Record<TrackDeletePlan['merges'][number]['via'], string> = {
   track: 'track land',
   job: 'job merge',
+  trailer: 'found by its recorded job id',
   message: 'found by its merge message',
 };
 

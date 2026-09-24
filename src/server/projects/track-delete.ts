@@ -8,6 +8,7 @@ import { isInside } from '../utils/paths.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive, type JobWithStages } from '../jobs/types.js';
 import { removeWorktree } from '../jobs/worktree.js';
+import { MERGE_LOG_FORMAT, parseMergeLog, type MergeCommit } from '../jobs/merge-trailers.js';
 import { parsePhasesBlock, removePhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
 import { mutateProjectDoc, readProjectDoc, resolveSpecPath } from './project-store.js';
@@ -53,8 +54,11 @@ export interface PlannedJob {
 export interface PlannedMerge {
   sha: string;
   subject: string;
-  /** How it was found: a track's recorded land, a job's recorded merge, or its exact message. */
-  via: 'track' | 'job' | 'message';
+  /**
+   * How it was found: a track's recorded land, a job's recorded merge, the
+   * job or feature id in the merge's trailers, or its exact message.
+   */
+  via: 'track' | 'job' | 'trailer' | 'message';
   baseBranch: string;
 }
 
@@ -262,13 +266,17 @@ export async function planTrackDelete(
  * Merges this track put on the current branch, newest first.
  *
  * Recorded shas win: a landed track's `merge_sha`, a job's `merge_sha`. A job
- * merged before that column existed — or discarded since, which deletes its
- * row and the record with it — is found by its exact pipeline subject
- * `Merge job: <title>`, and only when exactly one commit carries it. Anything
- * else is reported for a revert by hand, never guessed at.
+ * discarded since, which deletes its row and the record with it, is found by
+ * the `Job-Id` / `Feature` trailers its merge carries (merge-trailers.ts). A
+ * merge from before trailers existed falls back to its exact pipeline subject
+ * `Merge job: <title>`, and only when exactly one trailer-less commit carries
+ * it. Anything else is reported for a revert by hand, never guessed at.
  *
  * Jobs that merged into one of the track's own branches are skipped: a landed
- * track's merge covers them, and an unlanded branch goes with the branch.
+ * track's merge covers them, and an unlanded branch goes with the branch. So
+ * the trailer and subject lookups see only the current branch's first-parent
+ * merges: a job merged into a track branch is reachable from main once the
+ * track lands, and reverting it on top of the land would revert it twice.
  */
 async function findMerges(opts: {
   cwd: string;
@@ -309,21 +317,19 @@ async function findMerges(opts: {
     }
   }
 
-  // Subject -> shas, for everything found by message.
-  let bySubject: Map<string, string[]> | null = null;
-  const withSubject = async (subject: string): Promise<string[]> => {
-    if (!bySubject) {
-      bySubject = new Map();
-      const out = (await git(cwd, ['log', 'HEAD', '--merges', '--format=%H%x09%s'])) ?? '';
-      for (const line of out.split('\n')) {
-        const tab = line.indexOf('\t');
-        if (tab < 0) continue;
-        const s = line.slice(tab + 1).trim();
-        bySubject.set(s, [...(bySubject.get(s) ?? []), line.slice(0, tab)]);
-      }
-    }
-    return bySubject.get(subject) ?? [];
-  };
+  // The current branch's own merges, read once. A merge that carries a
+  // trailer is recorded as some job's, so it is never matched by subject:
+  // the record beats the title.
+  let mergeLog: MergeCommit[] | null = null;
+  const branchMerges = async (): Promise<MergeCommit[]> =>
+    (mergeLog ??= parseMergeLog(
+      (await git(cwd, ['log', 'HEAD', '--first-parent', '--merges', `--format=${MERGE_LOG_FORMAT}`])) ?? ''
+    ));
+  const withJobId = async (id: string) => (await branchMerges()).filter((m) => m.jobId === id).map((m) => m.sha);
+  const withFeature = async (id: string) =>
+    (await branchMerges()).filter((m) => m.featureId === id).map((m) => m.sha);
+  const withSubject = async (subject: string) =>
+    (await branchMerges()).filter((m) => !m.jobId && m.subject === subject).map((m) => m.sha);
   const byMessage = async (title: string, base: string, mustExist: boolean) => {
     const shas = await withSubject(`Merge job: ${title}`);
     if (shas.length === 1) return consider(shas[0], 'message', base, title);
@@ -337,15 +343,25 @@ async function findMerges(opts: {
   for (const job of jobs) {
     const merged = job.stages.some((s) => s.name === 'merge' && s.status === 'passed');
     if (!merged || !job.baseBranch || trackBranches.has(job.baseBranch)) continue;
-    if (job.mergeSha) await consider(job.mergeSha, 'job', job.baseBranch, job.title);
+    if (job.mergeSha) {
+      await consider(job.mergeSha, 'job', job.baseBranch, job.title);
+      continue;
+    }
+    const shas = await withJobId(job.id);
+    if (shas.length === 1) await consider(shas[0], 'trailer', job.baseBranch, job.title);
+    else if (shas.length > 1) unresolved.push({ title: job.title, reason: `${shas.length} merges carry its job id` });
     else await byMessage(job.title, job.baseBranch, true);
   }
 
-  // Features with no job row left at all: a done job is usually discarded,
-  // and its merge is still on the branch. Found only by exact message.
+  // Every merge recorded for one of the track's features: jobs discarded
+  // since (the normal end of a job), and earlier runs of a feature that has a
+  // job now. A feature id is unique, so every hit is the track's. A feature
+  // with no job row and no trailer falls back to the exact message.
   const withJobs = new Set(jobs.map((j) => j.featureId));
   for (const f of features) {
-    if (!withJobs.has(f.id)) await byMessage(f.title, currentBranch, false);
+    const shas = await withFeature(f.id);
+    for (const sha of shas) await consider(sha, 'trailer', currentBranch, f.title);
+    if (shas.length === 0 && !withJobs.has(f.id)) await byMessage(f.title, currentBranch, false);
   }
 
   // Newest first, by position in the current branch's history.

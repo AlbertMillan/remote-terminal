@@ -241,6 +241,8 @@ describe('merge stage into a track', () => {
       branch: 'job/first-step',
       baseBranch: t.branch,
       title: 'First step',
+      jobId: 'job-1',
+      featureId: 'f-aaaaaa',
       mergeCwd: t.worktreePath,
     });
 
@@ -250,6 +252,9 @@ describe('merge stage into a track', () => {
     expect(result.mergeSha).toBe(git(t.worktreePath, 'rev-parse', 'HEAD'));
     expect(existsSync(join(t.worktreePath, 'src', 'b.ts'))).toBe(true);
     expect(git(repo, 'rev-parse', 'main')).toBe(mainBefore);
+    expect(git(t.worktreePath, 'log', '-1', '--format=%B')).toBe(
+      'Merge job: First step\n\nJob-Id: job-1\nFeature: f-aaaaaa'
+    );
   });
 
   it('refuses when the track worktree is dirty, naming the worktree', async () => {
@@ -261,6 +266,8 @@ describe('merge stage into a track', () => {
         branch: t.branch,
         baseBranch: t.branch,
         title: 'x',
+        jobId: 'job-x',
+        featureId: null,
         mergeCwd: t.worktreePath,
       })
     ).rejects.toThrow(t.worktreePath);
