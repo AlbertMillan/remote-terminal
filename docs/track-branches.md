@@ -15,6 +15,9 @@ checked out, and nothing ties a commit or an uncommitted edit to a track. The Us
 visibility track (2026-09-19) had to be undone by rewinding a Claude Code checkpoint,
 restoring PROJECT.md and removing a folder by hand.
 
+The general version of this split, and the rules for new features that touch it, is in
+`change-provenance.md`.
+
 ## The model
 
 **Planning on main, implementation in the worktree.**

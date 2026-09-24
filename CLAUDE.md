@@ -65,6 +65,15 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
 - `handleSessionCreate` must `detachFromSession()` before `attachToSession()`, or the
   previous session's data listener leaks and keystrokes arrive twice.
 
+## Two authors of change → `docs/change-provenance.md`
+
+- Any feature that reads, moves, reverts or attributes project changes must handle
+  **both** job-built edits (recorded: job row, branch, `merge_sha`) and session-built edits
+  (inferred: transcripts, dirty files, commit windows). Built for one path only, it breaks
+  for the user who works the other way.
+- Act on records by default. Show inferences as guesses that must be confirmed
+  (unticked). A guess acted on by default reverts or moves unrelated work.
+
 ## Sessions → `docs/session-revive.md`, `docs/session-fork.md`, `docs/session-history-delete.md`
 
 - `attachable` means "a live PTY exists in memory", so **every** row is stale after a
