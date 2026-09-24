@@ -20,6 +20,8 @@ import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delet
 import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { registerJobRoutes } from './jobs/routes.js';
+import { registerPlanUsageRoutes } from './usage/plan-routes.js';
+import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -39,6 +41,8 @@ export async function createApp(): Promise<FastifyInstance> {
   sweepUnloggedSessions();
   // A job marked running cannot have survived the restart — re-queue it.
   reconcileJobsOnStartup();
+  // The last plan-usage reading, so a restart does not blank the chip.
+  loadPlanUsage();
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -129,6 +133,7 @@ export async function createApp(): Promise<FastifyInstance> {
   registerProjectRoutes(app);
   // Pipeline jobs: worktree-isolated stages with approval gates.
   registerJobRoutes(app);
+  registerPlanUsageRoutes(app);
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {

@@ -6,6 +6,7 @@ import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
 import { JobOverlay, type JobSummary, type JobsSummary } from './job-overlay.js';
+import { PlanUsageChip } from './plan-usage-chip.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 import { TrackPicker } from './track-picker.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
@@ -276,6 +277,7 @@ class SessionManager {
    * messages, so it stays current while a terminal is in front of it.
    */
   private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
+  private planUsage = new PlanUsageChip();
   private selectedProjectCwd: string | null = null;
   /** The board load in flight, so concurrent callers share one round trip. */
   private boardLoad: Promise<void> | null = null;
@@ -296,6 +298,7 @@ class SessionManager {
     this.renderWelcomeShortcuts();
     this.setupPipButton();
     this.jobOverlay.attach();
+    this.planUsage.attach();
     this.initBrowserNotifications();
     this.connect();
   }
