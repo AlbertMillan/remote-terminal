@@ -192,7 +192,9 @@ code sits on a branch would suggest the code went too.
 from editing a track's code in the main checkout. This part notices when one did. It is
 a **guess**, and every surface treats it as one:
 
-- the board shows a count;
+- the board shows a count of **uncommitted files** only. Guessed commits alone would badge
+  every track with history from before track branches existed (seven of this repo's own),
+  and Branch now can't move a commit anyway;
 - Branch now asks for the file list to be confirmed;
 - Delete track offers these items **unticked**.
 

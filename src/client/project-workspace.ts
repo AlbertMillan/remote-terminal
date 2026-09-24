@@ -552,13 +552,13 @@ export class ProjectWorkspace {
         )}</span>`
       : '';
     const work = track.branch ? undefined : this.unbranchedFor(project.cwd, track.name);
-    const onMain = work
+    // Uncommitted files only — the one thing Branch now can move. Guessed
+    // commits alone would badge every track with pre-branch history.
+    const onMain = work?.files.length
       ? `<button class="pw-track-branchnow" data-cwd="${cwd}" data-track="${name}"
                  title="This track's sessions changed files on main. Move them into a track branch so the work stays deletable.">⚠ ${
                    work.files.length
-                     ? `${work.files.length} file${work.files.length === 1 ? '' : 's'} on main`
-                     : `${work.commits} commit${work.commits === 1 ? '' : 's'} on main`
-                 }</button>`
+                 } file${work.files.length === 1 ? '' : 's'} on main</button>`
       : '';
     const land = track.branch
       ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"

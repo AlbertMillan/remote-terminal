@@ -332,7 +332,10 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       for (const t of ctx.doc.tracks) {
         if (getActiveTrackBranch(project.cwd, t.name)) continue; // its work is attributable already
         const guess = await guessTrackWork(project, t.name, ctx);
-        if (guess.files.length || guess.commits.length) {
+        // Only uncommitted files: they are what Branch now can act on. Guessed
+        // commits alone flag every track with history from before track
+        // branches existed; Delete track still offers them, unticked.
+        if (guess.files.length > 0) {
           tracks[t.name] = { files: guess.files, commits: guess.commits.length };
         }
       }
