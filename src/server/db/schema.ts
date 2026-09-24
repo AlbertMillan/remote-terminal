@@ -236,6 +236,38 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE job_stages ADD COLUMN spawned_at TEXT;
       `,
     },
+    {
+      // A track's own branch and worktree, so everything implemented for the
+      // track — by an interactive session or by jobs — can be told apart and
+      // later landed or deleted as one unit. See docs/track-branches.md.
+      //
+      // Unique only among rows not yet landed: a landed row is kept for its
+      // merge_sha (deleting the track later reverts it), and re-opening the
+      // same track after a land starts a new row.
+      //
+      // jobs.merge_sha: the commit the merge stage created. The message alone
+      // ("Merge job: <title>") is shared by any two jobs with the same title.
+      name: '014_track_branches',
+      sql: `
+        CREATE TABLE IF NOT EXISTS track_branches (
+          id TEXT PRIMARY KEY,
+          project_cwd TEXT NOT NULL,
+          project_key TEXT NOT NULL,
+          track_name TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          worktree_path TEXT NOT NULL,
+          base_branch TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          landed_at TEXT,
+          merge_sha TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_track_branches_active
+          ON track_branches(project_key, track_name) WHERE landed_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_track_branches_project
+          ON track_branches(project_key);
+        ALTER TABLE jobs ADD COLUMN merge_sha TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

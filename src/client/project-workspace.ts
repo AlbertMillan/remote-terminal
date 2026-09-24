@@ -26,6 +26,8 @@ export interface Feature {
 export interface WorkspaceTrack {
   name: string;
   features: Feature[];
+  /** The track's own branch while it is being implemented (docs/track-branches.md). */
+  branch: { name: string; worktreePath: string; baseBranch: string } | null;
 }
 
 export interface VcsCapabilities {
@@ -135,7 +137,9 @@ export class ProjectWorkspace {
     private readonly onSelect: (cwd: string) => void,
     private readonly onOpenSession: (cwd: string) => void,
     /** Send a feature to the job pipeline. */
-    private readonly onDispatch: (cwd: string, featureId: string, title: string) => void
+    private readonly onDispatch: (cwd: string, featureId: string, title: string) => void,
+    /** Open a terminal in a track's worktree. */
+    private readonly onOpenTrackSession: (worktreePath: string, trackName: string) => void
   ) {}
 
   getProject(cwd: string): WorkspaceProject | undefined {
@@ -509,9 +513,39 @@ export class ProjectWorkspace {
           <span class="phase-chevron" aria-hidden="true">▾</span>
           <span class="phase-group-name">${escapeHtml(track.name)}</span>
           <span class="phase-progress">${done}/${track.features.length}</span>
+          ${this.renderTrackActions(project, track)}
         </div>
         <ul class="phase-list">${rows}</ul>
       </div>`;
+  }
+
+  /**
+   * Branch badge and the track's implementation actions, inside its heading.
+   *
+   * Open session is where a track's implementation starts: it creates the
+   * track's branch on first use, so the session's work can later be landed or
+   * deleted as a unit. Land appears only once there is a branch to land.
+   */
+  private renderTrackActions(project: WorkspaceProject, track: WorkspaceTrack): string {
+    if (!project.vcs.canDispatch) return '';
+    const cwd = escapeAttr(project.cwd);
+    const name = escapeAttr(track.name);
+    const badge = track.branch
+      ? `<span class="pw-branch" title="${escapeAttr(track.branch.worktreePath)}">⎇ ${escapeHtml(
+          track.branch.name
+        )}</span>`
+      : '';
+    const land = track.branch
+      ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
+                 title="Merge this track into ${escapeAttr(track.branch.baseBranch)} and retire its worktree">Land</button>`
+      : '';
+    return `
+      <span class="pw-track-actions">
+        ${badge}
+        <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
+                title="${track.branch ? 'Open a session in this track’s worktree' : 'Create this track’s branch and open a session in it'}">Open session</button>
+        ${land}
+      </span>`;
   }
 
   private renderFeatureRow(project: WorkspaceProject, f: Feature): string {
@@ -690,6 +724,49 @@ export class ProjectWorkspace {
     });
   }
 
+  /** Ensure the track's branch exists, then open a terminal in its worktree. */
+  async openTrackSession(cwd: string, track: string): Promise<void> {
+    const data = await this.trackRequest<{ branch: { worktreePath: string } }>(
+      '/api/projects/track/branch',
+      { cwd, track }
+    );
+    if (!data) return;
+    this.onOpenTrackSession(data.branch.worktreePath, track);
+    await this.reload();
+  }
+
+  async landTrack(cwd: string, track: string): Promise<void> {
+    const data = await this.trackRequest<{ detail: string }>('/api/projects/track/land', {
+      cwd,
+      track,
+    });
+    await this.reload();
+    if (data) this.flash(data.detail);
+  }
+
+  /**
+   * POST to a track endpoint. Unlike mutate(), a 409 here is a refusal with its
+   * own reason (a live job, a dirty worktree), not a stale PROJECT.md.
+   */
+  private async trackRequest<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+      if (!res.ok) {
+        this.flash(data.error || `Request failed (${res.status})`);
+        return null;
+      }
+      return data;
+    } catch (error) {
+      this.flash(error instanceof Error ? error.message : 'Request failed');
+      return null;
+    }
+  }
+
   async deleteFeature(cwd: string, id: string): Promise<boolean> {
     const project = this.getProject(cwd);
     if (!project) return false;
@@ -768,6 +845,22 @@ export class ProjectWorkspace {
         return;
       }
 
+      // Checked before the heading itself: these buttons sit inside it.
+      const trackSession = target.closest('.pw-track-session') as HTMLElement | null;
+      if (trackSession) {
+        void this.openTrackSession(trackSession.dataset.cwd || '', trackSession.dataset.track || '');
+        return;
+      }
+
+      const trackLand = target.closest('.pw-track-land') as HTMLElement | null;
+      if (trackLand) {
+        const track = trackLand.dataset.track || '';
+        if (confirm(`Land "${track}"? Its branch is merged and its worktree removed.`)) {
+          void this.landTrack(trackLand.dataset.cwd || '', track);
+        }
+        return;
+      }
+
       const trackHead = target.closest('.pw-track-head') as HTMLElement | null;
       if (trackHead) {
         this.toggleTrack(trackHead, trackHead.dataset.cwd || '', trackHead.dataset.track || '');
@@ -830,6 +923,8 @@ export class ProjectWorkspace {
 
     container.addEventListener('keydown', (event) => {
       if (!isPhaseGroupActivation(event.key)) return;
+      // A focused action button inside the heading handles its own activation.
+      if ((event.target as HTMLElement).closest('button')) return;
       const head = (event.target as HTMLElement).closest('.pw-track-head') as HTMLElement | null;
       if (!head) return;
       event.preventDefault();

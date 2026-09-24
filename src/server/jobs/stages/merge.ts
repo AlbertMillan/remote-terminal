@@ -11,17 +11,20 @@ const logger = createLogger('stage-merge');
  * seen the diff and said yes. From here it is autonomous: merge into the base,
  * push where there is a remote, and let the runner tear the worktree down.
  *
- * The merge happens in the PROJECT directory, not the worktree — a worktree
- * cannot check out the branch another worktree holds, and the base branch is
- * checked out in the project itself.
+ * The merge happens where the base branch is checked out — a worktree cannot
+ * check out the branch another worktree holds. That is the PROJECT directory
+ * for main, and the track's worktree for a job inside a branched track
+ * (`mergeCwd`). Track branches are local, so those merges never push.
  */
 
 export interface MergeResult {
   merged: boolean;
   pushed: boolean;
   /** Why the push did not happen, when it didn't. */
-  pushSkippedReason: 'no-remote' | 'push-failed' | null;
+  pushSkippedReason: 'no-remote' | 'push-failed' | 'track-branch' | null;
   detail: string | null;
+  /** The merge commit, so deleting the track later can revert exactly it. */
+  mergeSha: string | null;
 }
 
 export async function runMergeStage(opts: {
@@ -29,8 +32,12 @@ export async function runMergeStage(opts: {
   branch: string;
   baseBranch: string;
   title: string;
+  /** Where `baseBranch` is checked out, when not the project itself. */
+  mergeCwd?: string;
 }): Promise<MergeResult> {
-  const { projectCwd, branch, baseBranch, title } = opts;
+  const { branch, baseBranch, title } = opts;
+  const projectCwd = opts.mergeCwd || opts.projectCwd;
+  const intoTrack = Boolean(opts.mergeCwd);
 
   // Refuse to merge into a dirty tree: git would either refuse anyway or
   // entangle the user's uncommitted work with the job's merge commit.
@@ -40,7 +47,9 @@ export async function runMergeStage(opts: {
   }
   if (status.trim()) {
     throw new Error(
-      'The project has uncommitted changes. Commit or stash them before merging this job.'
+      intoTrack
+        ? `The track worktree has uncommitted changes (${projectCwd}). Commit them in the track's session before merging this job.`
+        : 'The project has uncommitted changes. Commit or stash them before merging this job.'
     );
   }
 
@@ -73,6 +82,19 @@ export async function runMergeStage(opts: {
     );
   }
 
+  const mergeSha = (await git(projectCwd, ['rev-parse', 'HEAD']))?.trim() || null;
+
+  if (intoTrack) {
+    logger.info({ projectCwd, baseBranch, mergeSha }, 'merge: merged into the track branch');
+    return {
+      merged: true,
+      pushed: false,
+      pushSkippedReason: 'track-branch',
+      detail: `Merged into the track branch ${baseBranch}. Land the track to bring it to main.`,
+      mergeSha,
+    };
+  }
+
   if (!(await hasRemote(projectCwd))) {
     logger.info({ projectCwd }, 'merge: merged locally, no remote to push to');
     return {
@@ -80,6 +102,7 @@ export async function runMergeStage(opts: {
       pushed: false,
       pushSkippedReason: 'no-remote',
       detail: 'Merged locally. This project has no remote, so nothing was pushed.',
+      mergeSha,
     };
   }
 
@@ -91,9 +114,10 @@ export async function runMergeStage(opts: {
       pushed: false,
       pushSkippedReason: 'push-failed',
       detail: `Merged into ${baseBranch}, but the push failed — push by hand.`,
+      mergeSha,
     };
   }
 
   logger.info({ projectCwd, baseBranch }, 'merge: merged and pushed');
-  return { merged: true, pushed: true, pushSkippedReason: null, detail: null };
+  return { merged: true, pushed: true, pushSkippedReason: null, detail: null, mergeSha };
 }

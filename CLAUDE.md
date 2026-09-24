@@ -145,6 +145,20 @@ before **merge**.
 - Every UI write carries a content-hash `revision` and returns **409** when the file changed
   underneath.
 
+### Track branches → `docs/track-branches.md`
+
+- PROJECT.md in the **main checkout** is the only authoritative copy. Land resets the
+  branch's copy to its merge-base before merging and applies its ticks through
+  `mutateProjectDoc` — merge the file instead and every land conflicts on it.
+- A job whose `baseBranch` is a track branch merges **in the track worktree** (`mergeCwd`)
+  and never pushes; that branch is checked out there, so merging in the project fails.
+- Record `merge_sha` on every job merge and land. Delete track reverts by sha; the
+  `Merge job: <title>` message is shared by same-titled jobs.
+- `track_branches` is unique only among **unlanded** rows (partial index). A landed row
+  keeps its `merge_sha` for Delete; making it plainly unique blocks reopening a track.
+- Land refuses while a live session's cwd is inside the worktree — on Windows the open
+  shell makes `git worktree remove` fail half-way.
+
 ## Job board → `docs/job-decisions.md`, `docs/job-documents.md`
 
 - `decision-format.ts` is a parser over prose, not a markdown renderer. **Every rule

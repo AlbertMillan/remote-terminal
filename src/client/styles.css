@@ -987,6 +987,30 @@ body {
   color: var(--text-muted);
 }
 
+/* Track picker: shown only when the working directory is a board project */
+.session-track-select {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+.session-track-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.modal-content input.session-track-new { margin-top: 8px; }
+.session-track-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.session-track-note.error { color: var(--danger); }
+
 /* Working-directory suggestions dropdown */
 .cwd-field {
   position: relative;
@@ -2549,6 +2573,38 @@ body {
   cursor: pointer;
 }
 .pw-spec:hover { border-color: var(--accent); }
+
+/* A track's branch badge and its Open session / Land actions, in the heading. */
+.pw-track-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.pw-branch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pw-track-session,
+.pw-track-land {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.pw-track-session:hover,
+.pw-track-land:hover { border-color: var(--accent); }
 
 .pw-spec-body {
   flex: 1 0 100%;

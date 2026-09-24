@@ -30,6 +30,12 @@ import { runReviewStage } from './stages/review.js';
 import { runFixStage } from './stages/fix.js';
 import { runQaStage } from './stages/qa.js';
 import { runRebuildStage } from './stages/rebuild.js';
+import {
+  ensureTrackBranch,
+  findActiveTrackBranchByName,
+  trackOfFeature,
+  TrackBranchError,
+} from '../projects/track-branches.js';
 import { isProcessRunning } from '../utils/platform.js';
 import type { UsageSink } from '../agent/claude-run.js';
 import { readFindings, selectedFindings } from './findings.js';
@@ -263,7 +269,9 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
 
   if (!worktreePath) {
     try {
-      const created = await createWorktree(job.projectCwd, job.id, job.title);
+      const created = await createWorktree(job.projectCwd, job.id, job.title, {
+        base: (await trackBaseFor(job)) ?? undefined,
+      });
       worktreePath = created.path;
       branch = created.branch;
       updateJob(job.id, {
@@ -275,7 +283,9 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
           : null,
       });
     } catch (error) {
-      if (error instanceof WorktreeError) throw new JobError(error.message, error.status);
+      if (error instanceof WorktreeError || error instanceof TrackBranchError) {
+        throw new JobError(error.message, error.status);
+      }
       throw error;
     }
   }
@@ -576,16 +586,35 @@ async function executeQa(job: Job, signal?: AbortSignal): Promise<void> {
   void pump();
 }
 
+/**
+ * The branch a feature's job starts from: its track's branch, created now if
+ * the track has none yet. Dispatch is one of the points where a track's
+ * implementation begins, and work that lands in the track branch is what
+ * Delete track can later remove as a unit. Ad-hoc jobs (no feature) and
+ * features no longer in PROJECT.md keep branching from the current branch.
+ */
+async function trackBaseFor(job: Job): Promise<string | null> {
+  if (!job.featureId) return null;
+  const project = findWorkspaceProject(job.projectCwd);
+  if (!project) return null;
+  const track = trackOfFeature(project, job.featureId);
+  if (!track) return null;
+  return (await ensureTrackBranch(project, track)).branch;
+}
+
 /** Merge stage: runs only after the merge gate; lands and pushes the work. */
 async function executeMerge(job: Job): Promise<void> {
   if (!job.branch) throw new Error('This job has no branch to merge');
   const baseBranch = await baseBranchOf(job);
+  // A track branch is checked out in the track's worktree, not the project.
+  const track = findActiveTrackBranchByName(job.projectCwd, baseBranch);
 
   const result = await runMergeStage({
     projectCwd: job.projectCwd,
     branch: job.branch,
     baseBranch,
     title: job.title,
+    mergeCwd: track?.worktreePath,
   });
 
   // No stillLive() guard here: the merge has already landed in the repo, so
@@ -605,6 +634,7 @@ async function executeMerge(job: Job): Promise<void> {
     worktreePath: null,
     gate: null,
     detail: result.detail,
+    mergeSha: result.mergeSha,
   });
   void pump();
 }

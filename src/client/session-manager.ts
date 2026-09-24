@@ -243,6 +243,9 @@ class SessionManager {
   // New-session "recent paths" dropdown state
   private recentPaths: string[] = [];
   private cwdSuggestionIndex = -1;
+  /** The board project the new-session track picker is listing, or null when hidden. */
+  private trackPickerCwd: string | null = null;
+  private trackPickerTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Project-log board state
   private activeTab: 'sessions' | 'projects' = 'sessions';
@@ -255,7 +258,8 @@ class SessionManager {
   private workspace = new ProjectWorkspace(
     (cwd) => this.showProjectLog(cwd),
     (cwd) => this.showNewSessionModal(cwd),
-    (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title)
+    (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title),
+    (worktreePath, trackName) => this.createSession(trackName, worktreePath)
   );
   /**
    * The pipeline board. "Take over" resumes a background run's own conversation
@@ -439,13 +443,20 @@ class SessionManager {
 
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
-    document.getElementById('new-session-confirm')?.addEventListener('click', () => this.createSessionFromModal());
+    document.getElementById('new-session-confirm')?.addEventListener('click', () => void this.createSessionFromModal());
     document.getElementById('session-name-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.createSessionFromModal();
+      if (e.key === 'Enter') void this.createSessionFromModal();
     });
     const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement | null;
     cwdInput?.addEventListener('keydown', (e) => this.handleCwdInputKeydown(e));
-    cwdInput?.addEventListener('input', () => this.renderCwdSuggestions());
+    cwdInput?.addEventListener('input', () => {
+      this.renderCwdSuggestions();
+      this.scheduleTrackPicker();
+    });
+    document.getElementById('session-track-select')?.addEventListener('change', () => this.syncTrackPicker());
+    document.getElementById('session-track-new')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void this.createSessionFromModal();
+    });
     cwdInput?.addEventListener('focus', () => this.renderCwdSuggestions());
     // Close the dropdown when focus leaves the field (delay lets a click on an
     // option register before we hide it).
@@ -2382,8 +2393,84 @@ class SessionManager {
       (document.getElementById('session-cwd-input') as HTMLInputElement).value = prefillCwd ?? '';
       this.hideCwdSuggestions();
       void this.loadRecentPaths();
+      void this.refreshTrackPicker();
       document.getElementById('session-name-input')?.focus();
     }
+  }
+
+  // Track picker. A session for a track runs in that track's worktree, so its
+  // work can later be landed or deleted as a unit (docs/track-branches.md).
+  // "No track" is the default: planning and unrelated sessions see no change.
+
+  private scheduleTrackPicker(): void {
+    if (this.trackPickerTimer) clearTimeout(this.trackPickerTimer);
+    this.trackPickerTimer = setTimeout(() => void this.refreshTrackPicker(), 250);
+  }
+
+  private async refreshTrackPicker(): Promise<void> {
+    const group = document.getElementById('session-track-group');
+    const select = document.getElementById('session-track-select') as HTMLSelectElement | null;
+    const input = document.getElementById('session-cwd-input') as HTMLInputElement | null;
+    if (!group || !select || !input) return;
+    const cwd = input.value.trim();
+    const hide = (): void => {
+      group.classList.add('hidden');
+      this.trackPickerCwd = null;
+    };
+    if (!cwd) return hide();
+
+    try {
+      const res = await fetch(`/api/projects/tracks?cwd=${encodeURIComponent(cwd)}`);
+      // Not a board project (404) or no branching possible: no picker.
+      if (!res.ok) return hide();
+      const data = (await res.json()) as {
+        cwd: string;
+        canBranch: boolean;
+        tracks: { name: string; branch: { name: string } | null }[];
+      };
+      if (input.value.trim() !== cwd) return; // typed on since this was asked
+      if (!data.canBranch) return hide();
+
+      select.innerHTML = [
+        '<option value="">No track (planning or unrelated work)</option>',
+        ...data.tracks.map(
+          (t) =>
+            `<option value="${escapeAttr(t.name)}">${escapeHtml(t.name)}${t.branch ? ' ⎇' : ''}</option>`
+        ),
+        '<option value="__new__">New track…</option>',
+      ].join('');
+      this.trackPickerCwd = data.cwd;
+      group.classList.remove('hidden');
+      this.syncTrackPicker();
+    } catch {
+      hide();
+    }
+  }
+
+  /** Show the name field for "New track…" and say where the session will run. */
+  private syncTrackPicker(): void {
+    const select = document.getElementById('session-track-select') as HTMLSelectElement | null;
+    const newInput = document.getElementById('session-track-new') as HTMLInputElement | null;
+    const note = document.getElementById('session-track-note');
+    if (!select || !newInput || !note) return;
+    const value = select.value;
+    newInput.classList.toggle('hidden', value !== '__new__');
+    note.classList.remove('error');
+    note.textContent = value
+      ? 'Opens in the track’s own worktree, creating its branch on first use.'
+      : 'Opens in the directory above.';
+    if (value === '__new__') newInput.focus();
+  }
+
+  /** The track the modal asks for, or null for "No track". */
+  private chosenTrack(): string | null {
+    if (!this.trackPickerCwd) return null;
+    const select = document.getElementById('session-track-select') as HTMLSelectElement | null;
+    const value = select?.value ?? '';
+    if (value === '__new__') {
+      return (document.getElementById('session-track-new') as HTMLInputElement).value.trim() || null;
+    }
+    return value || null;
   }
 
   private hideNewSessionModal(): void {
@@ -2473,6 +2560,7 @@ class SessionManager {
     const input = document.getElementById('session-cwd-input') as HTMLInputElement | null;
     if (input && path) input.value = path;
     this.hideCwdSuggestions();
+    void this.refreshTrackPicker();
     input?.focus();
   }
 
@@ -2504,19 +2592,55 @@ class SessionManager {
         this.selectCwdSuggestion(items[this.cwdSuggestionIndex].dataset.path ?? '');
         return;
       }
-      this.createSessionFromModal();
+      void this.createSessionFromModal();
     }
   }
 
-  private createSessionFromModal(): void {
+  private async createSessionFromModal(): Promise<void> {
     const nameInput = document.getElementById('session-name-input') as HTMLInputElement;
     const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement;
 
-    const name = nameInput.value.trim() || undefined;
-    const cwd = cwdInput.value.trim() || undefined;
+    let name = nameInput.value.trim() || undefined;
+    let cwd = cwdInput.value.trim() || undefined;
+
+    const select = document.getElementById('session-track-select') as HTMLSelectElement | null;
+    const track = this.chosenTrack();
+    if (this.trackPickerCwd && select?.value === '__new__' && !track) {
+      this.showTrackError('Name the new track, or pick "No track".');
+      return;
+    }
+    if (track && this.trackPickerCwd) {
+      try {
+        const res = await fetch('/api/projects/track/branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd: this.trackPickerCwd, track }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          branch?: { worktreePath: string };
+          error?: string;
+        };
+        if (!res.ok || !data.branch) {
+          this.showTrackError(data.error || `Could not branch the track (${res.status})`);
+          return;
+        }
+        cwd = data.branch.worktreePath;
+        name = name ?? track;
+      } catch (error) {
+        this.showTrackError(error instanceof Error ? error.message : 'Could not branch the track');
+        return;
+      }
+    }
 
     this.createSession(name, cwd);
     this.hideNewSessionModal();
+  }
+
+  private showTrackError(message: string): void {
+    const note = document.getElementById('session-track-note');
+    if (!note) return;
+    note.textContent = message;
+    note.classList.add('error');
   }
 
   private showRenameModal(): void {

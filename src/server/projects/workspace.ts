@@ -9,6 +9,7 @@ import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } fro
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
 import { allFeatures, featuresOf, type Feature, type FeatureStatus } from './project-doc-format.js';
+import { listTrackBranches, type TrackBranch } from './track-branches.js';
 
 const logger = createLogger('project-workspace');
 
@@ -23,6 +24,8 @@ export interface FeatureCounts {
 export interface WorkspaceTrack {
   name: string;
   features: Feature[];
+  /** The track's branch while it is being implemented; null once landed or never branched. */
+  branch: { name: string; worktreePath: string; baseBranch: string } | null;
 }
 
 export interface WorkspaceProject {
@@ -67,6 +70,23 @@ function isJobWorktree(path: string): boolean {
   const root = pathKey(worktreeRoot());
   const key = pathKey(path);
   return key === root || key.startsWith(root + SEP);
+}
+
+/**
+ * A project's not-yet-landed track branches by track name. Never throws: the
+ * board must still render when the database is unavailable.
+ */
+function activeBranchesOf(cwd: string): Map<string, TrackBranch> {
+  try {
+    return new Map(
+      listTrackBranches(cwd)
+        .filter((b) => b.landedAt === null)
+        .map((b) => [b.trackName, b])
+    );
+  } catch (error) {
+    logger.warn({ error, cwd }, 'workspace: could not read track branches');
+    return new Map();
+  }
 }
 
 /** The separator pathKey() normalizes every path to. */
@@ -191,8 +211,16 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       state = null;
     }
 
+    const active = activeBranchesOf(cwd);
     const tracks: WorkspaceTrack[] = state
-      ? state.doc.tracks.map((t) => ({ name: t.name, features: featuresOf(t) }))
+      ? state.doc.tracks.map((t) => {
+          const b = active.get(t.name);
+          return {
+            name: t.name,
+            features: featuresOf(t),
+            branch: b ? { name: b.branch, worktreePath: b.worktreePath, baseBranch: b.baseBranch } : null,
+          };
+        })
       : [];
 
     // Aggregate recency across the project and everything rolled into it, so a

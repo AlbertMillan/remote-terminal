@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { git, isGitRepo } from '../agent/claude-run.js';
@@ -118,26 +118,39 @@ export interface CreatedWorktree {
 }
 
 /**
+ * Where a worktree goes and what it branches from, when not a job's defaults.
+ *
+ * A job inside a track branches from the track's branch rather than the
+ * project's current one; a track's own worktree has its own path and name.
+ */
+export interface WorktreeTarget {
+  base?: string;
+  path?: string;
+  branch?: string;
+}
+
+/**
  * Create a worktree for a job on a fresh branch off the project's current
- * branch. Idempotent: an existing worktree at the path is reused, so a restart
- * mid-job doesn't strand it.
+ * branch (or `target.base`). Idempotent: an existing worktree at the path is
+ * reused, so a restart mid-job doesn't strand it.
  */
 export async function createWorktree(
   cwd: string,
   jobId: string,
-  title: string
+  title: string,
+  target: WorktreeTarget = {}
 ): Promise<CreatedWorktree> {
   const { initialised } = await ensureGitRepo(cwd);
-  const base = (await currentBranch(cwd)) || 'main';
-  const branch = branchNameFor(jobId, title);
-  const path = worktreePathFor(jobId);
+  const base = target.base || (await currentBranch(cwd)) || 'main';
+  const branch = target.branch || branchNameFor(jobId, title);
+  const path = target.path || worktreePathFor(jobId);
 
   if (existsSync(path)) {
     logger.info({ jobId, path }, 'worktree: reusing existing worktree');
     return { path, branch, baseBranch: base, initialisedRepo: initialised };
   }
 
-  mkdirSync(worktreeRoot(), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   const out = await git(cwd, ['worktree', 'add', '-b', branch, path, base]);
   if (out === null) {
     // Most likely the branch already exists (a retried job); attach to it.
@@ -160,9 +173,9 @@ export async function createWorktree(
 export async function removeWorktree(
   cwd: string,
   jobId: string,
-  options: { deleteBranch?: string | null } = {}
+  options: { deleteBranch?: string | null; path?: string } = {}
 ): Promise<{ removed: boolean; branchDeleted: boolean }> {
-  const path = worktreePathFor(jobId);
+  const path = options.path || worktreePathFor(jobId);
   let removed = false;
   let branchDeleted = false;
 

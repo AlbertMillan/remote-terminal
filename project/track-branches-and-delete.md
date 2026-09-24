@@ -98,12 +98,15 @@ it guessed, is kept for the leftovers. It's three features:
 
 - **Mapping stored in SQLite, keyed by track name.** The new `track_branches` table holds
   `project_cwd`, `track_name`, `branch`, `worktree_path`, `base_branch`, `created_at`,
-  `landed_at`, `merge_sha`, with `UNIQUE(project_cwd, track_name)`.
+  `landed_at`, `merge_sha`.
+  - **Unique only among unlanded rows** (a partial index, as implemented). A landed row
+    is kept for its `merge_sha`, and reopening the track after a land starts a new row. A
+    plain `UNIQUE(project_cwd, track_name)` would have made reopening impossible.
   - Tracks have no id in the PROJECT.md format, and adding one is a format change this
     feature doesn't need.
-  - A rename through the board updates the row.
-  - A rename by hand orphans the row. The board then shows the branch as "no matching
-    track", offering **Delete**, rather than guessing.
+  - The board has no track-rename action, so nothing updates the row on a rename.
+  - A rename by hand orphans the row, and the board stops showing a branch for it.
+    Showing orphaned rows as "no matching track" with **Delete** is part of `f-nk734f`.
 
 - **Branch and worktree naming.** The branch is `track/<slug>-<id8>`, taken from the
   current branch. The worktree is `~/.claude-remote/worktrees/tracks/<row id>`. These

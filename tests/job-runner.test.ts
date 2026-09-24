@@ -84,6 +84,22 @@ vi.mock('../src/server/jobs/stages/rebuild.js', () => ({
   runRebuildStage: vi.fn(async () => ({ updated: true, committed: true, pushed: false, detail: 'marked done' })),
 }));
 
+// Tracks: none by default, so every other test keeps today's flow. A test that
+// wants its feature inside a branched track sets `trackOf`.
+const tracks = vi.hoisted(() => ({
+  trackOf: null as string | null,
+  branch: 'track/alpha-12345678',
+  worktreePath: 'C:/wt/tracks/alpha',
+}));
+vi.mock('../src/server/projects/track-branches.js', () => ({
+  trackOfFeature: vi.fn(() => tracks.trackOf),
+  ensureTrackBranch: vi.fn(async () => ({ branch: tracks.branch, worktreePath: tracks.worktreePath })),
+  findActiveTrackBranchByName: vi.fn((_cwd: string, branch: string) =>
+    tracks.trackOf && branch === tracks.branch ? { worktreePath: tracks.worktreePath } : null
+  ),
+  TrackBranchError: class TrackBranchError extends Error {},
+}));
+
 // The project must look dispatchable without touching a real repo.
 vi.mock('../src/server/projects/workspace.js', () => ({
   findWorkspaceProject: (cwd: string) => ({ cwd }),
@@ -189,6 +205,60 @@ describe('the happy path', () => {
     const job = store.getJobWithStages(id)!;
     expect(job.status).toBe('done');
     expect(job.stages.filter((s) => s.status === 'pending')).toEqual([]);
+  });
+
+  it('branches a feature in a track from the track branch, and merges into its worktree', async () => {
+    tracks.trackOf = 'Alpha';
+    try {
+      const { createWorktree } = await import('../src/server/jobs/worktree.js');
+      const { runMergeStage } = await import('../src/server/jobs/stages/merge.js');
+      vi.mocked(createWorktree).mockClear();
+      vi.mocked(runMergeStage).mockClear();
+      vi.mocked(createWorktree).mockImplementationOnce(async () => ({
+        path: 'C:/wt/job',
+        branch: 'job/x',
+        baseBranch: tracks.branch,
+        initialisedRepo: false,
+      }));
+      vi.mocked(runMergeStage).mockImplementationOnce(async () => ({
+        merged: true,
+        pushed: false,
+        pushSkippedReason: 'track-branch',
+        detail: null,
+        mergeSha: 'abc123',
+      }));
+
+      const id = await startJob();
+      expect(vi.mocked(createWorktree).mock.calls[0][3]).toEqual({ base: tracks.branch });
+
+      runner.approveGate(id); // design
+      await settle();
+      runner.approveGate(id); // merge
+      await settle();
+
+      expect(vi.mocked(runMergeStage).mock.calls[0][0]).toMatchObject({
+        baseBranch: tracks.branch,
+        mergeCwd: tracks.worktreePath,
+      });
+      expect(store.getJob(id)!.mergeSha).toBe('abc123');
+    } finally {
+      tracks.trackOf = null;
+    }
+  });
+
+  it('keeps an ad-hoc job on the current branch and merges it in the project', async () => {
+    const { createWorktree } = await import('../src/server/jobs/worktree.js');
+    const { runMergeStage } = await import('../src/server/jobs/stages/merge.js');
+    vi.mocked(createWorktree).mockClear();
+    vi.mocked(runMergeStage).mockClear();
+
+    const id = await startJob(null);
+    expect(vi.mocked(createWorktree).mock.calls[0][3]).toEqual({ base: undefined });
+    runner.approveGate(id);
+    await settle();
+    runner.approveGate(id);
+    await settle();
+    expect(vi.mocked(runMergeStage).mock.calls[0][0]).toMatchObject({ mergeCwd: undefined });
   });
 
   it('passes the recorded base branch to the stages, not the live one', async () => {

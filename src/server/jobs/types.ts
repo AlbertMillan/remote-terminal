@@ -101,6 +101,11 @@ export interface Job {
    */
   baseBranch: string | null;
   /**
+   * The merge commit the merge stage created, once it has landed. Deleting the
+   * job's track reverts exactly this commit.
+   */
+  mergeSha: string | null;
+  /**
    * An answer supplied for a parked question, consumed by the stage that asked.
    * Persisted because a job may sit parked for days across restarts.
    */

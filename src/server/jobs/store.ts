@@ -38,6 +38,7 @@ interface JobRow {
   worktree_path: string | null;
   branch: string | null;
   base_branch: string | null;
+  merge_sha: string | null;
   pending_answer: string | null;
   claude_session_id: string | null;
   created_at: string;
@@ -76,6 +77,7 @@ function toJob(row: JobRow): Job {
     worktreePath: row.worktree_path,
     branch: row.branch,
     baseBranch: row.base_branch,
+    mergeSha: row.merge_sha ?? null,
     pendingAnswer: row.pending_answer,
     claudeSessionId: row.claude_session_id,
     createdAt: row.created_at,
@@ -256,6 +258,7 @@ export interface JobPatch {
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
+  mergeSha?: string | null;
   pendingAnswer?: string | null;
   claudeSessionId?: string | null;
 }
@@ -270,6 +273,7 @@ const COLUMN_OF: Record<keyof JobPatch, string> = {
   worktreePath: 'worktree_path',
   branch: 'branch',
   baseBranch: 'base_branch',
+  mergeSha: 'merge_sha',
   pendingAnswer: 'pending_answer',
   claudeSessionId: 'claude_session_id',
 };

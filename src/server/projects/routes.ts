@@ -9,6 +9,14 @@ import { generateQaDoc } from './qa-generate.js';
 import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readProjectDoc, readSpec } from './project-store.js';
 import {
+  TrackBranchError,
+  ensureTrackBranch,
+  landTrack,
+  readSpecForTrack,
+} from './track-branches.js';
+import { sessionManager } from '../sessions/manager.js';
+import { WorktreeError } from '../jobs/worktree.js';
+import {
   addFeature,
   removeFeature,
   reorderFeatures,
@@ -70,8 +78,18 @@ export function registerProjectRoutes(app: FastifyInstance): void {
             .flatMap((t) => t.items)
             .find((i) => i.kind === 'feature' && i.feature.id === feature)
         : undefined;
+      // A spec revised during implementation lives on the track branch until
+      // it lands, so the worktree's copy wins when there is one.
+      const trackName = feature
+        ? (state.doc.tracks.find((t) =>
+            t.items.some((i) => i.kind === 'feature' && i.feature.id === feature)
+          )?.name ?? null)
+        : null;
       const spec =
-        target && target.kind === 'feature' ? readSpec(project, target.feature.spec) : null;
+        target && target.kind === 'feature'
+          ? (readSpecForTrack(project, trackName, target.feature.spec) ??
+            readSpec(project, target.feature.spec))
+          : null;
 
       return { project: board ?? null, revision: state.revision, spec };
     }
@@ -239,7 +257,75 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     }
   );
 
+  // --- Track branches ------------------------------------------------------
+  // A track's own branch and worktree (docs/track-branches.md). Creating one is
+  // idempotent, so the board, the new-session picker and dispatch can all ask.
+
+  app.get<{ Querystring: { cwd?: string } }>('/api/projects/tracks', async (request, reply) => {
+    const { cwd } = request.query;
+    if (!cwd) return reply.status(400).send({ error: 'cwd required' });
+    const project = findWorkspaceProject(cwd);
+    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const board = getWorkspaceBoard().find((p) => pathKey(p.cwd) === pathKey(project.cwd));
+    return {
+      cwd: project.cwd,
+      canBranch: board?.vcs.canDispatch ?? false,
+      tracks: (board?.tracks ?? []).map((t) => ({ name: t.name, branch: t.branch })),
+    };
+  });
+
+  app.post<{ Body?: { cwd?: string; track?: string } }>(
+    '/api/projects/track/branch',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track?.trim()) {
+        return reply.status(400).send({ error: 'cwd and track required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      return withTrack(reply, async () => ({
+        branch: await ensureTrackBranch(project, body.track as string),
+      }));
+    }
+  );
+
+  app.post<{ Body?: { cwd?: string; track?: string } }>(
+    '/api/projects/track/land',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track) {
+        return reply.status(400).send({ error: 'cwd and track required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
+      return withTrack(reply, () => landTrack(project, body.track as string, liveCwds));
+    }
+  );
+
   logger.info('Project workspace routes registered');
+}
+
+/** Map TrackBranchError / ProjectStoreError onto the reply. */
+async function withTrack<T>(
+  reply: { status: (code: number) => { send: (body: unknown) => unknown } },
+  fn: () => Promise<T>
+): Promise<T | unknown> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (
+      error instanceof TrackBranchError ||
+      error instanceof ProjectStoreError ||
+      error instanceof WorktreeError
+    ) {
+      return reply.status(error.status).send({ error: error.message });
+    }
+    logger.error({ error }, 'track route failed');
+    return reply
+      .status(500)
+      .send({ error: error instanceof Error ? error.message : 'Request failed' });
+  }
 }
 
 /** Map ProjectStoreError (notably the 409 staleness conflict) onto the reply. */

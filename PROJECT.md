@@ -70,6 +70,6 @@ status: active
 - [x] `f-p2r9wq` P1 Per-stage `--tools` — drop definitions no run can call (~20k tokens per turn)
 
 ## Track: Track branches & delete
-- [ ] `f-kzucpb` P1 Track branches — branch on first implementation (session, picker, dispatch), Land track, `merge_sha` on every merge → project/track-branches-and-delete.md
+- [~] `f-kzucpb` P1 Track branches — branch on first implementation (session, picker, dispatch), Land track, `merge_sha` on every merge → project/track-branches-and-delete.md
 - [ ] `f-nk734f` P1 Delete track — cancel/discard jobs, drop the branch, revert landed merges, spec rule, one commit → project/track-branches-and-delete.md
 - [ ] `f-4blxce` P2 Work on main outside any branch — detect a track's edits on main from its sessions, Branch now, unticked guesses in Delete → project/track-branches-and-delete.md
