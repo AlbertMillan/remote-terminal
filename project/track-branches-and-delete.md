@@ -292,7 +292,10 @@ it guessed, is kept for the leftovers. It's three features:
 - `src/server/projects/track-attribution.ts` (new): the attributed sessions from the
   phase list and transcripts, the transcript file scan intersected with
   `git status --porcelain`, and the commits in session windows.
-- `src/server/projects/workspace.ts`: the badge count on the board.
+- The badge count on the board. As implemented, this is `GET /api/projects/unbranched-work`,
+  fetched by the client once per render of a project, not a field computed in
+  `workspace.ts`. Transcript scanning is async and the board build is synchronous, and
+  tying every board load to a transcript scan was the cost to avoid.
 - `src/server/projects/track-branches.ts`: Branch now, which moves the confirmed files.
 - `src/client/project-workspace.ts`: the badge and the Branch now confirm list.
 

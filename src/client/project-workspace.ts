@@ -1,5 +1,9 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
+import { openBranchNowDialog, type GuessedFile } from './track-branch-now-dialog.js';
+
+/** Per track: uncommitted files on main its sessions wrote, and commits they made. A guess. */
+type UnbranchedWork = Record<string, { files: GuessedFile[]; commits: number }>;
 import {
   isPhaseGroupActivation,
   setPhaseGroupCollapsed,
@@ -129,6 +133,12 @@ export class ProjectWorkspace {
    * unreadable — the two say different things to the reader.
    */
   private specs = new Map<string, string | null>();
+  /**
+   * Work on main guessed per unbranched track, by project. Fetched once per
+   * render of a project and dropped on reload(), so the board always renders
+   * from state — the fetch re-renders when it lands.
+   */
+  private unbranched = new Map<string, UnbranchedWork | 'loading'>();
   /**
    * Tracks the user has folded away, keyed by (cwd, track). Held here rather
    * than in the DOM because every mutation re-renders the whole board, and
@@ -276,6 +286,7 @@ export class ProjectWorkspace {
     const tracks =
       project.tracks.map((track) => this.renderTrack(project, track)).join('') +
       this.renderOrphanBranches(project);
+    this.ensureUnbranched(project);
     const empty =
       project.counts.total === 0
         ? '<div class="project-empty">No features yet — add the first one below.</div>'
@@ -540,6 +551,15 @@ export class ProjectWorkspace {
           track.branch.name
         )}</span>`
       : '';
+    const work = track.branch ? undefined : this.unbranchedFor(project.cwd, track.name);
+    const onMain = work
+      ? `<button class="pw-track-branchnow" data-cwd="${cwd}" data-track="${name}"
+                 title="This track's sessions changed files on main. Move them into a track branch so the work stays deletable.">⚠ ${
+                   work.files.length
+                     ? `${work.files.length} file${work.files.length === 1 ? '' : 's'} on main`
+                     : `${work.commits} commit${work.commits === 1 ? '' : 's'} on main`
+                 }</button>`
+      : '';
     const land = track.branch
       ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
                  title="Merge this track into ${escapeAttr(track.branch.baseBranch)} and retire its worktree">Land</button>`
@@ -547,6 +567,7 @@ export class ProjectWorkspace {
     return `
       <span class="pw-track-actions">
         ${badge}
+        ${onMain}
         <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
                 title="${track.branch ? 'Open a session in this track’s worktree' : 'Create this track’s branch and open a session in it'}">Open session</button>
         ${land}
@@ -772,6 +793,37 @@ export class ProjectWorkspace {
     await this.reload();
   }
 
+  private unbranchedFor(cwd: string, track: string): UnbranchedWork[string] | undefined {
+    const work = this.unbranched.get(cwd);
+    return work && work !== 'loading' ? work[track] : undefined;
+  }
+
+  /** Fetch the guessed work on main once for this project, then re-render. */
+  private ensureUnbranched(project: WorkspaceProject): void {
+    if (!project.vcs.canDispatch || this.unbranched.has(project.cwd)) return;
+    this.unbranched.set(project.cwd, 'loading');
+    void fetch(`/api/projects/unbranched-work?cwd=${encodeURIComponent(project.cwd)}`)
+      .then(async (res) => (res.ok ? ((await res.json()) as { tracks: UnbranchedWork }).tracks : {}))
+      .catch(() => ({}))
+      .then((tracks) => {
+        this.unbranched.set(project.cwd, tracks);
+        if (Object.keys(tracks).length > 0) this.refreshDetail(project.cwd);
+      });
+  }
+
+  /** Confirm the guessed files, then move them into a new track branch. */
+  async branchNow(cwd: string, track: string): Promise<void> {
+    const work = this.unbranchedFor(cwd, track);
+    if (!work || work.files.length === 0) {
+      this.flash('Nothing uncommitted to move — only commits, which Delete track offers.');
+      return;
+    }
+    const detail = await openBranchNowDialog(cwd, track, work.files, work.commits);
+    if (detail === null) return;
+    await this.reload();
+    this.flash(detail);
+  }
+
   /** Show the delete plan; on confirm the dialog deletes, and the board reloads. */
   async deleteTrack(cwd: string, track: string): Promise<void> {
     const detail = await openTrackDeleteDialog(cwd, track, (m) => this.flash(m));
@@ -861,6 +913,7 @@ export class ProjectWorkspace {
    * change the user just made themselves.
    */
   private async reload(): Promise<void> {
+    if (this.selectedCwd) this.unbranched.delete(this.selectedCwd);
     await this.loadBoard();
     if (this.selectedCwd) this.refreshDetail(this.selectedCwd);
   }
@@ -894,6 +947,12 @@ export class ProjectWorkspace {
       const trackSession = target.closest('.pw-track-session') as HTMLElement | null;
       if (trackSession) {
         void this.openTrackSession(trackSession.dataset.cwd || '', trackSession.dataset.track || '');
+        return;
+      }
+
+      const branchNowBtn = target.closest('.pw-track-branchnow') as HTMLElement | null;
+      if (branchNowBtn) {
+        void this.branchNow(branchNowBtn.dataset.cwd || '', branchNowBtn.dataset.track || '');
         return;
       }
 

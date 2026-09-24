@@ -97,6 +97,7 @@ vi.mock('../src/server/projects/track-branches.js', () => ({
   findActiveTrackBranchByName: vi.fn((_cwd: string, branch: string) =>
     tracks.trackOf && branch === tracks.branch ? { worktreePath: tracks.worktreePath } : null
   ),
+  isTrackBranch: vi.fn((_cwd: string, branch: string) => Boolean(tracks.trackOf) && branch === tracks.branch),
   TrackBranchError: class TrackBranchError extends Error {},
 }));
 

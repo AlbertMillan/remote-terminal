@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { docPathFor, type RegistryProject } from './registry.js';
+import { resolveInWorktree } from '../jobs/docs.js';
 import {
   healMissingIds,
   parseProjectDoc,
@@ -194,7 +195,10 @@ export function resolveSpecPath(project: RegistryProject, spec: string): string 
 /** Read a feature's spec file, or null when it is missing/unsafe/unreadable. */
 export function readSpec(project: RegistryProject, spec: string | null): string | null {
   if (!spec) return null;
-  const abs = resolveSpecPath(project, spec);
+  // Reading follows symlinks, so resolve them before the containment check
+  // (resolveSpecPath alone is lexical — right for deleting a link, not for
+  // reading through one).
+  const abs = resolveSpecPath(project, spec) ? resolveInWorktree(project.cwd, spec) : null;
   if (!abs) {
     logger.warn({ cwd: project.cwd, spec }, 'project-store: refusing spec path outside project');
     return null;

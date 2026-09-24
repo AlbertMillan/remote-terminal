@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -157,6 +157,41 @@ describe('landTrack', () => {
     expect(rows[1].landedAt).toBeNull();
   });
 
+  it('keeps the worktree’s ticks when the merge conflicts, so a retry still carries them', async () => {
+    writeFileSync(join(repo, 'shared.ts'), 'one\n');
+    git(repo, 'add', 'shared.ts');
+    git(repo, 'commit', '-q', '-m', 'shared');
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(t.worktreePath, 'shared.ts', 'track side\n', 'track edit');
+    const ticked = readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8').replace(
+      '- [ ] `f-aaaaaa`',
+      '- [x] `f-aaaaaa`'
+    );
+    commitFile(t.worktreePath, 'PROJECT.md', ticked, 'tick in the worktree');
+    const worktreeHead = git(t.worktreePath, 'rev-parse', 'HEAD');
+    commitFile(repo, 'shared.ts', 'main side\n', 'main edit');
+    const mainHead = git(repo, 'rev-parse', 'HEAD');
+
+    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+
+    // The reset commit is taken back off: the tick is still on the track branch.
+    expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(worktreeHead);
+    expect(readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8')).toContain('- [x] `f-aaaaaa`');
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(mainHead);
+    expect(git(repo, 'status', '--porcelain')).toBe('');
+    expect(tracks.getActiveTrackBranch(repo, 'Alpha')).not.toBeNull();
+  });
+
+  it('re-attaches a missing worktree before landing instead of failing', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'work');
+    rmSync(t.worktreePath, { recursive: true, force: true });
+
+    const result = await tracks.landTrack(project(), 'Alpha', []);
+    expect(existsSync(join(repo, 'src', 'a.ts'))).toBe(true);
+    expect(result.mergeSha).toBe(git(repo, 'rev-parse', 'HEAD~0'));
+  });
+
   it('refuses while the worktree has uncommitted changes', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
@@ -175,6 +210,20 @@ describe('landTrack', () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     git(repo, 'checkout', '-q', '-b', 'elsewhere');
     await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('deleteTrackBranchRows', () => {
+  it('keeps the unlanded row when asked, and drops the landed ones', async () => {
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    await tracks.landTrack(project(), 'Alpha', []);
+    const reopened = await tracks.ensureTrackBranch(project(), 'Alpha');
+
+    tracks.deleteTrackBranchRows(repo, 'Alpha', { keepUnlanded: true });
+    expect(tracks.listTrackBranches(repo).map((r) => r.id)).toEqual([reopened.id]);
+
+    tracks.deleteTrackBranchRows(repo, 'Alpha');
+    expect(tracks.listTrackBranches(repo)).toEqual([]);
   });
 });
 
@@ -228,5 +277,23 @@ describe('readSpecForTrack', () => {
     );
     expect(tracks.readSpecForTrack(project(), 'Beta', 'project/alpha.md')).toBeNull();
     expect(tracks.readSpecForTrack(project(), 'Alpha', '../outside.md')).toBeNull();
+  });
+
+  it('refuses a spec that is a symlink to somewhere outside the worktree', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const outside = mkdtempSync(join(tmpdir(), 'cr-outside-'));
+    writeFileSync(join(outside, 'secret.md'), 'not yours');
+    const link = join(t.worktreePath, 'project', 'linked.md');
+    try {
+      symlinkSync(join(outside, 'secret.md'), link, 'file');
+    } catch {
+      return; // Windows without developer mode: nothing to assert.
+    }
+    try {
+      expect(tracks.readSpecForTrack(project(), 'Alpha', 'project/linked.md')).toBeNull();
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

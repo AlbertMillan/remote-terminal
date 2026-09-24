@@ -1,9 +1,10 @@
 import { createHash } from 'crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { join, relative, resolve, isAbsolute } from 'path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { git, gitStatusEntries, isGitRepo } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git, gitStatusEntries, isGitRepo } from '../agent/claude-run.js';
+import { isInside } from '../utils/paths.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive, type JobWithStages } from '../jobs/types.js';
 import { removeWorktree } from '../jobs/worktree.js';
@@ -12,6 +13,7 @@ import type { RegistryProject } from './registry.js';
 import { mutateProjectDoc, readProjectDoc, resolveSpecPath } from './project-store.js';
 import { featuresOf, findFeature, parseProjectDoc, removeTrack, type FeatureStatus } from './project-doc-format.js';
 import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './track-branches.js';
+import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
 
 const logger = createLogger('track-delete');
 
@@ -24,11 +26,11 @@ const logger = createLogger('track-delete');
  * The step order in executeTrackDelete is what makes a failure harmless — see
  * the comment there and docs/track-branches.md.
  *
- * Attribution comes from records, never from guesses: the track's branch rows,
- * its jobs, and merges found by their exact pipeline message. Code a session
- * wrote on main without a branch is only reported (the `unattributed` note);
- * guessing at it is f-4blxce's job, and a guess must never be reverted by
- * default.
+ * Two kinds of attribution, kept apart. RECORDS — the track's branch rows,
+ * its jobs, merges found by their exact pipeline message — are ticked by
+ * default. GUESSES — files and commits the track's sessions made on main
+ * (track-attribution.ts) — are offered UNTICKED, always: a guess reverted by
+ * default would destroy unrelated work.
  */
 
 export class TrackDeleteError extends Error {
@@ -105,9 +107,13 @@ export interface TrackDeletePlan {
   sessionLogGroup: boolean;
   /** Uncommitted paths in the main checkout. Reverting requires none. */
   mainDirty: string[];
+  /** Uncommitted files on main this track's sessions wrote. A guess: offered unticked. */
+  guessedFiles: GuessedFile[];
+  /** Commits on main this track's sessions made. A guess: offered unticked. */
+  guessedCommits: GuessedCommit[];
   /**
-   * The track never had a branch, so code written for it on main cannot be
-   * told apart from anything else, and this delete leaves it alone.
+   * The track never had a branch, so any other code written for it on main
+   * cannot be told apart from anything else, and this delete leaves it alone.
    */
   unattributed: { dirtyFiles: number } | null;
 }
@@ -118,6 +124,10 @@ export interface TrackDeleteChoices {
   revert: string[];
   /** Paths from plan.specs to delete. */
   deleteSpecs: string[];
+  /** Paths from plan.guessedFiles to restore to HEAD (or delete, if untracked). */
+  restoreFiles?: string[];
+  /** Shas from plan.guessedCommits to revert. */
+  revertGuessed?: string[];
 }
 
 export interface TrackDeleteDeps {
@@ -133,11 +143,12 @@ export interface TrackDeleteResult {
   cancelled: number;
   discarded: number;
   branchRemoved: boolean;
+  /** A track worktree that could not be removed; its row is kept so Delete can retry. */
+  leftover: string | null;
   specsDeleted: string[];
+  restored: string[];
   detail: string;
 }
-
-const COMMIT_IDENTITY = ['-c', 'user.name=claude-remote', '-c', 'user.email=claude-remote@localhost'];
 
 // --- Plan --------------------------------------------------------------
 
@@ -174,7 +185,9 @@ export async function planTrackDelete(
   const currentBranch = repo
     ? ((await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim() ?? null)
     : null;
-  const mainDirty = repo ? ((await gitStatusEntries(cwd)) ?? []).map((e) => e.path) : [];
+  const mainDirty = repo
+    ? ((await gitStatusEntries(cwd, { allUntracked: true })) ?? []).map((e) => e.path)
+    : [];
 
   const { merges, unresolved } =
     repo && headSha && currentBranch
@@ -187,7 +200,7 @@ export async function planTrackDelete(
 
   let branch: TrackDeletePlan['branch'] = null;
   if (active) {
-    const entries = existsSync(active.worktreePath) ? await gitStatusEntries(active.worktreePath) : [];
+    const entries = existsSync(active.worktreePath) ? await gitStatusEntries(active.worktreePath, { allUntracked: true }) : [];
     branch = {
       name: active.branch,
       worktreePath: active.worktreePath,
@@ -198,7 +211,17 @@ export async function planTrackDelete(
 
   const sessionLogGroup = hasSessionLogGroup(cwd, trackName, docRel);
 
-  const ours = new Set([docRel, ...specs.map((s) => s.path), getConfig().projectLog.fileName]);
+  const guess = repo ? await guessTrackWork(project, trackName) : { files: [], commits: [] };
+  const recorded = new Set(merges.map((m) => m.sha));
+  const guessedFiles = guess.files;
+  const guessedCommits = guess.commits.filter((c) => !recorded.has(c.sha));
+
+  const ours = new Set([
+    docRel,
+    ...specs.map((s) => s.path),
+    ...guessedFiles.map((g) => g.path),
+    getConfig().projectLog.fileName,
+  ]);
   const unattributed =
     rows.length === 0 ? { dirtyFiles: mainDirty.filter((p) => !ours.has(p)).length } : null;
 
@@ -209,6 +232,8 @@ export async function planTrackDelete(
         headSha,
         jobs: jobs.map((j) => [j.id, j.status, j.updatedAt]),
         rows: rows.map((r) => [r.id, r.landedAt]),
+        guessedFiles: guessedFiles.map((g) => [g.path, g.status]),
+        guessedCommits: guessedCommits.map((c) => c.sha),
       })
     )
     .digest('hex');
@@ -227,6 +252,8 @@ export async function planTrackDelete(
     specs,
     sessionLogGroup,
     mainDirty,
+    guessedFiles,
+    guessedCommits,
     unattributed,
   };
 }
@@ -436,27 +463,26 @@ function hasSessionLogGroup(cwd: string, trackName: string, docRel: string): boo
   return sessionLogGroups(cwd).some((g) => g.group === trackName && g.source === docRel);
 }
 
-function isInside(root: string, p: string): boolean {
-  const rel = relative(resolve(root), resolve(p));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
 // --- Execute -----------------------------------------------------------
 
 /**
  * Carry out a confirmed plan.
  *
- * The order makes a failure harmless:
+ * The order makes a failure harmless — each step below is its own function,
+ * called in this order and no other:
  *  1. re-plan and compare tokens — anything moved since the dialog opened is a 409;
- *  2. preflight: reverting needs a clean main checkout, checked before anything is touched;
+ *  2. preflight: reverting needs a clean main checkout — apart from the guessed
+ *     files the user ticked, which are snapshotted — checked before anything is touched;
  *  3. cancel live jobs — the only step before the revert can fail, and a cancelled
  *     job is still discardable, so a failed delete loses nothing;
- *  4. revert with --no-commit; on a conflict abort and `reset --hard` to the
- *     preflight HEAD (safe: step 2 left no uncommitted work to lose);
+ *  4. restore the ticked guessed files, then revert with --no-commit, newest
+ *     first; on a conflict abort, `reset --hard` to the preflight HEAD and
+ *     write the snapshots back (safe: step 2 left no other uncommitted work);
  *  5. tear down: close sessions in the track worktree, discard jobs, remove the
  *     worktree and branch, forget the rows;
  *  6. edit PROJECT.md, specs, the SESSION-LOG group;
  *  7. commit, only if something was reverted — one commit, never pushed.
+ * Tearing down before the revert would make a conflict unrecoverable.
  */
 export async function executeTrackDelete(
   project: RegistryProject,
@@ -464,32 +490,107 @@ export async function executeTrackDelete(
   choices: TrackDeleteChoices,
   deps: TrackDeleteDeps
 ): Promise<TrackDeleteResult> {
-  const cwd = project.cwd;
-  const docRel = project.doc || 'PROJECT.md';
   const sessions = deps.liveSessions();
 
-  // 1.
-  const plan = await planTrackDelete(project, trackName, sessions.map((s) => s.cwd));
+  const plan = await planTrackDelete(project, trackName, sessions.map((s) => s.cwd)); // 1.
   if (plan.token !== choices.token) {
     throw new TrackDeleteError('The track changed since this was opened — review it again', 409);
   }
-  const reverts = plan.merges.filter((m) => choices.revert.includes(m.sha));
-  const specs = plan.specs.filter((s) => s.offered && choices.deleteSpecs.includes(s.path));
+  const chosen = await choose(project.cwd, plan, choices);
+  const pre = await preflight(project.cwd, plan, chosen); // 2.
+  const cancelled = await cancelLiveJobs(plan, deps); // 3.
+  await restoreAndRevert(project.cwd, chosen, pre); // 4.
+  const torn = await tearDown(project.cwd, trackName, plan, sessions, deps); // 5.
+  const specsDeleted = applyEdits(project, trackName, plan, chosen.specs); // 6.
+  const committed = await commitDelete(project, trackName, chosen.reverts, specsDeleted); // 7.
 
-  // 2.
-  let preHead: string | null = null;
-  if (reverts.length > 0) {
-    if (plan.mainDirty.length > 0) {
+  logger.info(
+    {
+      cwd: project.cwd,
+      track: trackName,
+      reverted: chosen.reverts.length,
+      cancelled,
+      discarded: torn.discarded,
+      branchRemoved: torn.branchRemoved,
+      leftover: torn.leftover,
+      specsDeleted,
+      committed,
+    },
+    'track deleted'
+  );
+
+  const leftover = torn.leftover
+    ? ` Its worktree could not be fully removed (${torn.leftover}); it stays listed under ` +
+      '“Branches with no matching track” so it can be deleted again.'
+    : '';
+  return {
+    committed,
+    reverted: chosen.reverts.map((m) => m.sha),
+    cancelled,
+    discarded: torn.discarded,
+    branchRemoved: torn.branchRemoved,
+    leftover: torn.leftover,
+    specsDeleted,
+    restored: chosen.restore.map((g) => g.path),
+    detail:
+      (committed
+        ? `Deleted "${trackName}" and reverted ${chosen.reverts.length} commit(s) in one commit (${committed.slice(0, 8)}), not pushed.`
+        : `Deleted "${trackName}". The changes are left uncommitted.`) + leftover,
+  };
+}
+
+interface Chosen {
+  specs: PlannedSpec[];
+  restore: GuessedFile[];
+  /** Recorded merges and guessed commits together, newest first. */
+  reverts: { sha: string; subject: string }[];
+}
+
+/** What the user ticked, limited to what the plan offered. */
+async function choose(cwd: string, plan: TrackDeletePlan, choices: TrackDeleteChoices): Promise<Chosen> {
+  const specs = plan.specs.filter((s) => s.offered && choices.deleteSpecs.includes(s.path));
+  const restore = plan.guessedFiles.filter((g) => (choices.restoreFiles ?? []).includes(g.path));
+  const reverts: { sha: string; subject: string }[] = [
+    ...plan.merges.filter((m) => choices.revert.includes(m.sha)),
+    ...plan.guessedCommits.filter((c) => (choices.revertGuessed ?? []).includes(c.sha)),
+  ];
+  if (reverts.length > 1) {
+    const order = ((await git(cwd, ['rev-list', '--topo-order', 'HEAD'])) ?? '').split('\n');
+    const rank = new Map(order.map((sha, i) => [sha.trim(), i]));
+    reverts.sort((a, b) => (rank.get(a.sha) ?? Infinity) - (rank.get(b.sha) ?? Infinity));
+  }
+  return { specs, restore, reverts };
+}
+
+interface Preflight {
+  /** HEAD to reset to if a revert conflicts; null when nothing is reverted. */
+  head: string | null;
+  /** What the ticked guessed files hold now, to put back if a revert fails. */
+  snapshots: { abs: string; content: Buffer | null }[];
+}
+
+async function preflight(cwd: string, plan: TrackDeletePlan, chosen: Chosen): Promise<Preflight> {
+  let head: string | null = null;
+  if (chosen.reverts.length > 0) {
+    const restoring = new Set(chosen.restore.map((g) => g.path));
+    const blocking = plan.mainDirty.filter((p) => !restoring.has(p.replace(/\\/g, '/').replace(/\/$/, '')));
+    if (blocking.length > 0) {
       throw new TrackDeleteError(
-        `Reverting needs a clean checkout, and these files have uncommitted changes: ${plan.mainDirty.join(', ')}`,
+        `Reverting needs a clean checkout, and these files have uncommitted changes: ${blocking.join(', ')}`,
         409
       );
     }
-    preHead = (await git(cwd, ['rev-parse', 'HEAD']))?.trim() ?? null;
-    if (!preHead) throw new TrackDeleteError('Could not read the project’s HEAD', 500);
+    head = (await git(cwd, ['rev-parse', 'HEAD']))?.trim() ?? null;
+    if (!head) throw new TrackDeleteError('Could not read the project’s HEAD', 500);
   }
+  const snapshots = chosen.restore.map((g) => {
+    const abs = join(cwd, g.path);
+    return { abs, content: existsSync(abs) ? readFileSync(abs) : null };
+  });
+  return { head, snapshots };
+}
 
-  // 3.
+async function cancelLiveJobs(plan: TrackDeletePlan, deps: TrackDeleteDeps): Promise<number> {
   let cancelled = 0;
   for (const job of plan.cancel) {
     try {
@@ -500,31 +601,57 @@ export async function executeTrackDelete(
       logger.warn({ jobId: job.id, error: (error as Error).message }, 'track-delete: cancel failed');
     }
   }
+  return cancelled;
+}
 
-  // 4.
-  for (const merge of reverts) {
-    const parents = ((await git(cwd, ['rev-list', '--parents', '-n', '1', merge.sha])) ?? '')
-      .trim()
-      .split(/\s+/).length - 1;
-    const args = ['revert', '--no-commit', ...(parents > 1 ? ['-m', '1'] : []), merge.sha];
-    if ((await git(cwd, [...COMMIT_IDENTITY, ...args])) === null) {
-      const conflicts = ((await git(cwd, ['diff', '--name-only', '--diff-filter=U'])) ?? '')
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-      await git(cwd, ['revert', '--abort']);
-      await git(cwd, ['reset', '--hard', preHead as string]);
-      throw new TrackDeleteError(
-        `Reverting ${merge.subject || merge.sha.slice(0, 8)} conflicts with later work, so nothing was changed. ` +
-          'Revert it by hand, then delete the track again.',
-        409,
-        conflicts
-      );
-    }
+/** Step 4. On a conflict, puts HEAD, index, tree and the ticked files back, then throws. */
+async function restoreAndRevert(cwd: string, chosen: Chosen, pre: Preflight): Promise<void> {
+  for (const g of chosen.restore) {
+    if (g.status === 'untracked') rmSync(join(cwd, g.path), { force: true });
+    else await git(cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', g.path]);
   }
+  for (const commit of chosen.reverts) {
+    const parents =
+      ((await git(cwd, ['rev-list', '--parents', '-n', '1', commit.sha])) ?? '').trim().split(/\s+/).length - 1;
+    const args = ['revert', '--no-commit', ...(parents > 1 ? ['-m', '1'] : []), commit.sha];
+    if ((await git(cwd, [...COMMIT_IDENTITY, ...args])) !== null) continue;
 
-  // 5.
-  let branchRemoved = false;
+    const conflicts = ((await git(cwd, ['diff', '--name-only', '--diff-filter=U'])) ?? '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    await git(cwd, ['revert', '--abort']);
+    await git(cwd, ['reset', '--hard', pre.head as string]);
+    for (const s of pre.snapshots) {
+      if (s.content === null) {
+        rmSync(s.abs, { force: true });
+      } else {
+        mkdirSync(dirname(s.abs), { recursive: true });
+        writeFileSync(s.abs, s.content);
+      }
+    }
+    throw new TrackDeleteError(
+      `Reverting ${commit.subject || commit.sha.slice(0, 8)} conflicts with later work, so nothing was changed. ` +
+        'Revert it by hand, then delete the track again.',
+      409,
+      conflicts
+    );
+  }
+}
+
+/**
+ * Step 5. The unlanded row is kept when the worktree or its branch could not
+ * be removed (on Windows a held file handle is enough): dropping it would
+ * leave a worktree and branch on disk that nothing records. Kept, it shows
+ * under "Branches with no matching track" and Delete can be run again.
+ */
+async function tearDown(
+  cwd: string,
+  trackName: string,
+  plan: TrackDeletePlan,
+  sessions: { id: string; cwd: string }[],
+  deps: TrackDeleteDeps
+): Promise<{ discarded: number; branchRemoved: boolean; leftover: string | null }> {
   if (plan.branch) {
     for (const s of sessions) {
       if (isInside(plan.branch.worktreePath, s.cwd)) await deps.terminateSession(s.id);
@@ -539,6 +666,8 @@ export async function executeTrackDelete(
       logger.warn({ jobId: job.id, error: (error as Error).message }, 'track-delete: discard failed');
     }
   }
+
+  let branchRemoved = true;
   if (plan.branch) {
     const torn = await removeWorktree(cwd, 'track', {
       path: plan.branch.worktreePath,
@@ -546,57 +675,58 @@ export async function executeTrackDelete(
     });
     branchRemoved = torn.removed && torn.branchDeleted;
   }
-  deleteTrackBranchRows(cwd, trackName);
+  deleteTrackBranchRows(cwd, trackName, { keepUnlanded: !branchRemoved });
+  return {
+    discarded,
+    branchRemoved: Boolean(plan.branch) && branchRemoved,
+    leftover: branchRemoved ? null : (plan.branch?.worktreePath ?? null),
+  };
+}
 
-  // 6.
+/** Step 6: PROJECT.md, the ticked specs, the SESSION-LOG group. Returns the specs deleted. */
+function applyEdits(project: RegistryProject, trackName: string, plan: TrackDeletePlan, specs: PlannedSpec[]): string[] {
+  const docRel = project.doc || 'PROJECT.md';
   if (plan.inDoc) mutateProjectDoc(project, null, (doc) => removeTrack(doc, trackName));
-  const specsDeleted: string[] = [];
+  const deleted: string[] = [];
   for (const spec of specs) {
     const abs = resolveSpecPath(project, spec.path);
     if (abs && existsSync(abs)) {
       rmSync(abs, { force: true });
-      specsDeleted.push(spec.path);
+      deleted.push(spec.path);
     }
   }
   if (plan.sessionLogGroup) {
-    const path = sessionLogPath(cwd);
+    const path = sessionLogPath(project.cwd);
     const next = removePhaseGroup(readFileSync(path, 'utf-8'), trackName, docRel);
     if (next !== null) writeFileSync(path, next);
   }
+  return deleted;
+}
 
-  // 7.
-  let committed: string | null = null;
-  if (reverts.length > 0) {
-    // One path at a time: `git add` rejects the whole call when any pathspec
-    // matches nothing, which a deleted never-committed spec does — and
-    // PROJECT.md would silently drop out of the commit with it.
-    for (const path of [docRel, ...specsDeleted]) await git(cwd, ['add', '-A', '--', path]);
-    const ok = await git(cwd, [
-      ...COMMIT_IDENTITY,
-      'commit',
-      '-q',
-      '-m',
-      `Delete track: ${trackName}`,
-      '-m',
-      `Reverts ${reverts.map((m) => m.sha.slice(0, 8)).join(', ')}.`,
-      '--no-verify',
-    ]);
-    if (ok !== null) committed = (await git(cwd, ['rev-parse', 'HEAD']))?.trim() ?? null;
+/** Step 7: one commit holding the reverts and the file edits — only if anything was reverted. */
+async function commitDelete(
+  project: RegistryProject,
+  trackName: string,
+  reverts: { sha: string }[],
+  specsDeleted: string[]
+): Promise<string | null> {
+  if (reverts.length === 0) return null;
+  const cwd = project.cwd;
+  // One path at a time: `git add` rejects the whole call when any pathspec
+  // matches nothing, which a deleted never-committed spec does — and
+  // PROJECT.md would silently drop out of the commit with it.
+  for (const path of [project.doc || 'PROJECT.md', ...specsDeleted]) {
+    await git(cwd, ['add', '-A', '--', path]);
   }
-
-  logger.info(
-    { cwd, track: trackName, reverted: reverts.length, cancelled, discarded, branchRemoved, specsDeleted, committed },
-    'track deleted'
-  );
-  return {
-    committed,
-    reverted: reverts.map((m) => m.sha),
-    cancelled,
-    discarded,
-    branchRemoved,
-    specsDeleted,
-    detail: committed
-      ? `Deleted "${trackName}" and reverted ${reverts.length} merge(s) in one commit (${committed.slice(0, 8)}), not pushed.`
-      : `Deleted "${trackName}". The changes are left uncommitted.`,
-  };
+  const ok = await git(cwd, [
+    ...COMMIT_IDENTITY,
+    'commit',
+    '-q',
+    '-m',
+    `Delete track: ${trackName}`,
+    '-m',
+    `Reverts ${reverts.map((m) => m.sha.slice(0, 8)).join(', ')}.`,
+    '--no-verify',
+  ]);
+  return ok !== null ? ((await git(cwd, ['rev-parse', 'HEAD']))?.trim() ?? null) : null;
 }

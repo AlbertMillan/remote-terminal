@@ -33,9 +33,11 @@ import { runRebuildStage } from './stages/rebuild.js';
 import {
   ensureTrackBranch,
   findActiveTrackBranchByName,
+  isTrackBranch,
   trackOfFeature,
   TrackBranchError,
 } from '../projects/track-branches.js';
+import { withProjectLock } from '../projects/project-lock.js';
 import { isProcessRunning } from '../utils/platform.js';
 import type { UsageSink } from '../agent/claude-run.js';
 import { readFindings, selectedFindings } from './findings.js';
@@ -606,16 +608,30 @@ async function trackBaseFor(job: Job): Promise<string | null> {
 async function executeMerge(job: Job): Promise<void> {
   if (!job.branch) throw new Error('This job has no branch to merge');
   const baseBranch = await baseBranchOf(job);
-  // A track branch is checked out in the track's worktree, not the project.
-  const track = findActiveTrackBranchByName(job.projectCwd, baseBranch);
+  const merge = (mergeCwd?: string) =>
+    runMergeStage({
+      projectCwd: job.projectCwd,
+      branch: job.branch as string,
+      baseBranch,
+      title: job.title,
+      mergeCwd,
+    });
 
-  const result = await runMergeStage({
-    projectCwd: job.projectCwd,
-    branch: job.branch,
-    baseBranch,
-    title: job.title,
-    mergeCwd: track?.worktreePath,
-  });
+  // Into a track branch: that branch is checked out in the track's worktree,
+  // not the project, and the merge must not interleave with a Land or Delete
+  // of the same track. The lock is try-only (project-lock.ts): if it is taken
+  // this stage fails with the reason and can be retried.
+  const result = isTrackBranch(job.projectCwd, baseBranch)
+    ? await withProjectLock(job.projectCwd, `merging "${job.title}"`, async () => {
+        const track = findActiveTrackBranchByName(job.projectCwd, baseBranch);
+        if (!track) {
+          throw new Error(
+            `This job's track branch ${baseBranch} is gone — its track was landed or deleted while the job waited.`
+          );
+        }
+        return merge(track.worktreePath);
+      })
+    : await merge();
 
   // No stillLive() guard here: the merge has already landed in the repo, so
   // recording it is mandatory even if the job was cancelled mid-merge.

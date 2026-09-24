@@ -30,6 +30,9 @@ export interface TrackDeletePlan {
   }[];
   sessionLogGroup: boolean;
   mainDirty: string[];
+  /** A guess from the track's sessions: always offered unticked. */
+  guessedFiles: { path: string; status: string }[];
+  guessedCommits: { sha: string; subject: string }[];
   unattributed: { dirtyFiles: number } | null;
 }
 
@@ -114,6 +117,34 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
       </section>`
     : '';
 
+  const guessed =
+    plan.guessedFiles.length || plan.guessedCommits.length
+      ? `<section class="td-section">
+        <h4>Guessed from this track’s sessions — unticked</h4>
+        <p class="td-note">These look like this track’s work on main, going by what its sessions
+          wrote. Tick only what you recognise.</p>
+        ${plan.guessedFiles
+          .map(
+            (f) => `
+          <label class="td-check">
+            <input type="checkbox" class="td-restore" value="${escapeAttr(f.path)}">
+            <span>Discard uncommitted <code>${escapeHtml(f.path)}</code>
+              <span class="td-muted">(${escapeHtml(f.status)})</span></span>
+          </label>`
+          )
+          .join('')}
+        ${plan.guessedCommits
+          .map(
+            (c) => `
+          <label class="td-check">
+            <input type="checkbox" class="td-revert-guess" value="${escapeAttr(c.sha)}">
+            <span>Revert <code>${escapeHtml(c.sha.slice(0, 8))}</code> ${escapeHtml(c.subject)}</span>
+          </label>`
+          )
+          .join('')}
+      </section>`
+      : '';
+
   const unattributed = plan.unattributed
     ? `<p class="td-note">This track never had a branch, so code written for it on main can’t be
         told apart from other work, and this delete doesn’t touch it.${
@@ -128,7 +159,7 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
       <h4>Removed</h4>
       <ul>${removed.map((r) => `<li>${r}</li>`).join('') || '<li>Nothing but the record of it</li>'}</ul>
     </section>
-    ${merges}${unresolved}${specs}${unattributed}
+    ${merges}${unresolved}${specs}${guessed}${unattributed}
     <p class="td-commit"></p>
     <p class="td-error"></p>`;
 }
@@ -140,12 +171,15 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
  */
 export function describeChoice(
   plan: TrackDeletePlan,
-  revertCount: number
+  revertCount: number,
+  restoring: string[] = []
 ): { commit: string; error: string | null } {
-  if (revertCount > 0 && plan.mainDirty.length > 0) {
+  // Ticked guessed files are discarded as part of the delete, so they don't block.
+  const blocking = plan.mainDirty.filter((p) => !restoring.includes(p.replace(/\\/g, '/')));
+  if (revertCount > 0 && blocking.length > 0) {
     return {
       commit: '',
-      error: `Reverting needs a clean checkout. Commit or stash these first: ${plan.mainDirty.join(', ')}`,
+      error: `Reverting needs a clean checkout. Commit or stash these first: ${blocking.join(', ')}`,
     };
   }
   return {
@@ -200,7 +234,11 @@ export async function openTrackDeleteDialog(
   const ticked = (cls: string): string[] =>
     [...modal.querySelectorAll<HTMLInputElement>(`input.${cls}:checked`)].map((i) => i.value);
   const refresh = (): void => {
-    const { commit, error } = describeChoice(plan, ticked('td-revert').length);
+    const { commit, error } = describeChoice(
+      plan,
+      ticked('td-revert').length + ticked('td-revert-guess').length,
+      ticked('td-restore')
+    );
     (modal.querySelector('.td-commit') as HTMLElement).textContent = commit;
     errorEl.textContent = error ?? '';
     confirmBtn.disabled = error !== null;
@@ -233,6 +271,8 @@ export async function openTrackDeleteDialog(
             token: plan.token,
             revert: ticked('td-revert'),
             deleteSpecs: ticked('td-spec'),
+            restoreFiles: ticked('td-restore'),
+            revertGuessed: ticked('td-revert-guess'),
           }),
         });
         const data = (await res.json().catch(() => ({}))) as {

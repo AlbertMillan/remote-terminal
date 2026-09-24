@@ -123,6 +123,19 @@ export function activeRunCount(): number {
 // ---------------------------------------------------------------------------
 // Git helpers (read-only). All non-throwing — absence of git is a valid state.
 // ---------------------------------------------------------------------------
+
+/**
+ * `-c` flags for commits claude-remote makes itself (merges, ticks, lands,
+ * deletes), so they work on a machine with no git identity configured and are
+ * recognisable in the log. Spread before the subcommand: `git(cwd, [...COMMIT_IDENTITY, 'commit', …])`.
+ */
+export const COMMIT_IDENTITY = [
+  '-c',
+  'user.name=claude-remote',
+  '-c',
+  'user.email=claude-remote@localhost',
+];
+
 export async function git(cwd: string, args: string[]): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync('git', args, {
@@ -505,13 +518,22 @@ export function spawnClaude(
 
 // --- Post-run edit-scope enforcement --------------------------------------
 
-interface GitStatusEntry {
+export interface GitStatusEntry {
   path: string;
   untracked: boolean;
 }
 
-export async function gitStatusEntries(cwd: string): Promise<GitStatusEntry[] | null> {
-  const out = await git(cwd, ['status', '--porcelain']);
+export async function gitStatusEntries(
+  cwd: string,
+  opts: { allUntracked?: boolean } = {}
+): Promise<GitStatusEntry[] | null> {
+  // By default git collapses a new directory to one `?? dir/` entry. Callers
+  // that match individual files (attribution, Delete track) need every file.
+  const out = await git(cwd, [
+    'status',
+    '--porcelain',
+    ...(opts.allUntracked ? ['--untracked-files=all'] : []),
+  ]);
   if (out === null) return null; // not a git repo / git unavailable
   const entries: GitStatusEntry[] = [];
   for (const line of out.split('\n')) {

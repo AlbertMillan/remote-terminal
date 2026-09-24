@@ -1,9 +1,11 @@
 import { randomUUID } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { join, relative, resolve, isAbsolute } from 'path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { dirname, join, isAbsolute } from 'path';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
-import { git } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
+import { isInside } from '../utils/paths.js';
+import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import {
   createWorktree,
@@ -25,6 +27,7 @@ import {
   updateFeature,
   type FeatureStatus,
 } from './project-doc-format.js';
+import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 
 const logger = createLogger('track-branches');
 
@@ -123,10 +126,31 @@ export function findActiveTrackBranchByName(cwd: string, branch: string): TrackB
   return row ? toTrackBranch(row) : null;
 }
 
-/** Forget every row for a track, landed ones included. Only Delete track calls this. */
-export function deleteTrackBranchRows(cwd: string, trackName: string): void {
+/** True when `branch` is, or was, one of this project's track branches. */
+export function isTrackBranch(cwd: string, branch: string): boolean {
+  return (
+    getDatabase()
+      .prepare('SELECT 1 FROM track_branches WHERE project_key = ? AND branch = ?')
+      .get(pathKey(cwd), branch) !== undefined
+  );
+}
+
+/**
+ * Forget a track's rows. Only Delete track calls this. `keepUnlanded` keeps the
+ * row of a branch whose worktree could not be removed, so it stays on the
+ * board and can be deleted again instead of being left on disk unrecorded.
+ */
+export function deleteTrackBranchRows(
+  cwd: string,
+  trackName: string,
+  opts: { keepUnlanded?: boolean } = {}
+): void {
   getDatabase()
-    .prepare('DELETE FROM track_branches WHERE project_key = ? AND track_name = ?')
+    .prepare(
+      `DELETE FROM track_branches WHERE project_key = ? AND track_name = ?${
+        opts.keepUnlanded ? ' AND landed_at IS NOT NULL' : ''
+      }`
+    )
     .run(pathKey(cwd), trackName);
 }
 
@@ -177,15 +201,7 @@ export async function ensureTrackBranch(
 
   const existing = getActiveTrackBranch(project.cwd, name);
   if (existing) {
-    if (!existsSync(existing.worktreePath)) {
-      // The directory went missing (cleaned by hand, a crash mid-create); the
-      // branch still holds the work, so re-attach rather than start over.
-      await createWorktree(project.cwd, existing.id, name, {
-        base: existing.baseBranch,
-        path: existing.worktreePath,
-        branch: existing.branch,
-      });
-    }
+    await reattachIfMissing(project, existing);
     return existing;
   }
 
@@ -225,6 +241,21 @@ export async function ensureTrackBranch(
   return getActiveTrackBranch(project.cwd, name) as TrackBranch;
 }
 
+/**
+ * Re-create a track's worktree directory if it went missing (cleaned by hand,
+ * a crash mid-create). The branch still holds the work, so this re-attaches to
+ * it rather than starting over.
+ */
+async function reattachIfMissing(project: RegistryProject, track: TrackBranch): Promise<void> {
+  if (existsSync(track.worktreePath)) return;
+  await git(project.cwd, ['worktree', 'prune']);
+  await createWorktree(project.cwd, track.id, track.trackName, {
+    base: track.baseBranch,
+    path: track.worktreePath,
+    branch: track.branch,
+  });
+}
+
 /** The track a feature sits in on main, or null for an unknown id. */
 export function trackOfFeature(project: RegistryProject, featureId: string): string | null {
   return findFeature(readProjectDoc(project).doc, featureId)?.track.name ?? null;
@@ -243,9 +274,10 @@ export function readSpecForTrack(
   if (!spec || !trackName || isAbsolute(spec)) return null;
   const branch = getActiveTrackBranch(project.cwd, trackName);
   if (!branch) return null;
-  const abs = resolve(branch.worktreePath, spec);
-  const rel = relative(branch.worktreePath, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  // Symlinks resolved before the containment check: a link a session or job
+  // left under project/ could otherwise point anywhere on the machine.
+  const abs = resolveInWorktree(branch.worktreePath, spec);
+  if (!abs) return null;
   try {
     return existsSync(abs) ? readFileSync(abs, 'utf-8') : null;
   } catch {
@@ -313,6 +345,7 @@ export async function landTrack(
     );
   }
 
+  await reattachIfMissing(project, track);
   if (await isDirty(track.worktreePath)) {
     throw new TrackBranchError(
       `The track worktree has uncommitted changes (${track.worktreePath}). Commit or discard them first.`,
@@ -336,14 +369,11 @@ export async function landTrack(
 
   // 1. Read the worktree's ticks, then take PROJECT.md out of the merge.
   const worktreeStatuses = readWorktreeStatuses(track.worktreePath, docRel, featureIds);
-  await resetDocToMergeBase(track, docRel);
+  const beforeReset = await resetDocToMergeBase(track, docRel);
 
   // 2. Merge.
   const merged = await git(project.cwd, [
-    '-c',
-    'user.name=claude-remote',
-    '-c',
-    'user.email=claude-remote@localhost',
+    ...COMMIT_IDENTITY,
     'merge',
     '--no-ff',
     track.branch,
@@ -352,6 +382,11 @@ export async function landTrack(
   ]);
   if (merged === null) {
     await git(project.cwd, ['merge', '--abort']);
+    // Take the reset commit back off the track branch. Without this the
+    // worktree's ticks exist only in memory, and the next Land reads the
+    // already-reset copy: the progress is gone for good. Safe: the worktree
+    // was checked clean above, so --hard discards nothing else.
+    if (beforeReset) await git(track.worktreePath, ['reset', '--hard', beforeReset]);
     throw new TrackBranchError(
       `Merging ${track.branch} into ${track.baseBranch} failed. Merge ${track.baseBranch} into the track in its worktree, resolve, and land again.`,
       409
@@ -386,11 +421,6 @@ export async function landTrack(
   };
 }
 
-function isInside(root: string, p: string): boolean {
-  const rel = relative(resolve(root), resolve(p));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
 async function isDirty(cwd: string): Promise<boolean> {
   const status = await git(cwd, ['status', '--porcelain']);
   if (status === null) throw new TrackBranchError(`Could not read the repository state at ${cwd}`, 500);
@@ -413,13 +443,18 @@ function readWorktreeStatuses(
   return out;
 }
 
-/** Commit the branch's PROJECT.md back to its merge-base version, if it moved. */
-async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<void> {
+/**
+ * Commit the branch's PROJECT.md back to its merge-base version, if it moved.
+ * Returns the HEAD from before that commit, so a failed land can take it back
+ * off — or null when nothing was committed.
+ */
+async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<string | null> {
   const wt = track.worktreePath;
   const base = (await git(wt, ['merge-base', 'HEAD', track.baseBranch]))?.trim();
-  if (!base) return;
+  if (!base) return null;
   const changed = (await git(wt, ['diff', '--name-only', base, 'HEAD', '--', docRel]))?.trim();
-  if (!changed) return;
+  if (!changed) return null;
+  const before = (await git(wt, ['rev-parse', 'HEAD']))?.trim() ?? null;
 
   const existedAtBase = (await git(wt, ['cat-file', '-e', `${base}:${docRel}`])) !== null;
   if (existedAtBase) {
@@ -428,10 +463,7 @@ async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<
     await git(wt, ['rm', '-q', '--', docRel]);
   }
   await git(wt, [
-    '-c',
-    'user.name=claude-remote',
-    '-c',
-    'user.email=claude-remote@localhost',
+    ...COMMIT_IDENTITY,
     'commit',
     '-m',
     `Leave ${docRel} to the main checkout`,
@@ -439,6 +471,7 @@ async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<
     '--',
     docRel,
   ]);
+  return before;
 }
 
 async function syncTicks(
@@ -462,10 +495,7 @@ async function syncTicks(
   });
   await git(project.cwd, ['add', '--', docRel]);
   await git(project.cwd, [
-    '-c',
-    'user.name=claude-remote',
-    '-c',
-    'user.email=claude-remote@localhost',
+    ...COMMIT_IDENTITY,
     'commit',
     '-m',
     `chore: carry "${trackName}" progress over from its track branch`,
@@ -474,4 +504,57 @@ async function syncTicks(
     docRel,
   ]);
   return toApply.map(([id]) => id);
+}
+
+// --- Branch now ----------------------------------------------------------
+
+/**
+ * Move a track's work off main into a new track branch, after the fact.
+ *
+ * For a track whose sessions edited the main checkout. The file list comes
+ * from the attribution guess and must be confirmed by the user; anything not
+ * in the server's own guess is ignored, so a request can never move an
+ * arbitrary path. Every file is copied into the worktree BEFORE any is
+ * restored on main, so a failed copy leaves main untouched. Commits already on
+ * main are not moved — that would rewrite main — and stay for Delete track to
+ * offer.
+ */
+export async function branchNow(
+  project: RegistryProject,
+  trackName: string,
+  files: string[]
+): Promise<{ branch: TrackBranch; moved: string[] }> {
+  if (getActiveTrackBranch(project.cwd, trackName)) {
+    throw new TrackBranchError('This track already has a branch — open a session in it instead', 409);
+  }
+  const guess = await guessTrackWork(project, trackName);
+  const allowed = new Map(guess.files.map((f) => [f.path.toLowerCase(), f]));
+  const chosen = files
+    .map((p) => allowed.get(p.replace(/\\/g, '/').toLowerCase()))
+    .filter((f): f is GuessedFile => f !== undefined);
+  if (chosen.length === 0) {
+    throw new TrackBranchError('None of those files are uncommitted work of this track', 400);
+  }
+
+  const branch = await ensureTrackBranch(project, trackName);
+
+  for (const f of chosen) {
+    const dst = join(branch.worktreePath, f.path);
+    if (f.status === 'deleted') {
+      rmSync(dst, { force: true });
+    } else {
+      mkdirSync(dirname(dst), { recursive: true });
+      copyFileSync(join(project.cwd, f.path), dst);
+    }
+  }
+  for (const f of chosen) {
+    if (f.status === 'untracked') {
+      rmSync(join(project.cwd, f.path), { force: true });
+    } else {
+      await git(project.cwd, ['restore', '--source=HEAD', '--staged', '--worktree', '--', f.path]);
+    }
+  }
+
+  logger.info({ cwd: project.cwd, track: trackName, moved: chosen.length }, 'track: work moved off main');
+  return { branch, moved: chosen.map((f) => f.path) };
 }

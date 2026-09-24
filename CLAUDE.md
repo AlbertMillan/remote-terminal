@@ -164,6 +164,12 @@ before **merge**.
 - Its step order is load-bearing: preflight clean → cancel → revert `--no-commit` →
   (conflict: `revert --abort` + `reset --hard` preflight HEAD) → teardown → file edits →
   one commit. Tearing down before the revert makes a conflict unrecoverable.
+- Land, Delete track, Branch now and a merge into a track branch share a per-project
+  **try** lock (`project-lock.ts`). Never make it wait: Delete holds it while
+  `cancelJob` awaits the stage it is cancelling, so a waiting merge deadlocks it.
+- `track-attribution.ts` output is a guess: board count, confirmed list for Branch now,
+  **unticked** in Delete. Match files with `gitStatusEntries(cwd, { allUntracked: true })`
+  — plain `--porcelain` collapses a new directory to one entry and hides its files.
 
 ## Job board → `docs/job-decisions.md`, `docs/job-documents.md`
 

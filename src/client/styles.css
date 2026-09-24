@@ -2616,6 +2616,16 @@ body {
   cursor: pointer;
 }
 .pw-track-delete:hover { color: var(--danger); border-color: var(--danger); }
+.pw-track-branchnow {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--warning);
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
 .pw-orphans .phase-group-head { cursor: default; }
 .pw-orphan .pw-track-delete { margin-left: auto; }
 

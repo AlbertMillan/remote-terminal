@@ -1,5 +1,5 @@
 import { createLogger } from '../../utils/logger.js';
-import { git } from '../../agent/claude-run.js';
+import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
 import { hasRemote } from '../worktree.js';
 
 const logger = createLogger('stage-merge');
@@ -63,10 +63,7 @@ export async function runMergeStage(opts: {
 
   logger.info({ projectCwd, branch, baseBranch }, 'merge: merging job branch');
   const merged = await git(projectCwd, [
-    '-c',
-    'user.name=claude-remote',
-    '-c',
-    'user.email=claude-remote@localhost',
+    ...COMMIT_IDENTITY,
     'merge',
     '--no-ff',
     branch,

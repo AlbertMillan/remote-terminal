@@ -10,10 +10,14 @@ import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readProjectDoc, readSpec } from './project-store.js';
 import {
   TrackBranchError,
+  branchNow,
   ensureTrackBranch,
+  getActiveTrackBranch,
   landTrack,
   readSpecForTrack,
 } from './track-branches.js';
+import { attributionContext, guessTrackWork } from './track-attribution.js';
+import { ProjectBusyError, withProjectLock } from './project-lock.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
@@ -168,7 +172,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     const project = findWorkspaceProject(body.cwd);
     if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
-    return withStore(reply, () => {
+    return withErrors(reply, () => {
       const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
         addFeature(doc, {
           title: body.title as string,
@@ -202,7 +206,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     const project = findWorkspaceProject(body.cwd);
     if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
-    return withStore(reply, () => {
+    return withErrors(reply, () => {
       const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
         updateFeature(doc, body.id as string, {
           ...(body.status !== undefined ? { status: body.status as FeatureStatus } : {}),
@@ -229,7 +233,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
-      return withStore(reply, () => {
+      return withErrors(reply, () => {
         const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
           removeFeature(doc, body.id as string)
         );
@@ -249,7 +253,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
-      return withStore(reply, () => {
+      return withErrors(reply, () => {
         const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
           reorderFeatures(doc, body.track as string, body.ids as string[])
         );
@@ -285,7 +289,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       }
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
-      return withTrack(reply, async () => ({
+      return withErrors(reply, async () => ({
         branch: await ensureTrackBranch(project, body.track as string),
       }));
     }
@@ -301,7 +305,56 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
       const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
-      return withTrack(reply, () => landTrack(project, body.track as string, liveCwds));
+      return withErrors(reply, () =>
+        withProjectLock(project.cwd, `landing "${body.track}"`, () =>
+          landTrack(project, body.track as string, liveCwds)
+        )
+      );
+    }
+  );
+
+  // --- Work on main outside any branch -------------------------------------
+  // A GUESS at what a track's sessions did on main (track-attribution.ts). The
+  // board shows a count; Branch now moves only files the server itself
+  // guessed, after the user confirms the list.
+
+  app.get<{ Querystring: { cwd?: string } }>(
+    '/api/projects/unbranched-work',
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.status(400).send({ error: 'cwd required' });
+      const project = findWorkspaceProject(cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const tracks: Record<string, { files: { path: string; status: string }[]; commits: number }> = {};
+      // One context for every track: transcripts, status and the phase list
+      // are the same for all of them, and this runs on each project render.
+      const ctx = await attributionContext(project);
+      for (const t of ctx.doc.tracks) {
+        if (getActiveTrackBranch(project.cwd, t.name)) continue; // its work is attributable already
+        const guess = await guessTrackWork(project, t.name, ctx);
+        if (guess.files.length || guess.commits.length) {
+          tracks[t.name] = { files: guess.files, commits: guess.commits.length };
+        }
+      }
+      return { tracks };
+    }
+  );
+
+  app.post<{ Body?: { cwd?: string; track?: string; files?: unknown } }>(
+    '/api/projects/track/branch-now',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track || !Array.isArray(body.files)) {
+        return reply.status(400).send({ error: 'cwd, track and files required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const files = body.files.filter((x): x is string => typeof x === 'string');
+      return withErrors(reply, () =>
+        withProjectLock(project.cwd, `moving "${body.track}" off main`, () =>
+          branchNow(project, body.track as string, files)
+        )
+      );
     }
   );
 
@@ -317,12 +370,20 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
       const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
-      return withTrack(reply, async () => ({ plan: await planTrackDelete(project, track, liveCwds) }));
+      return withErrors(reply, async () => ({ plan: await planTrackDelete(project, track, liveCwds) }));
     }
   );
 
   app.delete<{
-    Body?: { cwd?: string; track?: string; token?: string; revert?: unknown; deleteSpecs?: unknown };
+    Body?: {
+      cwd?: string;
+      track?: string;
+      token?: string;
+      revert?: unknown;
+      deleteSpecs?: unknown;
+      restoreFiles?: unknown;
+      revertGuessed?: unknown;
+    };
   }>('/api/projects/track', async (request, reply) => {
     const body = request.body || {};
     if (!body.cwd || !body.track || !body.token) {
@@ -333,59 +394,59 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     const strings = (v: unknown): string[] =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
-    return withTrack(reply, () =>
-      executeTrackDelete(
+    return withErrors(reply, () =>
+      withProjectLock(project.cwd, `deleting "${body.track}"`, () => executeTrackDelete(
         project,
         body.track as string,
-        { token: body.token as string, revert: strings(body.revert), deleteSpecs: strings(body.deleteSpecs) },
+        {
+          token: body.token as string,
+          revert: strings(body.revert),
+          deleteSpecs: strings(body.deleteSpecs),
+          restoreFiles: strings(body.restoreFiles),
+          revertGuessed: strings(body.revertGuessed),
+        },
         {
           liveSessions: () => sessionManager.getAllSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
           terminateSession: (id) => sessionManager.terminateSession(id),
           cancelJob,
           discardJob,
         }
-      )
+      ))
     );
   });
 
   logger.info('Project workspace routes registered');
 }
 
-/** Map TrackBranchError / ProjectStoreError onto the reply. */
-async function withTrack<T>(
+/**
+ * Run a route body and map the errors it may throw onto the reply. One
+ * wrapper for every workspace and track route, sync or async, so each error
+ * type answers the same way wherever it is thrown:
+ *  - ProjectStoreError: its status, with `conflict` set on the 409 staleness
+ *    case (the client reloads and says so);
+ *  - TrackDeleteError: its status, with the conflicting files of a failed revert;
+ *  - TrackBranchError, ProjectBusyError, WorktreeError: their status and message;
+ *  - anything else: 500, logged.
+ */
+async function withErrors<T>(
   reply: { status: (code: number) => { send: (body: unknown) => unknown } },
-  fn: () => Promise<T>
+  fn: () => T | Promise<T>
 ): Promise<T | unknown> {
   try {
     return await fn();
   } catch (error) {
+    if (error instanceof ProjectStoreError) {
+      return reply.status(error.status).send({ error: error.message, conflict: error.status === 409 });
+    }
     if (error instanceof TrackDeleteError) {
       return reply.status(error.status).send({ error: error.message, conflicts: error.conflicts });
     }
     if (
       error instanceof TrackBranchError ||
-      error instanceof ProjectStoreError ||
+      error instanceof ProjectBusyError ||
       error instanceof WorktreeError
     ) {
       return reply.status(error.status).send({ error: error.message });
-    }
-    logger.error({ error }, 'track route failed');
-    return reply
-      .status(500)
-      .send({ error: error instanceof Error ? error.message : 'Request failed' });
-  }
-}
-
-/** Map ProjectStoreError (notably the 409 staleness conflict) onto the reply. */
-function withStore<T>(
-  reply: { status: (code: number) => { send: (body: unknown) => unknown } },
-  fn: () => T
-): T | unknown {
-  try {
-    return fn();
-  } catch (error) {
-    if (error instanceof ProjectStoreError) {
-      return reply.status(error.status).send({ error: error.message, conflict: error.status === 409 });
     }
     logger.error({ error }, 'project route failed');
     return reply

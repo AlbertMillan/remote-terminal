@@ -39,6 +39,8 @@ const plan = (over: Partial<TrackDeletePlan> = {}): TrackDeletePlan => ({
   ],
   sessionLogGroup: true,
   mainDirty: [],
+  guessedFiles: [],
+  guessedCommits: [],
   unattributed: null,
   ...over,
 });
@@ -65,6 +67,27 @@ describe('renderTrackDeletePlan', () => {
       plan({ branch: null, merges: [], unattributed: { dirtyFiles: 3 } })
     );
     expect(document.body.textContent).toContain('3 files have uncommitted changes on main');
+  });
+});
+
+describe('guessed items', () => {
+  const guessedPlan = () =>
+    plan({
+      guessedFiles: [{ path: 'src/pricing.ts', status: 'untracked' }],
+      guessedCommits: [{ sha: 'cccccccc3333', subject: 'session commit' }],
+      mainDirty: ['src/pricing.ts'],
+    });
+
+  it('renders them unticked, under a heading that says they are a guess', () => {
+    document.body.innerHTML = renderTrackDeletePlan(guessedPlan());
+    expect(document.body.textContent).toContain('Guessed from this track’s sessions');
+    expect(document.querySelectorAll('input.td-restore:checked, input.td-revert-guess:checked')).toHaveLength(0);
+    expect(document.querySelectorAll('input.td-restore, input.td-revert-guess')).toHaveLength(2);
+  });
+
+  it('lets a ticked guessed file stop blocking a revert', () => {
+    expect(describeChoice(guessedPlan(), 1).error).toContain('src/pricing.ts');
+    expect(describeChoice(guessedPlan(), 1, ['src/pricing.ts']).error).toBeNull();
   });
 });
 
@@ -116,6 +139,8 @@ describe('openTrackDeleteDialog', () => {
       token: 'tok-1',
       revert: ['aaaaaaaa1111'],
       deleteSpecs: ['project/alpha.md'],
+      restoreFiles: [],
+      revertGuessed: [],
     });
     expect(document.querySelector('.td-modal')).toBeNull();
   });

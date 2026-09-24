@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
-import { git } from '../../agent/claude-run.js';
+import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
 import { hasRemote } from '../worktree.js';
 import { mutateProjectDoc, readProjectDoc } from '../../projects/project-store.js';
 import { docPathFor, type RegistryProject } from '../../projects/registry.js';
@@ -95,10 +95,7 @@ export async function runRebuildStage(opts: {
   await git(project.cwd, ['add', '--', docRel]);
   const committed =
     (await git(project.cwd, [
-      '-c',
-      'user.name=claude-remote',
-      '-c',
-      'user.email=claude-remote@localhost',
+      ...COMMIT_IDENTITY,
       'commit',
       '-m',
       `chore: mark "${title}" done`,

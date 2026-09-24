@@ -91,8 +91,29 @@ It then syncs ticks, runs `git merge --no-ff` (`Merge track: <name>`), records
 `merge_sha`, commits the carried-over ticks (PROJECT.md only), pushes when there is a
 remote, and removes the worktree and the branch label.
 
-A merge conflict aborts the merge and leaves both checkouts as they were. The fix is to
-merge the base into the track in its worktree, resolve there, and land again.
+A merge conflict aborts the merge and leaves both checkouts as they were. That includes
+taking back the commit that reset the branch's PROJECT.md: by then the worktree's ticks
+exist only in memory, and without the rollback the next Land would read the reset copy,
+so the progress would be lost for good. The fix for a conflict is to merge the base into
+the track in its worktree, resolve there, and land again.
+
+A worktree folder that has gone missing is re-attached to its branch before Land, as
+`ensureTrackBranch` does, rather than failing with a 500.
+
+## One track operation at a time
+
+`src/server/projects/project-lock.ts` allows one of these at a time per project: Land,
+Delete track, Branch now, and the merge stage when it merges into a track branch. Each
+checks the repository's state, then acts on it over many git calls. Two at once pass
+their checks and then undo each other's work: a double-clicked Delete reverts twice, or
+a job approved at its merge gate merges into a worktree its track's Land is removing.
+
+The lock is **try-acquire, never wait.** A second caller is refused with what holds the
+lock: a 409 from a route, or a failed stage that can be retried from the merge. A waiting
+lock would deadlock: Delete holds it while `cancelJob` waits for a running stage to stop,
+and a merge stage waiting on the same lock would never stop. Inside the lock, the merge
+also checks again that its track branch still exists, so a track landed or deleted while
+the job waited fails with that reason instead of merging into a removed folder.
 
 ## Delete track
 
@@ -132,7 +153,11 @@ ticked by default.
    safe because step 2 guaranteed there was nothing uncommitted. Return 409 with the
    conflicting files.
 5. Close sessions in the track worktree, discard the jobs, remove the worktree and
-   branch, and delete every `track_branches` row for the track.
+   branch, and delete the track's `track_branches` rows. If the worktree or branch can't
+   be removed (on Windows a held file handle is enough), the unlanded row is **kept**.
+   Dropping it would leave a worktree on disk that nothing records. Kept, it shows under
+   "Branches with no matching track" and Delete can run again; the result names the
+   leftover path.
 6. Remove the track from PROJECT.md (`removeTrack`), delete the ticked specs, and
    remove the SESSION-LOG phase group (`removePhaseGroup`, matched on label **and**
    source).
@@ -160,6 +185,60 @@ Delete. The plan works without any features.
 
 **The per-feature ×** is hidden on branched tracks. Removing one line from a track whose
 code sits on a branch would suggest the code went too.
+
+## Work on main outside any branch (a guess)
+
+`src/server/projects/track-attribution.ts`. The agent rule below can't stop a session
+from editing a track's code in the main checkout. This part notices when one did. It is
+a **guess**, and every surface treats it as one:
+
+- the board shows a count;
+- Branch now asks for the file list to be confirmed;
+- Delete track offers these items **unticked**.
+
+**Which sessions.** A session counts as the track's when either:
+
+- it is in the `sessionIds` of the track's SESSION-LOG phase group, or
+- its transcript wrote one of the track's feature ids into a PROJECT.md. That covers a
+  Write or Edit of the file, and a `Bash`/`PowerShell` command that names `PROJECT.md`,
+  which is how the Usage visibility session added its track (`cat >> PROJECT.md`).
+
+Transcripts are read from the Claude Code folder for the project cwd (every
+non-alphanumeric character becomes `-`). Discovery's `transcriptPaths` isn't used,
+because it is capped at 5.
+
+**What gets guessed.**
+
+- **Files:** paths those sessions wrote with Write, Edit, MultiEdit or NotebookEdit,
+  minus PROJECT.md, `project/**` and the session log. Only paths that are still modified
+  or untracked on main count, so anything since restored (a rewound checkpoint, say)
+  drops out.
+- **Commits:** first-parent, non-merge commits made in a session's time window that
+  touch one of those paths. First-parent means a job's branch commits are never
+  guessed; the job's merge covers them.
+
+**Blind spot.** Files changed through a shell (`sed -i`, `cat >`, a script) are
+invisible.
+
+**Status must list every untracked file** (`gitStatusEntries(cwd, { allUntracked: true })`).
+By default git collapses a new directory to one `?? dir/` entry. That hides every file
+in it from a per-file match, so Branch now would leave them behind and Delete's clean
+check would ask about a directory instead.
+
+**Cost.** Each transcript is cached by size and read incrementally. Only appended whole
+lines are parsed, cut at the last newline byte, which can never fall inside a multi-byte
+UTF-8 character. On this repo (64 transcripts, 50 MB) the first scan took about 270 ms
+and later ones about 50 ms. The board fetches `GET /api/projects/unbranched-work` once
+per render of a project, and re-renders when the result arrives.
+
+**Branch now** (`POST /api/projects/track/branch-now`) moves only files in the server's
+own guess, so a request can't move an arbitrary path. Every file is copied into the new
+worktree before any is restored on main. Commits already on main aren't moved (that
+would rewrite main); Delete offers them instead.
+
+**In Delete track**, ticked guessed files are snapshotted, then restored to HEAD (or
+deleted, if untracked) *before* the reverts. They don't block the clean-checkout check.
+If a revert conflicts, the snapshots are written back after the `reset --hard`.
 
 ## The agent rule (global CLAUDE.md)
 
