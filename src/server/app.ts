@@ -21,6 +21,7 @@ import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
+import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,6 +40,9 @@ export async function createApp(): Promise<FastifyInstance> {
   sweepUnloggedSessions();
   // A job marked running cannot have survived the restart — re-queue it.
   reconcileJobsOnStartup();
+  // Import transcript usage (all history on first boot), then keep up. Runs in
+  // the background; the board shows what has been read so far.
+  startUsageLedger();
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -268,6 +272,8 @@ export async function createApp(): Promise<FastifyInstance> {
 
     // Trigger notification
     notificationService.notify(sessionId, type as NotificationType);
+    // A finished turn has just written its usage to the transcript.
+    if (type === 'completed') scheduleIngest();
 
     return { success: true, sessionId, type };
   });
@@ -319,6 +325,8 @@ export async function createApp(): Promise<FastifyInstance> {
 
     // Shutdown session manager
     await sessionManager.shutdown();
+
+    stopUsageLedger();
 
     // Close database
     closeDatabase();

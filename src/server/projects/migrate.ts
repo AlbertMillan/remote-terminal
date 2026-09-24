@@ -149,7 +149,7 @@ export async function migrateProject(project: RegistryProject): Promise<MigrateR
     logger.info({ cwd }, 'migrate: generating canonical project index');
     // Writes are confined to the index plus the companion folder; anything else
     // the run touches is reverted by runClaude's post-run scope check.
-    await runClaude(cwd, prompt, [fileName, `${COMPANION_DIR}/**`]);
+    await runClaude(cwd, prompt, [fileName, `${COMPANION_DIR}/**`], { tag: { projectCwd: cwd, kind: 'migrate' } });
 
     // A run can exit 0 without writing anything (derailed, or it decided there
     // was nothing to do). Don't report success on a no-write — the board offers

@@ -113,9 +113,16 @@ before **merge**.
 - Stages use `jobs.stageTimeoutMs` (20 min), **not** `projectLog.timeoutMs` (180s).
 - QA precedence is failed > skipped > passed: one passing command must never mask a driver
   that never ran.
-- `onUsage` fires **before** the error and denial checks **and on failure paths** — a killed
-  run still spent its tokens. `addStageUsage()` adds rather than replaces. Read
-  `modelUsage`, not the envelope's `usage` (which reports only the final turn).
+- Usage comes only from the transcript ledger (`src/server/usage/`), never the `claude -p`
+  envelope — a killed run prints none, and on `--resume` it reports the whole session's
+  total. Key rows by `message.id`: a response repeats once per content block, and summing
+  lines doubles every figure. See `docs/token-usage-feature.md`.
+- Every `runClaude` call passes a `tag`, recorded in `agent_runs` **before** the spawn — a
+  run killed a second in is attributable only if its row already exists. A message belongs
+  to the run whose window holds it (one resumed session spans stages); outside every window
+  it is the job's with no stage (Take over). Discard never deletes ledger rows. Reads are
+  cached: anything writing ledger tables outside `usage/` calls `invalidateUsageCache()`,
+  or the board keeps serving the old figures.
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
 - A job's diff base is its recorded `baseBranch`, never the project's current branch — a job
   parked across a branch switch would otherwise be measured against the wrong thing.
