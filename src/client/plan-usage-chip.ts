@@ -20,6 +20,8 @@ export interface WindowReading {
 
 export interface PlanUsage {
   snapshot: { fiveHour: WindowReading | null; sevenDay: WindowReading | null } | null;
+  /** When the relay last reached the server, limits or not; null if it never has. */
+  relaySeenAt?: string | null;
   setup: { command: string | null };
 }
 
@@ -86,6 +88,21 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
       )
     : [];
 
+  // The relay has reported but carried no limits: it is installed, and asking
+  // for the snippet again would send the user to fix what is not broken.
+  if (windows.length === 0 && data.relaySeenAt) {
+    const seen = Date.parse(data.relaySeenAt);
+    return {
+      summary: '<span class="pu-label">Plan usage</span> <span class="pu-muted">waiting</span>',
+      body:
+        `<p>The status line is set up (last heard from ${escapeHtml(clock(seen, now - seen > 20 * 3600_000))}) ` +
+        'but has not reported limits yet. They arrive after a Claude Code session answers its ' +
+        'first message, and only on a Pro or Max plan.</p>',
+      level: 'ok',
+      stale: false,
+    };
+  }
+
   if (windows.length === 0) {
     const command = data.setup.command;
     const snippet = command
@@ -98,7 +115,9 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
       body:
         '<p>No reading yet. Add this to <code>~/.claude/settings.json</code>; the chip fills in ' +
         'once a Claude Code session has answered a message.</p>' +
-        snippet,
+        snippet +
+        '<p class="pu-detail">Already added? Then the status line cannot reach this server — ' +
+        'set <code>CLAUDE_REMOTE_URL</code> if it is not on http://localhost:4220.</p>',
       level: 'ok',
       stale: false,
     };
@@ -151,21 +170,32 @@ export class PlanUsageChip {
   private data: PlanUsage | null = null;
   private pollTimer: number | null = null;
   private tickTimer: number | null = null;
+  /** Kept so detach() can remove exactly what attach() added. */
+  private readonly onFocus = () => void this.refresh();
+  private readonly onVisibility = () => {
+    if (document.visibilityState === 'visible') void this.refresh();
+  };
 
   /** Wire up the static markup and start polling. Safe to call once. */
   attach(): void {
     if (!document.getElementById('plan-usage')) return;
     void this.refresh();
-    this.pollTimer = window.setInterval(() => void this.refresh(), POLL_MS);
+    // A hidden tab skips its polls and catches up the moment it is shown.
+    this.pollTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') void this.refresh();
+    }, POLL_MS);
     // Countdowns and staleness move without a new reading.
     this.tickTimer = window.setInterval(() => this.render(), TICK_MS);
-    window.addEventListener('focus', () => void this.refresh());
+    window.addEventListener('focus', this.onFocus);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   detach(): void {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
     this.pollTimer = this.tickTimer = null;
+    window.removeEventListener('focus', this.onFocus);
+    document.removeEventListener('visibilitychange', this.onVisibility);
   }
 
   async refresh(): Promise<void> {

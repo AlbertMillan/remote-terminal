@@ -80,39 +80,76 @@ function merge(
 }
 
 let snapshot: PlanUsageSnapshot | null = null;
+/**
+ * When the status line relay last reached the server, limits or not. It is
+ * what tells "never set up" apart from "set up, but no limits yet" — a session
+ * before its first response, a plan without limits — so the chip does not ask
+ * for a snippet that is already installed.
+ */
+let relaySeenAt: string | null = null;
+
+/**
+ * What the file on disk last recorded, so a post that changes nothing worth
+ * keeping writes nothing. Every session's status line posts on every render;
+ * a synchronous write and rename per post churns the disk on the event loop,
+ * and on Windows the rename fails outright whenever an indexer or antivirus
+ * has the file open.
+ *
+ * Worth keeping: a percentage or reset time that changed. Not worth a write:
+ * a fresher `observedAt` alone (a restored "as of" a little old is harmless),
+ * or relay contact already recorded within the hour.
+ */
+let savedFigures: string | null = null;
+let relaySavedAt = 0;
+const RELAY_SAVE_EVERY_MS = 60 * 60 * 1000;
+
+function figuresOf(s: PlanUsageSnapshot | null): string {
+  const w = (r: WindowReading | null | undefined) => (r ? [r.usedPercentage, r.resetsAt] : null);
+  return JSON.stringify([w(s?.fiveHour), w(s?.sevenDay)]);
+}
 
 function snapshotPath(): string {
   return join(getConfig().persistence.dataDir, 'plan-usage.json');
 }
 
 /**
- * Take one status line payload. Returns false when it carried no usable limits
- * (not an error: plans without limits, and a session before its first
- * response, send none).
+ * Take one relay post. Every post proves the relay is installed; one carrying
+ * usable limits also updates the snapshot. Returns whether it carried limits
+ * (their absence is normal: plans without limits, and a session before its
+ * first response, send none).
  */
 export function recordReading(body: unknown, now = Date.now()): boolean {
+  relaySeenAt = new Date(now).toISOString();
   const reading = parseReading(body, now);
-  if (!reading) return false;
-  const observedAt = new Date(now).toISOString();
-  const next: PlanUsageSnapshot = {
-    fiveHour: merge(snapshot?.fiveHour ?? null, reading.fiveHour, observedAt),
-    sevenDay: merge(snapshot?.sevenDay ?? null, reading.sevenDay, observedAt),
-  };
-  snapshot = next;
-  save(next);
-  return true;
+  if (reading) {
+    const observedAt = new Date(now).toISOString();
+    snapshot = {
+      fiveHour: merge(snapshot?.fiveHour ?? null, reading.fiveHour, observedAt),
+      sevenDay: merge(snapshot?.sevenDay ?? null, reading.sevenDay, observedAt),
+    };
+  }
+  // Measured against what was last WRITTEN, not last seen: contact every few
+  // minutes must still be persisted once the saved time is an hour old.
+  if (figuresOf(snapshot) !== savedFigures || now - relaySavedAt > RELAY_SAVE_EVERY_MS) save(now);
+  return reading !== null;
 }
 
 export function getSnapshot(): PlanUsageSnapshot | null {
   return snapshot;
 }
 
+export function getRelaySeenAt(): string | null {
+  return relaySeenAt;
+}
+
 /** Write via a temp file and rename, so a crash mid-write never leaves half a JSON file. */
-function save(value: PlanUsageSnapshot): void {
+function save(now: number): void {
   const path = snapshotPath();
   try {
-    writeFileSync(`${path}.tmp`, JSON.stringify(value));
+    writeFileSync(`${path}.tmp`, JSON.stringify({ ...snapshot, relaySeenAt }));
     renameSync(`${path}.tmp`, path);
+    savedFigures = figuresOf(snapshot);
+    relaySavedAt = now;
   } catch (error) {
     logger.warn({ error, path }, 'plan-usage: could not save snapshot');
   }
@@ -126,6 +163,9 @@ function save(value: PlanUsageSnapshot): void {
 export function loadSnapshot(): void {
   const path = snapshotPath();
   snapshot = null;
+  relaySeenAt = null;
+  savedFigures = null;
+  relaySavedAt = 0;
   if (!existsSync(path)) return;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
@@ -139,6 +179,10 @@ export function loadSnapshot(): void {
     const fiveHour = restore(raw.fiveHour);
     const sevenDay = restore(raw.sevenDay);
     snapshot = fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
+    relaySeenAt = typeof raw.relaySeenAt === 'string' && !Number.isNaN(Date.parse(raw.relaySeenAt)) ? raw.relaySeenAt : null;
+    // What is on disk now, so the first post after a restart does not rewrite it unchanged.
+    savedFigures = figuresOf(snapshot);
+    relaySavedAt = relaySeenAt ? Date.parse(relaySeenAt) : 0;
   } catch (error) {
     logger.warn({ error, path }, 'plan-usage: ignoring unreadable snapshot');
   }

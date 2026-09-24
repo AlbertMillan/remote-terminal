@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { getSnapshot, recordReading } from './plan-limits.js';
+import { getRelaySeenAt, getSnapshot, recordReading } from './plan-limits.js';
 
 /**
  * The status line script, found by walking up from this module: it sits at
@@ -27,22 +27,30 @@ function findStatuslineScript(): string | null {
  * path is an escape sequence waiting to happen.
  */
 export function statuslineCommand(): string | null {
-  const script = findStatuslineScript();
-  return script ? `node "${script.replace(/\\/g, '/')}"` : null;
+  // Worked out once: the script does not move while the server runs, and the
+  // chip asks on every poll from every open browser.
+  if (cachedCommand === undefined) {
+    const script = findStatuslineScript();
+    cachedCommand = script ? `node "${script.replace(/\\/g, '/')}"` : null;
+  }
+  return cachedCommand;
 }
+
+let cachedCommand: string | null | undefined;
 
 /** A status line payload is a few KB; anything far larger is not one. */
 const BODY_LIMIT = 64 * 1024;
 
 export function registerPlanUsageRoutes(app: FastifyInstance): void {
-  // The relay: scripts/statusline.mjs posts every status line payload here. A
-  // payload with no usable limits is normal (before a session's first
-  // response, or on a plan without limits), so it is accepted and ignored.
+  // The relay: scripts/statusline.mjs posts `{ rate_limits }` on every status
+  // line render. A post with no usable limits is normal (before a session's
+  // first response, or on a plan without limits); it still counts as contact,
+  // which is how the chip knows the relay is installed.
   app.post('/api/plan-usage', { bodyLimit: BODY_LIMIT }, async (request) => {
     return { stored: recordReading(request.body) };
   });
 
   app.get('/api/plan-usage', async () => {
-    return { snapshot: getSnapshot(), setup: { command: statuslineCommand() } };
+    return { snapshot: getSnapshot(), relaySeenAt: getRelaySeenAt(), setup: { command: statuslineCommand() } };
   });
 }

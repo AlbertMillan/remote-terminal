@@ -75,6 +75,23 @@ describe('rendering', () => {
     expect(view.body).toContain('C:/repo/scripts/statusline.mjs');
   });
 
+  it('says "waiting", not "not set up", once the relay has reported without limits', () => {
+    // Asking for the snippet again would send the user to fix what is not broken.
+    const view = renderPlanUsage(
+      { snapshot: null, relaySeenAt: at(2 * 60_000), setup: { command: 'node "C:/repo/scripts/statusline.mjs"' } },
+      NOW
+    );
+    expect(view.summary).toContain('waiting');
+    expect(view.summary).not.toContain('not set up');
+    expect(view.body).toContain('is set up');
+    expect(view.body).not.toContain('statusLine');
+  });
+
+  it('tells a user who has added the snippet how to find a relay that cannot connect', () => {
+    const view = renderPlanUsage({ snapshot: null, relaySeenAt: null, setup: { command: null } }, NOW);
+    expect(view.body).toContain('CLAUDE_REMOTE_URL');
+  });
+
   it('formats countdowns coarsely', () => {
     expect(formatCountdown(45 * 60_000)).toBe('45m');
     expect(formatCountdown((2 * 60 + 14) * 60_000)).toBe('2h 14m');
@@ -108,6 +125,45 @@ describe('the chip in the sidebar', () => {
     chip.render(NOW + 60_000);
     expect(root.open).toBe(true);
     expect(root.querySelector('.plan-usage-body')?.textContent).toContain('5-hour window');
+  });
+
+  it('skips polls while the tab is hidden and catches up when it is shown', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.mocked(fetch);
+    let visibility: DocumentVisibilityState = 'hidden';
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+
+    const chip = new PlanUsageChip();
+    chip.attach(); // one refresh on attach, whatever the visibility
+    const afterAttach = fetchMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(fetchMock.mock.calls.length).toBe(afterAttach);
+
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(fetchMock.mock.calls.length).toBe(afterAttach + 1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock.mock.calls.length).toBe(afterAttach + 2);
+
+    chip.detach();
+    vi.useRealTimers();
+  });
+
+  it('removes its listeners and timers on detach', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.mocked(fetch);
+    const chip = new PlanUsageChip();
+    chip.attach();
+    chip.detach();
+    const before = fetchMock.mock.calls.length;
+
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(fetchMock.mock.calls.length).toBe(before);
+    vi.useRealTimers();
   });
 
   it('stays hidden when the server cannot answer', async () => {

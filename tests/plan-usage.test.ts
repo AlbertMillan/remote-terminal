@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import Fastify from 'fastify';
+
+// Pass-through spies: every call is real, and the tests can count them — how
+// often the snapshot is written, and whether the script path is looked up.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync), renameSync: vi.fn(actual.renameSync) };
+});
+const writes = () => vi.mocked(renameSync).mock.calls.length;
 
 /**
  * Plan-usage readings relayed from Claude Code's status line.
@@ -122,6 +130,72 @@ describe('persistence', () => {
   });
 });
 
+describe('writing the snapshot', () => {
+  it('writes when a figure changes, not on every render that re-confirms it', () => {
+    // Every session's status line posts on every render; only a changed
+    // percentage or reset time is worth a synchronous write and rename.
+    plan.recordReading(payload(55, 22), NOW);
+    const afterFirst = writes();
+    for (let i = 1; i <= 20; i++) plan.recordReading(payload(55, 22), NOW + i * 1000);
+    expect(writes()).toBe(afterFirst);
+
+    plan.recordReading(payload(56, 22), NOW + 30_000);
+    expect(writes()).toBe(afterFirst + 1);
+    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).fiveHour.usedPercentage).toBe(56);
+  });
+
+  it('does not write for a stale reading the merge throws away', () => {
+    plan.recordReading(payload(55, 22), NOW);
+    const before = writes();
+    plan.recordReading(payload(30, 10), NOW + 1000);
+    expect(writes()).toBe(before);
+  });
+
+  it('does not rewrite an unchanged file after a restart', () => {
+    plan.recordReading(payload(55, 22), NOW);
+    plan.loadSnapshot();
+    const before = writes();
+    plan.recordReading(payload(55, 22), NOW + 1000);
+    expect(writes()).toBe(before);
+  });
+});
+
+describe('relay contact', () => {
+  it('counts a post without limits as contact, without inventing a reading', () => {
+    expect(plan.recordReading({ rate_limits: null }, NOW)).toBe(false);
+    expect(plan.getSnapshot()).toBeNull();
+    expect(plan.getRelaySeenAt()).toBe(new Date(NOW).toISOString());
+  });
+
+  it('persists contact the first time, then at most hourly — the relay posts on every render', () => {
+    plan.recordReading({ rate_limits: null }, NOW);
+    const first = readFileSync(snapshotFile, 'utf8');
+    expect(JSON.parse(first).relaySeenAt).toBe(new Date(NOW).toISOString());
+
+    plan.recordReading({ rate_limits: null }, NOW + 10 * 60_000);
+    expect(readFileSync(snapshotFile, 'utf8')).toBe(first); // not rewritten
+    expect(plan.getRelaySeenAt()).toBe(new Date(NOW + 10 * 60_000).toISOString()); // but current in memory
+
+    plan.recordReading({ rate_limits: null }, NOW + 70 * 60_000);
+    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).relaySeenAt).toBe(
+      new Date(NOW + 70 * 60_000).toISOString()
+    );
+  });
+
+  it('remembers contact across a restart, even with no reading', () => {
+    plan.recordReading({ rate_limits: null }, NOW);
+    plan.loadSnapshot();
+    expect(plan.getSnapshot()).toBeNull();
+    expect(plan.getRelaySeenAt()).toBe(new Date(NOW).toISOString());
+  });
+
+  it('ignores a malformed contact time on disk', () => {
+    writeFileSync(snapshotFile, JSON.stringify({ relaySeenAt: 'yesterday-ish' }));
+    plan.loadSnapshot();
+    expect(plan.getRelaySeenAt()).toBeNull();
+  });
+});
+
 describe('routes', () => {
   async function app() {
     const a = Fastify();
@@ -138,6 +212,7 @@ describe('routes', () => {
 
     const get = (await a.inject({ method: 'GET', url: '/api/plan-usage' })).json();
     expect(get.snapshot.fiveHour.usedPercentage).toBe(55);
+    expect(typeof get.relaySeenAt).toBe('string');
     expect(get.setup.command).toMatch(/^node ".*\/scripts\/statusline\.mjs"$/);
     await a.close();
   });
@@ -156,5 +231,16 @@ describe('routes', () => {
   it('points the setup command at the script with forward slashes', () => {
     // Claude Code runs the command through bash, even on Windows.
     expect(statuslineCommand()).not.toContain('\\');
+  });
+
+  it('works the command out once rather than on every poll', async () => {
+    const first = statuslineCommand();
+    vi.mocked(existsSync).mockClear();
+    const a = await app();
+    for (let i = 0; i < 3; i++) await a.inject({ method: 'GET', url: '/api/plan-usage' });
+    const lookups = vi.mocked(existsSync).mock.calls.filter(([p]) => String(p).endsWith('statusline.mjs'));
+    expect(lookups).toHaveLength(0);
+    expect(statuslineCommand()).toBe(first);
+    await a.close();
   });
 });

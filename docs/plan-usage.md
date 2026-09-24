@@ -31,9 +31,12 @@ only documented source (code.claude.com/docs/en/statusline). They are **not** de
 from the usage ledger's tokens: the limits are weighted by model and their sizes are not
 published. Not exposed by hooks, the `claude -p` envelope, OTel or any CLI command.
 
-`scripts/statusline.mjs` prints `Opus 5 · 5h 55% · wk 22%` and POSTs the payload to
+`scripts/statusline.mjs` prints `Opus 5 · 5h 55% · wk 22%` and POSTs `{ rate_limits }` —
+only the limits, never the payload's cwd, transcript path, session id or cost — to
 `/api/plan-usage`. It prints first and gives the POST 300 ms, swallowing every failure — it
-runs on every render of every session's status line, so it must never slow one down.
+runs on every render of every session's status line, so it must never slow one down. It
+posts even when there are no limits yet (`{ "rate_limits": null }`): that contact is how the
+chip tells "set up, waiting" from "not set up".
 
 ## How readings combine — `src/server/usage/plan-limits.ts`
 
@@ -46,7 +49,10 @@ runs on every render of every session's status line, so it must never slow one d
   eight days out, body ≤ 64 KB — because the endpoint is reachable over the tailnet like
   `/api/notify`. A bad reading is dropped without touching the snapshot.
 - The snapshot is saved to `<dataDir>/plan-usage.json` (temp file + rename) and re-validated
-  when read back at boot.
+  when read back at boot. It is written only when a percentage or reset time changes, and
+  relay contact (`relaySeenAt`) at most hourly — posts arrive on every render of every
+  session, and a synchronous write per post churns the disk and, on Windows, fails whenever
+  an indexer or antivirus holds the file. A fresher "as of" alone is not written.
 
 ## What the chip can and cannot tell you
 
@@ -54,7 +60,12 @@ runs on every render of every session's status line, so it must never slow one d
   and only after that session's first response. Headless job runs never send one. So:
   - a reading older than 10 minutes shows its age ("as of 14:02 (37m ago)") and dims;
   - once a window's `resets_at` passes, the chip says "reset" rather than the old figure.
+- With no reading, the chip says **"waiting"** if the relay has ever reported (it is
+  installed; limits come after a session's first response, on Pro/Max only) and **"not set
+  up"** with the exact snippet if it never has — plus a hint about `CLAUDE_REMOTE_URL` for
+  a relay that is installed but cannot reach the server.
 - Amber from 80 %, red from 95 %, coloured by the worst window still open.
-- The client polls `GET /api/plan-usage` every 60 s and on focus; countdowns tick locally.
+- The client polls `GET /api/plan-usage` every 60 s — skipped while the tab is hidden —
+  and on focus or when the tab is shown again; countdowns tick locally.
 - Not shown: per-model (Opus) weekly limits and extra-usage spend. Those exist only in the
   undocumented OAuth endpoint behind `/usage`, deliberately not used here.

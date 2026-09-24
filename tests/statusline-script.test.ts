@@ -49,7 +49,7 @@ function listen(handler: (body: string) => void, delayMs = 0): Promise<string> {
 }
 
 describe('statusline.mjs', () => {
-  it('prints the model and both windows, and relays the payload', async () => {
+  it('prints the model and both windows, and relays the limits', async () => {
     const received: string[] = [];
     const url = await listen((b) => received.push(b));
     const out = await run(JSON.stringify(PAYLOAD), url);
@@ -57,12 +57,32 @@ describe('statusline.mjs', () => {
     expect(JSON.parse(received[0]).rate_limits.five_hour.used_percentage).toBe(55.4);
   });
 
-  it('prints the model alone before the first response, and relays nothing', async () => {
+  it('relays only the limits, never the rest of the payload', async () => {
+    // The payload carries the cwd, transcript path, session id and cost; the
+    // server reads none of it, and CLAUDE_REMOTE_URL may name another machine.
+    const received: string[] = [];
+    const url = await listen((b) => received.push(b));
+    await run(
+      JSON.stringify({
+        ...PAYLOAD,
+        session_id: 'abc',
+        transcript_path: 'C:/Users/me/.claude/projects/x/abc.jsonl',
+        workspace: { current_dir: 'C:/secret-project' },
+        cost: { total_cost_usd: 1.23 },
+      }),
+      url
+    );
+    expect(Object.keys(JSON.parse(received[0]))).toEqual(['rate_limits']);
+    expect(received[0]).not.toContain('secret-project');
+  });
+
+  it('prints the model alone before the first response, and still reports in', async () => {
+    // No limits yet, but the contact is what tells the chip the relay is installed.
     const received: string[] = [];
     const url = await listen((b) => received.push(b));
     const out = await run(JSON.stringify({ model: { display_name: 'Opus 5' } }), url);
     expect(out.stdout).toBe('Opus 5\n');
-    expect(received).toHaveLength(0);
+    expect(received).toEqual(['{"rate_limits":null}']);
   });
 
   it('still prints, promptly, when the server is down', async () => {

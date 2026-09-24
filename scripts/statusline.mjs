@@ -41,13 +41,20 @@ function statusText(payload) {
   return parts.length > 0 ? parts.join(' · ') : 'Claude Code';
 }
 
+/**
+ * Post the limits — only the limits. The payload also carries the working
+ * directory, transcript path, session id and cost, none of which the server
+ * reads, and CLAUDE_REMOTE_URL may point at another machine.
+ *
+ * Posted even when there are none yet (before a session's first response):
+ * that contact is how the chip tells "set up, waiting" from "not set up".
+ */
 async function relay(payload) {
-  if (!payload?.rate_limits) return;
   try {
     await fetch(`${SERVER}/api/plan-usage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ rate_limits: payload?.rate_limits ?? null }),
       signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
     });
   } catch {
