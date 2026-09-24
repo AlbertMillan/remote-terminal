@@ -67,6 +67,19 @@ describe('renderTrackDeletePlan', () => {
       plan({ branch: null, merges: [], unattributed: { dirtyFiles: 3 } })
     );
     expect(document.body.textContent).toContain('3 files have uncommitted changes on main');
+    expect(document.body.textContent).not.toContain('apart from the guesses above');
+  });
+
+  it('does not contradict the guesses it just offered', () => {
+    document.body.innerHTML = renderTrackDeletePlan(
+      plan({
+        branch: null,
+        merges: [],
+        guessedCommits: [{ sha: 'cccccccc3333', subject: 'session commit' }],
+        unattributed: { dirtyFiles: 0 },
+      })
+    );
+    expect(document.body.textContent).toContain('apart from the guesses above, code written for it on main');
   });
 });
 

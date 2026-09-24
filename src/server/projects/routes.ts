@@ -270,9 +270,12 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: { cwd?: string } }>('/api/projects/tracks', async (request, reply) => {
     const { cwd } = request.query;
     if (!cwd) return reply.status(400).send({ error: 'cwd required' });
-    const project = findWorkspaceProject(cwd);
+    // One board build serves both the membership check and the answer: an
+    // unregistered project otherwise builds it twice per keystroke-debounce.
+    const allProjects = getWorkspaceBoard();
+    const project = findWorkspaceProject(cwd, allProjects);
     if (!project) return reply.status(404).send({ error: 'Unknown project' });
-    const board = getWorkspaceBoard().find((p) => pathKey(p.cwd) === pathKey(project.cwd));
+    const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
     return {
       cwd: project.cwd,
       canBranch: board?.vcs.canDispatch ?? false,

@@ -27,7 +27,10 @@ restoring PROJECT.md and removing a folder by hand.
   implementation starts:
   - **Open session** on the track heading;
   - picking the track in the **new-session dialog**. Its default is "No track", so
-    planning and unrelated sessions see no change;
+    planning and unrelated sessions see no change. The picker (`src/client/track-picker.ts`)
+    only uses a list for the directory it was loaded for, and hides the old one as soon as
+    the field changes: loading takes up to a second, and Create in that window once opened a
+    session in the previous project's track;
   - **dispatching a job** for one of the track's features (`trackBaseFor()` in
     `runner.ts`). Ad-hoc jobs, and features no longer in PROJECT.md, still branch from
     the current branch.

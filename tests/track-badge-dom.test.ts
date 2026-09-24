@@ -75,4 +75,48 @@ describe('track badge', () => {
       ['Dirty work', '⚠ 1 file on main'],
     ]);
   });
+
+  it('shows Delete as loading while its plan is fetched, then opens the dialog', async () => {
+    let releasePlan!: () => void;
+    const planReply = new Promise<Response>((resolve) => {
+      releasePlan = () =>
+        resolve(
+          new Response(
+            JSON.stringify({
+              plan: {
+                token: 't', track: 'Old history', inDoc: true, features: [], cancel: [], discard: [],
+                branch: null, currentBranch: 'main', merges: [], unresolved: [], specs: [],
+                sessionLogGroup: false, mainDirty: [], guessedFiles: [], guessedCommits: [],
+                unattributed: null,
+              },
+            })
+          )
+        );
+    });
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url: string, init?: RequestInit) =>
+      String(url).startsWith('/api/projects/track/delete-plan') ? planReply : base(url, init)
+    );
+
+    const ws = new ProjectWorkspace(() => {}, () => {}, () => {}, () => {});
+    await ws.loadBoard();
+    ws.setSelected(CWD);
+    const container = document.getElementById('project-features')!;
+    ws.renderFeatures(container, CWD);
+    ws.attach(container);
+    await settle();
+
+    const button = () =>
+      container.querySelector<HTMLButtonElement>('.pw-track-delete[data-track="Old history"]')!;
+    button().click();
+    await settle();
+    expect(button().textContent).toBe('Loading…');
+    expect(button().disabled).toBe(true);
+
+    releasePlan();
+    await settle();
+    await settle();
+    expect(button().textContent).toBe('Delete');
+    expect(document.querySelector('.td-modal')).not.toBeNull();
+  });
 });

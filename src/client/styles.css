@@ -2616,6 +2616,7 @@ body {
   cursor: pointer;
 }
 .pw-track-delete:hover { color: var(--danger); border-color: var(--danger); }
+.pw-track-delete:disabled { cursor: progress; color: var(--text-muted); border-color: var(--border-subtle); }
 .pw-track-branchnow {
   flex: 0 0 auto;
   font-size: 10px;

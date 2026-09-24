@@ -146,8 +146,11 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
       : '';
 
   const unattributed = plan.unattributed
-    ? `<p class="td-note">This track never had a branch, so code written for it on main can’t be
-        told apart from other work, and this delete doesn’t touch it.${
+    ? `<p class="td-note">This track never had a branch, so ${
+        plan.guessedFiles.length || plan.guessedCommits.length
+          ? 'apart from the guesses above, code written for it on main'
+          : 'code written for it on main'
+      } can’t be told apart from other work, and this delete doesn’t touch it.${
           plan.unattributed.dirtyFiles > 0
             ? ` ${plural(plan.unattributed.dirtyFiles, 'file has', 'files have')} uncommitted changes on main.`
             : ''
@@ -198,7 +201,9 @@ export function describeChoice(
 export async function openTrackDeleteDialog(
   cwd: string,
   track: string,
-  flash: (message: string) => void
+  flash: (message: string) => void,
+  /** Called once the plan has loaded (or failed to): the caller's loading state ends here. */
+  onPlanned: () => void = () => {}
 ): Promise<string | null> {
   let plan: TrackDeletePlan;
   try {
@@ -214,6 +219,8 @@ export async function openTrackDeleteDialog(
   } catch (error) {
     flash(error instanceof Error ? error.message : 'Could not plan the delete');
     return null;
+  } finally {
+    onPlanned();
   }
 
   const modal = document.createElement('div');

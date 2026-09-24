@@ -140,6 +140,13 @@ export class ProjectWorkspace {
    */
   private unbranched = new Map<string, UnbranchedWork | 'loading'>();
   /**
+   * Tracks whose delete plan is loading, keyed `cwd|track`. Planning reads the
+   * git history and the track's transcripts — about a second — so the button
+   * says so rather than looking dead. State, not a DOM patch: every render
+   * replaces the board.
+   */
+  private planning = new Set<string>();
+  /**
    * Tracks the user has folded away, keyed by (cwd, track). Held here rather
    * than in the DOM because every mutation re-renders the whole board, and
    * persisted so a long index doesn't unfold itself on every reload.
@@ -543,8 +550,10 @@ export class ProjectWorkspace {
   private renderTrackActions(project: WorkspaceProject, track: WorkspaceTrack): string {
     const cwd = escapeAttr(project.cwd);
     const name = escapeAttr(track.name);
+    const loading = this.planning.has(`${project.cwd}|${track.name}`);
     const del = `<button class="pw-track-delete" data-cwd="${cwd}" data-track="${name}"
-                         title="Delete this track: its lines, specs, jobs, branch and landed code">Delete</button>`;
+                         title="Delete this track: its lines, specs, jobs, branch and landed code"
+                         ${loading ? 'disabled aria-busy="true"' : ''}>${loading ? 'Loading…' : 'Delete'}</button>`;
     if (!project.vcs.canDispatch) return `<span class="pw-track-actions">${del}</span>`;
     const badge = track.branch
       ? `<span class="pw-branch" title="${escapeAttr(track.branch.worktreePath)}">⎇ ${escapeHtml(
@@ -826,7 +835,19 @@ export class ProjectWorkspace {
 
   /** Show the delete plan; on confirm the dialog deletes, and the board reloads. */
   async deleteTrack(cwd: string, track: string): Promise<void> {
-    const detail = await openTrackDeleteDialog(cwd, track, (m) => this.flash(m));
+    const key = `${cwd}|${track}`;
+    if (this.planning.has(key)) return;
+    this.planning.add(key);
+    this.refreshDetail(cwd);
+    const detail = await openTrackDeleteDialog(
+      cwd,
+      track,
+      (m) => this.flash(m),
+      () => {
+        this.planning.delete(key);
+        this.refreshDetail(cwd);
+      }
+    );
     if (detail === null) return;
     await this.reload();
     this.flash(detail);
