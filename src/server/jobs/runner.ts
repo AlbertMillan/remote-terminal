@@ -3,7 +3,6 @@ import { findWorkspaceProject } from '../projects/workspace.js';
 import { capabilitiesFor, detectVcs } from '../projects/vcs.js';
 import { admit } from './scheduler.js';
 import {
-  addStageUsage,
   createJob,
   deleteJob,
   finishStage,
@@ -39,7 +38,7 @@ import {
 } from '../projects/track-branches.js';
 import { withProjectLock } from '../projects/project-lock.js';
 import { isProcessRunning } from '../utils/platform.js';
-import type { UsageSink } from '../agent/claude-run.js';
+import type { RunTag } from '../agent/claude-run.js';
 import { readFindings, selectedFindings } from './findings.js';
 import {
   GATE_AFTER,
@@ -55,20 +54,8 @@ import {
 const logger = createLogger('job-runner');
 
 /**
- * Attribute an agent run's spend to the stage that made it.
- *
- * Handed to the stage rather than recorded from its return value on purpose: a
- * stage that parks, fails, or has its output rejected still burned the tokens,
- * and a return value never arrives in those cases. The sink fires the moment a
- * run reports an envelope, and adds — so the several runs qa and fix make each
- * land on the same row.
- */
-function usageFor(jobId: string, stage: StageName): UsageSink {
-  return (usage) => addStageUsage(jobId, stage, usage);
-}
-
-/**
- * What a stage needs to take its turn in the queue and report when it gets one.
+ * What a stage needs to take its turn in the queue, report when it gets one,
+ * and have its spend attributed.
  *
  * The lane is the PROJECT, which is what makes the scheduler's promise true all
  * the way down: it admits one job per project, and now their agent runs no
@@ -76,11 +63,16 @@ function usageFor(jobId: string, stage: StageName): UsageSink {
  * waiting on project B's run was invisible — the stage is marked running when
  * it is admitted, minutes before its process exists — so the spawn is stamped
  * as well, and the board reads the two apart.
+ *
+ * The tag records each run under this job and stage before it spawns, so the
+ * usage ledger attributes its transcript even if the stage parks, fails or is
+ * killed — cases where a return value never arrives.
  */
-function runLane(job: Job, stage: StageName): { laneKey: string; onSpawn: () => void } {
+function runLane(job: Job, stage: StageName): { laneKey: string; onSpawn: () => void; tag: RunTag } {
   return {
     laneKey: job.projectCwd,
     onSpawn: () => markStageSpawned(job.id, stage),
+    tag: { projectCwd: job.projectCwd, kind: 'stage', jobId: job.id, stage },
   };
 }
 
@@ -303,7 +295,6 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
     // Continue the conversation that asked, rather than starting one that has
     // to rediscover the repository to apply a one-line answer.
     resumeSessionId: job.claudeSessionId,
-    onUsage: usageFor(job.id, 'design'),
     signal,
     ...runLane(job, 'design'),
   });
@@ -399,7 +390,6 @@ async function executeImplement(job: Job, signal?: AbortSignal): Promise<void> {
     baseBranch: await baseBranchOf(job),
     answer,
     resumeSessionId: job.claudeSessionId,
-    onUsage: usageFor(job.id, 'implement'),
     signal,
     ...runLane(job, 'implement'),
   });
@@ -461,7 +451,6 @@ async function executeReview(job: Job, signal?: AbortSignal): Promise<void> {
     worktreePath,
     baseBranch: await baseBranchOf(job),
     specPath: specPathOf(job.id),
-    onUsage: usageFor(job.id, 'review'),
     signal,
     ...runLane(job, 'review'),
   });
@@ -519,7 +508,6 @@ async function executeFix(job: Job, signal?: AbortSignal): Promise<void> {
     selected,
     skipped,
     title: job.title,
-    onUsage: usageFor(job.id, 'fix'),
     signal,
     ...runLane(job, 'fix'),
   });
@@ -555,7 +543,6 @@ async function executeQa(job: Job, signal?: AbortSignal): Promise<void> {
     jobId: job.id,
     worktreePath,
     isProcessRunning,
-    onUsage: usageFor(job.id, 'qa'),
     signal,
     ...runLane(job, 'qa'),
   });

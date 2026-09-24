@@ -24,6 +24,7 @@ const store = await import('../src/server/jobs/store.js');
 const { jobEvents } = await import('../src/server/jobs/events.js');
 const { buildJobsSummary, RECENT_TERMINAL_MS } = await import('../src/server/jobs/summary.js');
 const { STAGE_ORDER } = await import('../src/server/jobs/types.js');
+const { invalidateUsageCache } = await import('../src/server/usage/store.js');
 // The client half of the pair: how long a finished card stays on the panel.
 const { FINISHED_LINGER_MS } = await import('../src/client/job-overlay.js');
 
@@ -41,7 +42,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  getDatabase().exec('DELETE FROM jobs');
+  getDatabase().exec('DELETE FROM jobs; DELETE FROM usage_messages; DELETE FROM agent_runs');
   rmSync(join(dataDir, 'projects.json'), { force: true });
 });
 
@@ -145,23 +146,21 @@ describe('buildJobsSummary', () => {
     expect(buildJobsSummary().jobs[0].projectName).toBe('Alpha (prod)');
   });
 
-  it('rolls a job cost up from its stages', () => {
+  it('rolls a job cost up from the usage ledger', () => {
     const id = newJob().id;
-    store.addStageUsage(id, 'design', {
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheReadTokens: 30,
-      cacheCreationTokens: 40,
-      costUsd: 0.25,
-    });
-    store.addStageUsage(id, 'implement', {
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheReadTokens: 30,
-      cacheCreationTokens: 40,
-      costUsd: 0.75,
-    });
-
+    const db = getDatabase();
+    for (const [stage, hour, output] of [['design', 10, 10_000], ['implement', 11, 30_000]] as const) {
+      db.prepare(
+        `INSERT INTO agent_runs (session_id, project_cwd, kind, job_id, stage, started_at, ended_at)
+         VALUES ('s', 'C:/p', 'stage', ?, ?, ?, ?)`
+      ).run(id, stage, `2026-09-20T${hour}:00:00.000Z`, `2026-09-20T${hour}:30:00.000Z`);
+      db.prepare(
+        `INSERT INTO usage_messages (message_id, session_id, project_cwd, job_id, model, ts, output_tokens)
+         VALUES (?, 's', 'C:/p', ?, 'claude-opus-5', ?, ?)`
+      ).run(`m-${stage}`, id, `2026-09-20T${hour}:10:00.000Z`, output);
+    }
+    invalidateUsageCache();
+    // 40k output tokens on Opus 5 at $25/MTok.
     expect(buildJobsSummary().jobs[0].costUsd).toBeCloseTo(1.0, 10);
   });
 });

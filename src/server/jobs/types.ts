@@ -1,3 +1,5 @@
+import type { Usage } from '../usage/types.js';
+
 /**
  * A job is one feature carried through the pipeline in an isolated worktree.
  *
@@ -120,46 +122,12 @@ export interface Job {
 }
 
 /**
- * What a stage (or a whole job) spent.
- *
- * Counts stay SPLIT, never summed: cache traffic dwarfs real input and output,
- * so "N tokens" would measure the cache rather than the work. `costUsd` is the
- * run's `total_cost_usd` — API list price, not money charged, since these bill
- * against the subscription. The UI must keep labelling it as an estimate.
+ * What a stage (or a whole job) spent, read from the usage ledger — see
+ * `src/server/usage/`. Never stored on the job: Discard deletes job rows, and
+ * spend must outlive the job that incurred it.
  */
-export interface StageUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  costUsd: number;
-  /** Completed agent runs that reported usage. 0 means the stage ran none. */
-  runCount: number;
-}
-
-export const ZERO_USAGE: StageUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheCreationTokens: 0,
-  costUsd: 0,
-  runCount: 0,
-};
-
-export function addUsage(a: StageUsage, b: StageUsage): StageUsage {
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
-    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
-    costUsd: a.costUsd + b.costUsd,
-    runCount: a.runCount + b.runCount,
-  };
-}
-
-export function sumUsage(items: { usage: StageUsage }[]): StageUsage {
-  return items.reduce((acc, item) => addUsage(acc, item.usage), ZERO_USAGE);
-}
+export type StageUsage = Usage;
+export { ZERO_USAGE } from '../usage/types.js';
 
 export interface JobStage {
   id: number;
@@ -182,7 +150,7 @@ export interface JobStage {
 /** A job plus its per-stage rows, which is what the board renders. */
 export interface JobWithStages extends Job {
   stages: JobStage[];
-  /** Sum over this job's stages — derived, never stored. */
+  /** Everything the job spent, Take over included — so it can exceed the stages' sum. */
   usage: StageUsage;
 }
 

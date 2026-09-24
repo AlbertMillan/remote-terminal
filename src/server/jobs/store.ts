@@ -13,7 +13,8 @@ import type {
   StageStatus,
   StageUsage,
 } from './types.js';
-import { STAGE_ORDER, sumUsage } from './types.js';
+import { STAGE_ORDER, ZERO_USAGE } from './types.js';
+import { usageByJob, type JobUsage } from '../usage/store.js';
 
 /**
  * Persistence for pipeline jobs.
@@ -54,12 +55,6 @@ interface StageRow {
   started_at: string | null;
   spawned_at: string | null;
   finished_at: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  cost_usd: number;
-  run_count: number;
 }
 
 function toJob(row: JobRow): Job {
@@ -85,7 +80,7 @@ function toJob(row: JobRow): Job {
   };
 }
 
-function toStage(row: StageRow): JobStage {
+function toStage(row: StageRow, usage: StageUsage = ZERO_USAGE): JobStage {
   return {
     id: row.id,
     jobId: row.job_id,
@@ -95,14 +90,7 @@ function toStage(row: StageRow): JobStage {
     startedAt: row.started_at,
     spawnedAt: row.spawned_at,
     finishedAt: row.finished_at,
-    usage: {
-      inputTokens: row.input_tokens ?? 0,
-      outputTokens: row.output_tokens ?? 0,
-      cacheReadTokens: row.cache_read_tokens ?? 0,
-      cacheCreationTokens: row.cache_creation_tokens ?? 0,
-      costUsd: row.cost_usd ?? 0,
-      runCount: row.run_count ?? 0,
-    },
+    usage,
   };
 }
 
@@ -146,18 +134,19 @@ export function getJob(id: string): Job | null {
   return row ? toJob(row) : null;
 }
 
-export function getJobStages(jobId: string): JobStage[] {
+export function getJobStages(jobId: string, usage?: JobUsage): JobStage[] {
   const rows = getDatabase()
     .prepare('SELECT * FROM job_stages WHERE job_id = ? ORDER BY id')
     .all(jobId) as StageRow[];
-  return rows.map(toStage);
+  const spent = usage ?? usageByJob([jobId]).get(jobId);
+  return rows.map((row) => toStage(row, spent?.stages.get(row.name)));
 }
 
 export function getJobWithStages(id: string): JobWithStages | null {
   const job = getJob(id);
   if (!job) return null;
-  const stages = getJobStages(id);
-  return { ...job, stages, usage: sumUsage(stages) };
+  const usage = usageByJob([id]).get(id);
+  return { ...job, stages: getJobStages(id, usage), usage: usage?.total ?? ZERO_USAGE };
 }
 
 /**
@@ -213,9 +202,11 @@ export function listLiveAndRecentJobs(since: string): JobWithStages[] {
 
 /** Group stage rows onto their jobs in one pass, rather than a query per job. */
 function attachStages(rows: JobRow[], stageRows: StageRow[]): JobWithStages[] {
+  // One ledger read for every job on the page, not one per job.
+  const usage = usageByJob(rows.map((row) => row.id));
   const byJob = new Map<string, JobStage[]>();
   for (const row of stageRows) {
-    const stage = toStage(row);
+    const stage = toStage(row, usage.get(row.job_id)?.stages.get(row.name));
     const list = byJob.get(row.job_id);
     if (list) list.push(stage);
     else byJob.set(row.job_id, [stage]);
@@ -223,20 +214,31 @@ function attachStages(rows: JobRow[], stageRows: StageRow[]): JobWithStages[] {
 
   return rows.map((row) => {
     const stages = byJob.get(row.id) ?? [];
-    return { ...toJob(row), stages, usage: sumUsage(stages) };
+    return { ...toJob(row), stages, usage: usage.get(row.id)?.total ?? ZERO_USAGE };
   });
 }
 
 /**
  * Jobs for one project, newest first.
  *
- * Filtered in memory rather than SQL because matching is path-normalized
- * (case and separator insensitive), which SQLite cannot express. listJobs()
- * is a single pair of queries, so this stays cheap.
+ * The job rows are filtered in memory because matching is path-normalized
+ * (case and separator insensitive), which SQLite cannot express — but BEFORE
+ * stages are loaded and attached, so the board's poll for one project does not
+ * build every other project's jobs only to throw them away. The id list is
+ * bound as one JSON parameter: SQLite caps how many bound parameters an
+ * IN-list may have, and json_each has no such cap.
  */
 export function listJobsForProject(cwd: string): JobWithStages[] {
   const key = pathKey(cwd);
-  return listJobs().filter((j) => pathKey(j.projectCwd) === key);
+  const db = getDatabase();
+  const rows = (db.prepare('SELECT * FROM jobs ORDER BY created_at DESC').all() as JobRow[]).filter(
+    (row) => pathKey(row.project_cwd) === key
+  );
+  if (rows.length === 0) return [];
+  const stageRows = db
+    .prepare('SELECT * FROM job_stages WHERE job_id IN (SELECT value FROM json_each(?)) ORDER BY id')
+    .all(JSON.stringify(rows.map((row) => row.id))) as StageRow[];
+  return attachStages(rows, stageRows);
 }
 
 export function listJobsByStatus(...statuses: JobStatus[]): Job[] {
@@ -334,49 +336,6 @@ export function updateStage(jobId: string, name: StageName, patch: StagePatch): 
     .run(...values, jobId, name);
   // Covers startStage and finishStage too — both route through here.
   jobEvents.emitChange();
-}
-
-/**
- * Add one completed run's usage to a stage.
- *
- * Adds rather than replaces: `qa` runs a pass per flow, `fix` can run more than
- * once, and retrying a stage genuinely costs again — so every run that reported
- * an envelope belongs in the total. `run_count` increments with it, which is
- * what tells "no run" apart from "a run that cost nothing".
- *
- * Never throws: accounting must not be able to break a pipeline stage.
- */
-export function addStageUsage(
-  jobId: string,
-  name: StageName,
-  usage: Omit<StageUsage, 'runCount'>
-): void {
-  try {
-    getDatabase()
-      .prepare(
-        `UPDATE job_stages
-            SET input_tokens = input_tokens + ?,
-                output_tokens = output_tokens + ?,
-                cache_read_tokens = cache_read_tokens + ?,
-                cache_creation_tokens = cache_creation_tokens + ?,
-                cost_usd = cost_usd + ?,
-                run_count = run_count + 1
-          WHERE job_id = ? AND name = ?`
-      )
-      .run(
-        Math.round(usage.inputTokens),
-        Math.round(usage.outputTokens),
-        Math.round(usage.cacheReadTokens),
-        Math.round(usage.cacheCreationTokens),
-        usage.costUsd,
-        jobId,
-        name
-      );
-    jobEvents.emitChange();
-  } catch {
-    // A job whose row has gone (cancelled and deleted mid-run) is the expected
-    // case here, and it is not worth failing the stage over.
-  }
 }
 
 /**

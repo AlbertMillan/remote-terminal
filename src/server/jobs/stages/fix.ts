@@ -1,6 +1,6 @@
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude, type UsageSink } from '../../agent/claude-run.js';
+import { runClaude, type RunTag } from '../../agent/claude-run.js';
 import { commitAll, diffStat } from '../worktree.js';
 import type { Finding } from '../findings.js';
 
@@ -84,14 +84,14 @@ export async function runFixStage(opts: {
   selected: Finding[];
   skipped: Finding[];
   title: string;
-  onUsage?: UsageSink;
+  tag?: RunTag;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
   /** Queue lane and spawn notification; see runner.ts. */
   laneKey?: string;
   onSpawn?: () => void;
 }): Promise<FixResult> {
-  const { jobId, worktreePath, baseBranch, selected, skipped, title, onUsage, signal, laneKey, onSpawn } =
+  const { jobId, worktreePath, baseBranch, selected, skipped, title, tag, signal, laneKey, onSpawn } =
     opts;
 
   const prompt = buildFixPrompt({ selected, skipped });
@@ -102,7 +102,7 @@ export async function runFixStage(opts: {
     timeoutMs: getConfig().jobs.stageTimeoutMs,
     signal,
     failOnDenial: false,
-    onUsage,
+    tag,
     laneKey,
     onSpawn,
   });

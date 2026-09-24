@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { RunAbortedError, runClaude, type UsageSink } from '../../agent/claude-run.js';
+import { RunAbortedError, runClaude, type RunTag } from '../../agent/claude-run.js';
 import { COMPANION_DIR } from '../../projects/project-store.js';
 import { commitAll, diffStat } from '../worktree.js';
 import type { Job } from '../types.js';
@@ -121,7 +121,7 @@ export async function runImplementStage(opts: {
   answer?: string | null;
   /** The session that asked it, continued rather than replaced. */
   resumeSessionId?: string | null;
-  onUsage?: UsageSink;
+  tag?: RunTag;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
   /** Queue lane and spawn notification; see runner.ts. */
@@ -135,7 +135,7 @@ export async function runImplementStage(opts: {
     baseBranch,
     answer = null,
     resumeSessionId = null,
-    onUsage,
+    tag,
     signal,
     laneKey,
     onSpawn,
@@ -162,7 +162,7 @@ export async function runImplementStage(opts: {
     timeoutMs: getConfig().jobs.stageTimeoutMs,
     signal,
     failOnDenial: false,
-    onUsage,
+    tag,
     laneKey,
     onSpawn,
   };

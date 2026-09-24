@@ -268,6 +268,76 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE jobs ADD COLUMN merge_sha TEXT;
       `,
     },
+    {
+      // The usage ledger: one row per API response read from Claude Code's own
+      // transcripts, deduped by message id. It replaces 012's stage counters,
+      // which only ever saw a run's final envelope — so a killed run recorded
+      // nothing, a resumed run re-added the whole session, and Discard deleted
+      // the history. See docs/token-usage-feature.md.
+      //
+      // agent_runs: every headless run, written BEFORE it spawns, so its
+      // transcript is attributed to a job/stage/kind even if it is killed a
+      // second later. A session can hold several runs (--resume keeps the id),
+      // so a message belongs to the run whose [started_at, ended_at] holds it.
+      //
+      // None of these rows is deleted by Discard, Delete track or history
+      // Delete: spend outlives the job that incurred it.
+      name: '015_usage_ledger',
+      sql: `
+        CREATE TABLE IF NOT EXISTS usage_messages (
+          message_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          job_id TEXT,
+          track_id TEXT,
+          model TEXT NOT NULL,
+          speed TEXT,
+          ts TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_5m_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_messages_project ON usage_messages(project_cwd, ts);
+        CREATE INDEX IF NOT EXISTS idx_usage_messages_session ON usage_messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_messages_job ON usage_messages(job_id);
+
+        CREATE TABLE IF NOT EXISTS usage_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          offset INTEGER NOT NULL,
+          cwd TEXT,
+          session_id TEXT NOT NULL,
+          parent_session_id TEXT,
+          project_cwd TEXT,
+          job_id TEXT,
+          track_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_files_session ON usage_files(session_id);
+
+        CREATE TABLE IF NOT EXISTS agent_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          job_id TEXT,
+          stage TEXT,
+          started_at TEXT NOT NULL,
+          ended_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id, started_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id);
+
+        ALTER TABLE job_stages DROP COLUMN input_tokens;
+        ALTER TABLE job_stages DROP COLUMN output_tokens;
+        ALTER TABLE job_stages DROP COLUMN cache_read_tokens;
+        ALTER TABLE job_stages DROP COLUMN cache_creation_tokens;
+        ALTER TABLE job_stages DROP COLUMN cost_usd;
+        ALTER TABLE job_stages DROP COLUMN run_count;
+      `,
+    },
   ];
 
   const appliedMigrations = database
@@ -278,8 +348,15 @@ function runMigrations(database: Database.Database): void {
   for (const migration of migrations) {
     if (!appliedMigrations.includes(migration.name)) {
       logger.info({ migration: migration.name }, 'Running migration');
-      database.exec(migration.sql);
-      database.prepare('INSERT INTO migrations (name) VALUES (?)').run(migration.name);
+      // One transaction per migration, its record included. A multi-statement
+      // migration that failed half-way would otherwise stay unrecorded with
+      // half its statements applied, and the next boot would re-run the rest
+      // against a schema it no longer matches (e.g. DROP COLUMN on a column
+      // already gone) and refuse to start.
+      database.transaction(() => {
+        database.exec(migration.sql);
+        database.prepare('INSERT INTO migrations (name) VALUES (?)').run(migration.name);
+      })();
     }
   }
 }
