@@ -164,6 +164,33 @@ export function removeLogEntry(markdown: string, index: number): string | null {
 }
 
 /**
+ * Remove one group from the phases manifest, matched on both its label and its
+ * source so a same-named group from a different plan doc survives. Returns
+ * null when there is no such group (or no parseable block), so the caller can
+ * skip the write. The block is re-emitted in the layout the generator writes —
+ * one line per group header and per item — so the file still diffs cleanly.
+ */
+export function removePhaseGroup(markdown: string, group: string, source: string): string | null {
+  if (!PHASES_BLOCK_RE.test(markdown)) return null;
+  const groups = parsePhasesBlock(markdown);
+  const kept = groups.filter((g) => !(g.group === group && g.source === source));
+  if (kept.length === groups.length) return null;
+
+  const q = (v: string): string => JSON.stringify(v);
+  const lines = kept.map((g, gi) => {
+    const items = g.items.map((it, ii) => {
+      const ids = it.sessionIds.map(q).join(', ');
+      const comma = ii < g.items.length - 1 ? ',' : '';
+      return `    { "id": ${q(it.id)}, "title": ${q(it.title)}, "status": ${q(it.status)}, "sessionIds": [${ids}] }${comma}`;
+    });
+    const head = `  { "group": ${q(g.group)}, "source": ${q(g.source)}, "items": [`;
+    return [head, ...items, `  ]}${gi < kept.length - 1 ? ',' : ''}`].join('\n');
+  });
+  const block = `<!-- claude-remote-phases\n[\n${lines.join('\n')}\n]\n-->`;
+  return markdown.replace(PHASES_BLOCK_RE, () => block);
+}
+
+/**
  * Find the entry already written for a conversation, if any.
  *
  * The format has always documented `claudeSessionId` as "the idempotency key

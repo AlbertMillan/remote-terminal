@@ -386,6 +386,18 @@ export function updateFeature(
   return feature;
 }
 
+/**
+ * Remove a whole track: its heading, its features and any raw lines under it.
+ * The blank line that separated it from the track before belongs to that
+ * track's items, and renderProjectDoc trims a trailing gap, so removal never
+ * leaves a double blank line. Returns false when there is no such track.
+ */
+export function removeTrack(doc: ProjectDoc, name: string): boolean {
+  const before = doc.tracks.length;
+  doc.tracks = doc.tracks.filter((t) => t.name !== name);
+  return doc.tracks.length !== before;
+}
+
 /** Remove a feature. Returns true when something was actually removed. */
 export function removeFeature(doc: ProjectDoc, id: string): boolean {
   for (const track of doc.tracks) {

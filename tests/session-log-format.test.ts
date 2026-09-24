@@ -6,6 +6,7 @@ import {
   buildEntrySkeleton,
   removeLogEntry,
   removeLogEntry,
+  removePhaseGroup,
   type LogEntryMeta,
 } from '../src/server/sessions/session-log-format.js';
 import { pathKey } from '../src/server/sessions/project-discovery.js';
@@ -185,5 +186,57 @@ describe('removeLogEntry', () => {
     for (const i of [2, 0]) out = removeLogEntry(out, i) as string;
     expect(parseLogEntries(out).map((e) => e.meta?.claudeSessionId)).toEqual(['y']);
     expect(out).toContain('other');
+  });
+});
+
+describe('removePhaseGroup', () => {
+  const log = [
+    '# Session Log',
+    '',
+    '<!-- claude-remote-phases',
+    '[',
+    '  { "group": "Alpha", "source": "PROJECT.md", "items": [',
+    '    { "id": "f-aaaaaa", "title": "Quote \\": inside", "status": "done", "sessionIds": ["s-1", "s-2"] }',
+    '  ]},',
+    '  { "group": "Alpha", "source": "docs/alpha.md", "items": [',
+    '    { "id": "Step 1", "title": "Other doc", "status": "pending", "sessionIds": [] }',
+    '  ]},',
+    '  { "group": "Beta", "source": "PROJECT.md", "items": [',
+    '    { "id": "f-bbbbbb", "title": "Kept", "status": "in_progress", "sessionIds": [] }',
+    '  ]}',
+    ']',
+    '-->',
+    '',
+    '<!-- claude-remote-log {"date":"2026-09-24T00:00:00.000Z","session":"x","branch":"main","claudeSessionId":"s-1","blockers":0,"openItems":0} -->',
+    '## 2026-09-24 · x · main',
+    '**Done:** something.',
+    '',
+  ].join('\n');
+
+  it('drops only the group matching both label and source', () => {
+    const out = removePhaseGroup(log, 'Alpha', 'PROJECT.md') as string;
+    expect(parsePhasesBlock(out).map((g) => `${g.group}|${g.source}`)).toEqual([
+      'Alpha|docs/alpha.md',
+      'Beta|PROJECT.md',
+    ]);
+  });
+
+  it('re-emits the surviving groups in the generator layout, and leaves entries alone', () => {
+    const out = removePhaseGroup(log, 'Alpha', 'PROJECT.md') as string;
+    expect(out).toContain('    { "id": "f-bbbbbb", "title": "Kept", "status": "in_progress", "sessionIds": [] }');
+    expect(out.slice(out.indexOf('-->'))).toBe(log.slice(log.indexOf('-->')));
+    expect(parseLogEntries(out)).toHaveLength(1);
+  });
+
+  it('keeps awkward titles and session ids intact', () => {
+    const out = removePhaseGroup(log, 'Beta', 'PROJECT.md') as string;
+    const alpha = parsePhasesBlock(out)[0];
+    expect(alpha.items[0].title).toBe('Quote ": inside');
+    expect(alpha.items[0].sessionIds).toEqual(['s-1', 's-2']);
+  });
+
+  it('returns null when there is nothing to remove', () => {
+    expect(removePhaseGroup(log, 'Gamma', 'PROJECT.md')).toBeNull();
+    expect(removePhaseGroup('# Session Log\n', 'Alpha', 'PROJECT.md')).toBeNull();
   });
 });

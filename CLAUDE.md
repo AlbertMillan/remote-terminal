@@ -158,6 +158,12 @@ before **merge**.
   keeps its `merge_sha` for Delete; making it plainly unique blocks reopening a track.
 - Land refuses while a live session's cwd is inside the worktree — on Windows the open
   shell makes `git worktree remove` fail half-way.
+- Delete track reverts only merges tied to the track by a recorded sha or a **unique**
+  exact `Merge job: <title>` subject; never tick a guess by default, or unrelated work is
+  reverted. A discarded job has no row, so the subject lookup is the common path.
+- Its step order is load-bearing: preflight clean → cancel → revert `--no-commit` →
+  (conflict: `revert --abort` + `reset --hard` preflight HEAD) → teardown → file edits →
+  one commit. Tearing down before the revert makes a conflict unrecoverable.
 
 ## Job board → `docs/job-decisions.md`, `docs/job-documents.md`
 

@@ -123,6 +123,13 @@ export function findActiveTrackBranchByName(cwd: string, branch: string): TrackB
   return row ? toTrackBranch(row) : null;
 }
 
+/** Forget every row for a track, landed ones included. Only Delete track calls this. */
+export function deleteTrackBranchRows(cwd: string, trackName: string): void {
+  getDatabase()
+    .prepare('DELETE FROM track_branches WHERE project_key = ? AND track_name = ?')
+    .run(pathKey(cwd), trackName);
+}
+
 function markLanded(id: string, mergeSha: string): void {
   getDatabase()
     .prepare('UPDATE track_branches SET landed_at = ?, merge_sha = ? WHERE id = ?')

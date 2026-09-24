@@ -16,6 +16,8 @@ import {
 } from './track-branches.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
+import { cancelJob, discardJob } from '../jobs/runner.js';
+import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
 import {
   addFeature,
   removeFeature,
@@ -303,6 +305,49 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     }
   );
 
+  // --- Delete track ------------------------------------------------------
+  // A plan first, then the delete, echoing the plan's token so anything that
+  // moved in between is a 409 rather than a surprise (docs/track-branches.md).
+
+  app.get<{ Querystring: { cwd?: string; track?: string } }>(
+    '/api/projects/track/delete-plan',
+    async (request, reply) => {
+      const { cwd, track } = request.query;
+      if (!cwd || !track) return reply.status(400).send({ error: 'cwd and track required' });
+      const project = findWorkspaceProject(cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
+      return withTrack(reply, async () => ({ plan: await planTrackDelete(project, track, liveCwds) }));
+    }
+  );
+
+  app.delete<{
+    Body?: { cwd?: string; track?: string; token?: string; revert?: unknown; deleteSpecs?: unknown };
+  }>('/api/projects/track', async (request, reply) => {
+    const body = request.body || {};
+    if (!body.cwd || !body.track || !body.token) {
+      return reply.status(400).send({ error: 'cwd, track and token required' });
+    }
+    const project = findWorkspaceProject(body.cwd);
+    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const strings = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+    return withTrack(reply, () =>
+      executeTrackDelete(
+        project,
+        body.track as string,
+        { token: body.token as string, revert: strings(body.revert), deleteSpecs: strings(body.deleteSpecs) },
+        {
+          liveSessions: () => sessionManager.getAllSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
+          terminateSession: (id) => sessionManager.terminateSession(id),
+          cancelJob,
+          discardJob,
+        }
+      )
+    );
+  });
+
   logger.info('Project workspace routes registered');
 }
 
@@ -314,6 +359,9 @@ async function withTrack<T>(
   try {
     return await fn();
   } catch (error) {
+    if (error instanceof TrackDeleteError) {
+      return reply.status(error.status).send({ error: error.message, conflicts: error.conflicts });
+    }
     if (
       error instanceof TrackBranchError ||
       error instanceof ProjectStoreError ||

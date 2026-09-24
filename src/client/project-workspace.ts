@@ -1,4 +1,5 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
+import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import {
   isPhaseGroupActivation,
   setPhaseGroupCollapsed,
@@ -65,6 +66,8 @@ export interface WorkspaceProject {
   status: string | null;
   verify: string[];
   tracks: WorkspaceTrack[];
+  /** Unlanded track branches whose heading is gone from PROJECT.md. */
+  orphanBranches: { trackName: string; branch: string; worktreePath: string }[];
   counts: FeatureCounts;
   lastActivity: string | null;
   lastModified: string | null;
@@ -270,9 +273,9 @@ export class ProjectWorkspace {
       return;
     }
 
-    const tracks = project.tracks
-      .map((track) => this.renderTrack(project, track))
-      .join('');
+    const tracks =
+      project.tracks.map((track) => this.renderTrack(project, track)).join('') +
+      this.renderOrphanBranches(project);
     const empty =
       project.counts.total === 0
         ? '<div class="project-empty">No features yet — add the first one below.</div>'
@@ -502,7 +505,7 @@ export class ProjectWorkspace {
   }
 
   private renderTrack(project: WorkspaceProject, track: WorkspaceTrack): string {
-    const rows = track.features.map((f) => this.renderFeatureRow(project, f)).join('');
+    const rows = track.features.map((f) => this.renderFeatureRow(project, track, f)).join('');
     const done = track.features.filter((f) => f.status === 'done').length;
     const collapsed = this.isCollapsed(project.cwd, track.name);
     return `
@@ -527,9 +530,11 @@ export class ProjectWorkspace {
    * deleted as a unit. Land appears only once there is a branch to land.
    */
   private renderTrackActions(project: WorkspaceProject, track: WorkspaceTrack): string {
-    if (!project.vcs.canDispatch) return '';
     const cwd = escapeAttr(project.cwd);
     const name = escapeAttr(track.name);
+    const del = `<button class="pw-track-delete" data-cwd="${cwd}" data-track="${name}"
+                         title="Delete this track: its lines, specs, jobs, branch and landed code">Delete</button>`;
+    if (!project.vcs.canDispatch) return `<span class="pw-track-actions">${del}</span>`;
     const badge = track.branch
       ? `<span class="pw-branch" title="${escapeAttr(track.branch.worktreePath)}">⎇ ${escapeHtml(
           track.branch.name
@@ -545,10 +550,36 @@ export class ProjectWorkspace {
         <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
                 title="${track.branch ? 'Open a session in this track’s worktree' : 'Create this track’s branch and open a session in it'}">Open session</button>
         ${land}
+        ${del}
       </span>`;
   }
 
-  private renderFeatureRow(project: WorkspaceProject, f: Feature): string {
+  /**
+   * Track branches whose heading is gone from PROJECT.md — renamed or removed
+   * by hand. Listed so they can be deleted instead of silently left behind.
+   */
+  private renderOrphanBranches(project: WorkspaceProject): string {
+    if (!project.orphanBranches?.length) return '';
+    const cwd = escapeAttr(project.cwd);
+    const rows = project.orphanBranches
+      .map(
+        (b) => `
+        <li class="phase-item pw-orphan">
+          <span class="phase-title">${escapeHtml(b.trackName)}</span>
+          <span class="pw-branch" title="${escapeAttr(b.worktreePath)}">⎇ ${escapeHtml(b.branch)}</span>
+          <button class="pw-track-delete" data-cwd="${cwd}" data-track="${escapeAttr(b.trackName)}"
+                  title="Delete this branch, its worktree and anything it landed">Delete</button>
+        </li>`
+      )
+      .join('');
+    return `
+      <div class="phase-group pw-track pw-orphans">
+        <div class="phase-group-head"><span class="phase-group-name">Branches with no matching track</span></div>
+        <ul class="phase-list">${rows}</ul>
+      </div>`;
+  }
+
+  private renderFeatureRow(project: WorkspaceProject, track: WorkspaceTrack, f: Feature): string {
     const cwd = escapeAttr(project.cwd);
     const id = escapeAttr(f.id);
     return `
@@ -578,8 +609,14 @@ export class ProjectWorkspace {
                 project.vcs.note || 'Dispatch unavailable'
               )}">▸</span>`
         }
-        <button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
-                title="Remove this feature" aria-label="Remove">×</button>
+        ${
+          // A branched track's code sits on its branch: removing one line would
+          // suggest that code went too. Delete the track instead.
+          track.branch
+            ? ''
+            : `<button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
+                title="Remove this feature" aria-label="Remove">×</button>`
+        }
         ${this.renderSpec(project, f)}
       </li>`;
   }
@@ -735,6 +772,14 @@ export class ProjectWorkspace {
     await this.reload();
   }
 
+  /** Show the delete plan; on confirm the dialog deletes, and the board reloads. */
+  async deleteTrack(cwd: string, track: string): Promise<void> {
+    const detail = await openTrackDeleteDialog(cwd, track, (m) => this.flash(m));
+    if (detail === null) return;
+    await this.reload();
+    this.flash(detail);
+  }
+
   async landTrack(cwd: string, track: string): Promise<void> {
     const data = await this.trackRequest<{ detail: string }>('/api/projects/track/land', {
       cwd,
@@ -849,6 +894,12 @@ export class ProjectWorkspace {
       const trackSession = target.closest('.pw-track-session') as HTMLElement | null;
       if (trackSession) {
         void this.openTrackSession(trackSession.dataset.cwd || '', trackSession.dataset.track || '');
+        return;
+      }
+
+      const trackDelete = target.closest('.pw-track-delete') as HTMLElement | null;
+      if (trackDelete) {
+        void this.deleteTrack(trackDelete.dataset.cwd || '', trackDelete.dataset.track || '');
         return;
       }
 

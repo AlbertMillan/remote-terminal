@@ -45,6 +45,11 @@ export interface WorkspaceProject {
   status: string | null; // frontmatter status (idea/active/paused/shipped…)
   verify: string[]; // declared QA commands
   tracks: WorkspaceTrack[];
+  /**
+   * Unlanded track branches whose heading is gone from PROJECT.md (renamed or
+   * removed by hand). Shown so they can be deleted rather than left behind.
+   */
+  orphanBranches: { trackName: string; branch: string; worktreePath: string }[];
   counts: FeatureCounts;
 
   // Carried over from transcript/DB discovery so the board can still sort by
@@ -251,6 +256,9 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       status: state?.doc.frontmatter.status ?? null,
       verify: state?.doc.frontmatter.verify ?? [],
       tracks,
+      orphanBranches: [...active.values()]
+        .filter((b) => !tracks.some((t) => t.name === b.trackName))
+        .map((b) => ({ trackName: b.trackName, branch: b.branch, worktreePath: b.worktreePath })),
       counts: countFeatures(state ? allFeatures(state.doc) : []),
       lastActivity,
       lastModified: dirModifiedAt(cwd),

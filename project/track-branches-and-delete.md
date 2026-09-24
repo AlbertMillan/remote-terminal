@@ -221,6 +221,9 @@ it guessed, is kept for the leftovers. It's three features:
   from before the `merge_sha` migration falls back to
   `git log --merges --format=%H --fixed-strings --grep "Merge job: <title>"`, used only
   when **exactly one** commit matches. Otherwise it's listed as "revert by hand".
+  - As implemented, the same lookup also runs for features with **no job row left**.
+    Discarding a done job deletes its row and its `merge_sha`, and that is how most jobs
+    end, so without it most direct-to-main merges would be missed.
 
 - **The order makes a failure harmless:**
   1. **Preflight.** A revert needs a clean main checkout on the base branch, apart from

@@ -2605,6 +2605,42 @@ body {
 }
 .pw-track-session:hover,
 .pw-track-land:hover { border-color: var(--accent); }
+.pw-track-delete {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.pw-track-delete:hover { color: var(--danger); border-color: var(--danger); }
+.pw-orphans .phase-group-head { cursor: default; }
+.pw-orphan .pw-track-delete { margin-left: auto; }
+
+/* Delete track dialog */
+.td-content { max-width: 560px; }
+.td-body { max-height: 60vh; overflow-y: auto; font-size: 13px; }
+.td-section { margin-bottom: 14px; }
+.td-section h4 {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+.td-section ul { margin: 0; padding-left: 18px; }
+.td-section li { margin: 2px 0; }
+.td-check { display: flex; gap: 8px; align-items: baseline; margin: 4px 0; cursor: pointer; }
+.td-check.disabled { cursor: default; opacity: 0.7; }
+.td-muted { color: var(--text-muted); }
+.td-note { color: var(--text-secondary); }
+.td-commit { color: var(--text-secondary); margin: 8px 0 0; }
+.td-error { color: var(--danger); margin: 6px 0 0; }
+.td-error:empty, .td-commit:empty { display: none; }
 
 .pw-spec-body {
   flex: 1 0 100%;

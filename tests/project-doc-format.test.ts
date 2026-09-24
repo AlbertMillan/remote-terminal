@@ -6,6 +6,7 @@ import {
   featuresOf,
   addFeature,
   updateFeature,
+  removeTrack,
   removeFeature,
   reorderFeatures,
   healMissingIds,
@@ -215,5 +216,45 @@ describe('mutations', () => {
       expect(taken.has(id)).toBe(false);
       taken.add(id);
     }
+  });
+});
+
+describe('removeTrack', () => {
+  const md = [
+    '---',
+    'name: demo',
+    '---',
+    '',
+    '## Track: One',
+    '- [x] `f-111111` First',
+    '',
+    '## Track: Two',
+    '- [ ] `f-222222` Second',
+    'a raw note under Two',
+    '',
+    '## Track: Three',
+    '- [ ] `f-333333` Third',
+    '',
+  ].join('\n');
+
+  it('removes the heading, its features and its raw lines, with no double gap', () => {
+    const doc = parseProjectDoc(md);
+    expect(removeTrack(doc, 'Two')).toBe(true);
+    const out = renderProjectDoc(doc);
+    expect(out).not.toContain('Two');
+    expect(out).not.toContain('a raw note');
+    expect(out).toContain('- [x] `f-111111` First\n\n## Track: Three');
+  });
+
+  it('leaves no trailing gap when the last track goes', () => {
+    const doc = parseProjectDoc(md);
+    removeTrack(doc, 'Three');
+    expect(renderProjectDoc(doc).endsWith('a raw note under Two\n')).toBe(true);
+  });
+
+  it('returns false for an unknown track and changes nothing', () => {
+    const doc = parseProjectDoc(md);
+    expect(removeTrack(doc, 'Nope')).toBe(false);
+    expect(renderProjectDoc(doc)).toBe(md);
   });
 });

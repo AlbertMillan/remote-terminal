@@ -94,6 +94,73 @@ remote, and removes the worktree and the branch label.
 A merge conflict aborts the merge and leaves both checkouts as they were. The fix is to
 merge the base into the track in its worktree, resolve there, and land again.
 
+## Delete track
+
+`src/server/projects/track-delete.ts` and `src/client/track-delete-dialog.ts`. It works
+in two calls:
+
+- `GET /api/projects/track/delete-plan` returns everything the delete would do, plus a
+  token. The token hashes the PROJECT.md revision, HEAD, the track's jobs (id, status,
+  updated) and its branch rows.
+- `DELETE /api/projects/track` sends the token back, with the reverts and specs the user
+  left ticked. It re-plans and returns 409 if the token no longer matches.
+
+**Attribution comes only from records.** A merge is reverted only when it can be tied
+to the track exactly. Code a session wrote on main without a branch is only reported
+(`unattributed`). Guessing at that code is `f-4blxce`'s job, and a guess is never
+ticked by default.
+
+- **Which merges.** A landed track's `merge_sha`, and a job's `merge_sha` when it merged
+  straight into main. Jobs that merged into one of the track's own branches are covered
+  by the track's merge, or disappear with an unlanded branch.
+- **Finding a merge by its message.** A job whose row has no sha falls back to its exact
+  subject, `Merge job: <title>`, used only when exactly one merge commit on HEAD carries
+  it. The same lookup runs for features that have no job row left. Discarding a done job
+  deletes its row and its `merge_sha` with it, and that is the normal end of a job's
+  life, so this is the common case rather than an edge.
+- **Skipped merges** are listed under "Revert by hand": two merges sharing the subject,
+  a merge not on the current branch, or a job whose base isn't the checked-out branch.
+
+**Step order** (the comment on `executeTrackDelete` has the same list):
+
+1. Re-plan and compare tokens.
+2. Preflight: reverting needs a clean main checkout.
+3. Cancel live jobs. This is the only step before a revert can fail, and a cancelled job
+   can still be discarded.
+4. `git revert --no-commit`, `-m 1` for merges, newest first by `rev-list --topo-order`.
+   On a conflict: `revert --abort`, then `reset --hard` to the preflight HEAD, which is
+   safe because step 2 guaranteed there was nothing uncommitted. Return 409 with the
+   conflicting files.
+5. Close sessions in the track worktree, discard the jobs, remove the worktree and
+   branch, and delete every `track_branches` row for the track.
+6. Remove the track from PROJECT.md (`removeTrack`), delete the ticked specs, and
+   remove the SESSION-LOG phase group (`removePhaseGroup`, matched on label **and**
+   source).
+7. Commit only if something was reverted: one commit, `Delete track: <name>`. It is
+   never pushed. Each path is staged separately, because `git add` rejects a whole call
+   when any pathspec matches nothing, which a deleted spec that was never committed does.
+
+**The spec rule** applies only to specs on main; a spec on the track branch goes with the
+branch.
+
+| Spec | Default |
+|---|---|
+| committed and clean | delete (recoverable from git) |
+| never committed, and neither were the track's lines | delete (the whole plan was a draft) |
+| never committed, but the lines were | keep, offered unticked |
+| committed, with local edits | keep, offered unticked |
+
+A spec is never offered while something outside the track references it: another
+feature's line, a tracked file (`git grep -F`), another SESSION-LOG group's `source`, or
+another job's design spec.
+
+**Branches with no matching track.** An unlanded row whose heading is gone (renamed or
+removed by hand) is listed under "Branches with no matching track" on the board, with
+Delete. The plan works without any features.
+
+**The per-feature ×** is hidden on branched tracks. Removing one line from a track whose
+code sits on a branch would suggest the code went too.
+
 ## The agent rule (global CLAUDE.md)
 
 The picker and Open session only help when they're used. A session started in the main
