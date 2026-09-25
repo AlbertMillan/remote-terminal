@@ -97,6 +97,13 @@ It then syncs ticks, runs `git merge --no-ff` (`Merge track: <name>`), records
 `merge_sha`, commits the carried-over ticks (PROJECT.md only), pushes when there is a
 remote, and removes the worktree and the branch label.
 
+After a successful land the route rebuilds the main checkout (`project-build.ts`):
+`npm run build` when `package.json` declares a `build` script, nothing otherwise. It
+runs **outside** the project lock, since a build touches no git state and holding the
+lock for minutes would refuse every other track operation. A failed build does not undo
+the land; its output tail is appended to the Land message. Nothing is restarted — for
+claude-remote itself the new `dist/` takes effect on the next server restart.
+
 A merge conflict aborts the merge and leaves both checkouts as they were. That includes
 taking back the commit that reset the branch's PROJECT.md: by then the worktree's ticks
 exist only in memory, and without the rollback the next Land would read the reset copy,

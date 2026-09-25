@@ -857,6 +857,8 @@ export class ProjectWorkspace {
   }
 
   async landTrack(cwd: string, track: string): Promise<void> {
+    // The server builds the project after merging, so the reply can take a while.
+    this.flash(`Landing "${track}" and rebuilding…`);
     const data = await this.trackRequest<{ detail: string }>('/api/projects/track/land', {
       cwd,
       track,
@@ -989,7 +991,7 @@ export class ProjectWorkspace {
       const trackLand = target.closest('.pw-track-land') as HTMLElement | null;
       if (trackLand) {
         const track = trackLand.dataset.track || '';
-        if (confirm(`Land "${track}"? Its branch is merged and its worktree removed.`)) {
+        if (confirm(`Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.`)) {
           void this.landTrack(trackLand.dataset.cwd || '', track);
         }
         return;
