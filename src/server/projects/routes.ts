@@ -18,6 +18,7 @@ import {
 } from './track-branches.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
+import { buildProject } from './project-build.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
@@ -309,11 +310,20 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
       const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
-      return withErrors(reply, () =>
-        withProjectLock(project.cwd, `landing "${body.track}"`, () =>
+      return withErrors(reply, async () => {
+        const landed = await withProjectLock(project.cwd, `landing "${body.track}"`, () =>
           landTrack(project, body.track as string, liveCwds)
-        )
-      );
+        );
+        // Outside the lock: a build touches no git state, and holding the lock
+        // for minutes would refuse every Land/Delete/merge meanwhile. A failed
+        // build does not undo the land — it is reported alongside it.
+        const build = await buildProject(project.cwd);
+        return {
+          ...landed,
+          build,
+          detail: build.ran ? `${landed.detail} — ${build.detail}` : landed.detail,
+        };
+      });
     }
   );
 
