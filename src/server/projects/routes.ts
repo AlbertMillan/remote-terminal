@@ -29,6 +29,7 @@ import {
   updateFeature,
   type FeatureStatus,
 } from './project-doc-format.js';
+import { withProjectUsage } from '../usage/store.js';
 
 const logger = createLogger('project-routes');
 
@@ -57,7 +58,7 @@ function parsePriority(v: unknown): number | null | undefined {
 export function registerProjectRoutes(app: FastifyInstance): void {
   // --- Board -------------------------------------------------------------
   app.get('/api/projects', async () => {
-    return { projects: getWorkspaceBoard() };
+    return { projects: withProjectUsage(getWorkspaceBoard()) };
   });
 
   // Cross-project roll-up: what is in flight and what is waiting on you.

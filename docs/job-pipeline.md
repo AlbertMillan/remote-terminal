@@ -58,15 +58,12 @@ than guessing; **Take over** resumes that run's own Claude conversation in a ter
   hand.
 - QA never reports unverified work as verified: precedence is failed > skipped > passed,
   so one trivial passing command cannot mask a driver that never ran.
-- Token/cost accounting hangs off `RunOptions.onUsage` in `agent/claude-run.ts`, which
-  fires **before** the error and denial checks **and on the failure paths** — a rejected
-  run still spent its tokens, and so did a stage killed at the 20-minute timeout. Those
-  rejections carry the parsed figure out on the error (`SpentOnFailure.spentUsage`); a run
-  that died before printing an envelope reports nothing at all, because "we don't know" is
-  not the same as "it cost nothing".
-  `addStageUsage()` adds rather than replaces (qa and fix run several passes per stage),
-  and totals are summed with `sumUsage()`, never stored. Read `modelUsage`, not the
-  envelope's `usage` block: on a multi-turn run `usage` reports only the final turn.
+- Token/cost accounting reads Claude Code's own transcripts into a ledger
+  (`src/server/usage/`), not the run's envelope. A stage's figures come from the runs it
+  recorded through `RunOptions.tag` (`runLane()` supplies it) — each written to `agent_runs`
+  before its process spawns, so a stage killed at the 20-minute timeout is still counted.
+  The envelope-based counters this replaced missed killed and failed runs, re-added a whole
+  session on every `--resume`, and were deleted with the job on Discard.
   See `docs/token-usage-feature.md`.
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
 - **Agent runs queue per PROJECT, not globally** (`runQueued(task, laneKey)` in

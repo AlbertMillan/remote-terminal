@@ -99,6 +99,7 @@ export async function generateQaDoc(
         allowedTools: ['Read', 'Glob', 'Grep', 'Write'],
         timeoutMs: getConfig().projectLog.timeoutMs,
         failOnDenial: false,
+        tag: { projectCwd: project.cwd, kind: 'qa-generate' },
       }
     );
 

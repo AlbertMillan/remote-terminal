@@ -44,6 +44,16 @@ export interface StageUsage {
   cacheCreationTokens: number;
   costUsd: number;
   runCount: number;
+  /** Some tokens came from a model the server's price table does not know. */
+  unpriced?: boolean;
+}
+
+/** Mirrors ProjectUsage in src/server/usage/store.ts. */
+export interface ProjectUsage {
+  total: StageUsage;
+  pipeline: StageUsage;
+  background: StageUsage;
+  sessions: StageUsage;
 }
 
 const ZERO_USAGE: StageUsage = {
@@ -54,6 +64,17 @@ const ZERO_USAGE: StageUsage = {
   costUsd: 0,
   runCount: 0,
 };
+
+/**
+ * Anything to show. A job can have tokens and no run: a Take over spends in a
+ * terminal, outside any pipeline run, and still belongs to the job.
+ */
+export function hasSpend(usage: StageUsage): boolean {
+  return (
+    usage.runCount > 0 ||
+    usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens > 0
+  );
+}
 
 export function formatTokens(n: number): string {
   if (n < 1000) return String(Math.round(n));
@@ -73,18 +94,51 @@ export function formatCost(usd: number): string {
 }
 
 /**
+ * The headline figure for something that spent: its cost, or "—" when every
+ * token came from a model the server cannot price. `formatCost(0)` would read
+ * "$0.00" there, claiming free what is merely unknown; the tooltip says why.
+ */
+export function formatUsageCost(usage: StageUsage): string {
+  return usage.unpriced && usage.costUsd === 0 ? '—' : formatCost(usage.costUsd);
+}
+
+/**
  * The breakdown behind the headline. Says "est." and names list price on
  * purpose: these runs bill against the Pro/Max subscription, so the figure is
  * what the tokens would cost at API rates, not a charge anyone made.
  */
 export function usageTooltip(usage: StageUsage): string {
-  if (usage.runCount === 0) return 'no agent runs';
+  if (!hasSpend(usage)) return 'no agent runs';
+  const runs =
+    usage.runCount > 0 ? `${usage.runCount} run${usage.runCount === 1 ? '' : 's'}` : 'outside any agent run';
+  return `${spendSummary(usage)} · ${runs}`;
+}
+
+function spendSummary(usage: StageUsage): string {
   const cached = usage.cacheReadTokens + usage.cacheCreationTokens;
   return (
     `est. ${formatCost(usage.costUsd)} at API list price · ` +
     `in ${formatTokens(usage.inputTokens)} · out ${formatTokens(usage.outputTokens)} · ` +
-    `cached ${formatTokens(cached)} · ` +
-    `${usage.runCount} run${usage.runCount === 1 ? '' : 's'}`
+    `cached ${formatTokens(cached)}` +
+    (usage.unpriced ? ' · some tokens are from a model with no known price' : '')
+  );
+}
+
+/**
+ * The project total's breakdown: who spent it. Sessions and background runs
+ * are counted too, which is why the figure sits in the project header and not
+ * beside the Jobs list.
+ */
+export function projectUsageTooltip(usage: ProjectUsage): string {
+  const part = (label: string, u: StageUsage) => `${label} ${formatCost(u.costUsd)}`;
+  return (
+    `${spendSummary(usage.total)}
+` +
+    [
+      part('pipeline', usage.pipeline),
+      part('sessions', usage.sessions),
+      part('background (session log, migration, QA drafts)', usage.background),
+    ].join(' · ')
   );
 }
 
@@ -225,8 +279,6 @@ const POLL_MS = 4000;
 
 export class JobBoard {
   private jobs: Job[] = [];
-  /** Pipeline spend across the loaded jobs, as the server summed it. */
-  private usage: StageUsage | null = null;
   private cwd: string | null = null;
   private pollTimer: number | null = null;
   /**
@@ -334,20 +386,17 @@ export class JobBoard {
     this.cwd = cwd;
 
     let jobs: Job[] = [];
-    let usage: StageUsage | null = null;
     try {
       const res = await fetch(`/api/jobs?cwd=${encodeURIComponent(cwd)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { jobs: Job[]; usage?: StageUsage };
+      const data = (await res.json()) as { jobs: Job[] };
       jobs = data.jobs || [];
-      usage = data.usage ?? null;
     } catch {
       jobs = [];
     }
     if (token !== this.loadToken) return; // superseded by a newer load
 
     this.jobs = jobs;
-    this.usage = usage;
     await Promise.all([this.loadFindingsForGates(), this.loadDocsForParked()]);
     if (token !== this.loadToken) return;
 
@@ -458,7 +507,7 @@ export class JobBoard {
     }
     container.innerHTML = `
       <div class="jb-section">
-        <h3 class="project-log-subhead">Jobs${this.renderProjectUsage()}</h3>
+        <h3 class="project-log-subhead">Jobs</h3>
         ${this.jobs.map((job) => this.renderJob(job)).join('')}
       </div>`;
     this.applyPendingFocus(container);
@@ -475,24 +524,6 @@ export class JobBoard {
       (node) => node.dataset.job === jobId
     );
     head?.focus();
-  }
-
-  /**
-   * What the pipeline has spent on this project: every job's stages, including
-   * failed and cancelled ones, since abandoned work still cost something.
-   *
-   * Sits beside "Jobs" rather than in the project header because that is
-   * exactly its scope — it does not count interactive terminal sessions, and a
-   * figure in the project header would be read as if it did.
-   */
-  private renderProjectUsage(): string {
-    const total = this.usage;
-    if (!total || total.runCount === 0) return '';
-    const jobCount = this.jobs.length;
-    return `<span class="jb-usage project" title="${escapeAttr(
-      `${jobCount} job${jobCount === 1 ? '' : 's'} · ${usageTooltip(total)}` +
-        '\nPipeline runs only — terminal sessions in this project are not counted.'
-    )}">${escapeHtml(formatCost(total.costUsd))}</span>`;
   }
 
   private renderJob(job: Job): string {
@@ -522,12 +553,12 @@ export class JobBoard {
     return '';
   }
 
-  /** What this job has cost so far. Absent until a run has reported usage. */
+  /** What this job has cost so far, Take over included. Absent until it spent anything. */
   private usageChip(job: Job): string {
     const usage = usageOf(job);
-    if (usage.runCount === 0) return '';
+    if (!hasSpend(usage)) return '';
     return `<span class="jb-usage" title="${escapeAttr(usageTooltip(usage))}">${escapeHtml(
-      formatCost(usage.costUsd)
+      formatUsageCost(usage)
     )}</span>`;
   }
 
@@ -559,7 +590,7 @@ export class JobBoard {
               : `${s.status}${s.detail ? ` — ${s.detail}` : ''}`;
             return `<span class="jb-stage ${queued ? 'queued' : s.status}" title="${escapeAttr(
               `${s.name}: ${what}` +
-                (usageOf(s).runCount > 0 ? `
+                (hasSpend(usageOf(s)) ? `
 ${usageTooltip(usageOf(s))}` : '')
             )}">${queued ? '⋯' : STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`;
           })

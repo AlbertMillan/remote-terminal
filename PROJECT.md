@@ -55,6 +55,7 @@ status: active
 - [x] `f-4jqq6m` Section 3 — Server: stage token-usage migration, RunUsage parsing, addStageUsage, sumUsage rollups
 - [x] `f-k3ttmk` Section 4 — Client: stage and job cost chips, project total beside the Jobs heading
 
+- [x] `f-mpon58` P1 Transcript usage ledger — deduped per-message usage from transcripts replaces the stage counters; covers killed runs, Take over, sessions, subagents, background runs → project/transcript-usage-ledger.md
 ## Track: Live job status
 - [x] `f-7d386y` P1 Live job overlay — pushed cross-project job cards over the terminal, toggled from Settings → project/live-job-overlay.md
 
@@ -73,3 +74,5 @@ status: active
 - [x] `f-kzucpb` P1 Track branches — branch on first implementation (session, picker, dispatch), Land track, `merge_sha` on every merge → project/track-branches-and-delete.md
 - [x] `f-nk734f` P1 Delete track — cancel/discard jobs, drop the branch, revert landed merges, spec rule, one commit → project/track-branches-and-delete.md
 - [x] `f-4blxce` P2 Work on main outside any branch — detect a track's edits on main from its sessions, Branch now, unticked guesses in Delete → project/track-branches-and-delete.md
+## Track: Plan usage limits
+- [ ] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md

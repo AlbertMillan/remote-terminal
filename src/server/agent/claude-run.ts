@@ -1,9 +1,14 @@
 import { spawn, execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
 import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { recordRunEnd, recordRunStart, type RunTag } from '../usage/store.js';
+import { emitRunSettled } from './run-events.js';
+
+export type { RunTag } from '../usage/store.js';
 
 const logger = createLogger('claude-run');
 const execFileAsync = promisify(execFile);
@@ -32,18 +37,6 @@ export class RunAbortedError extends Error {
   }
 }
 
-/**
- * A rejection that still knows what the run had spent.
- *
- * A stage killed at the 20-minute timeout burned every one of those tokens, so
- * the failure path has to be able to report them — otherwise the runs worth
- * knowing the cost of are exactly the ones recorded as free. Absent when the
- * run died before printing an envelope, which is the honest answer there.
- */
-export interface SpentOnFailure {
-  spentUsage?: RunUsage;
-}
-
 /** "1200000ms" is not a number anyone reads as 20 minutes on a failed job row. */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -51,12 +44,6 @@ function formatDuration(ms: number): string {
   if (seconds < 120) return `${seconds}s`;
   const minutes = Math.round(seconds / 60);
   return `${minutes}m`;
-}
-
-/** Tag a rejection with the usage parsed from whatever the run managed to print. */
-function withSpent(error: Error, partial: ClaudeRunResult | null): Error {
-  if (partial) (error as Error & SpentOnFailure).spentUsage = partial.usage;
-  return error;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,33 +159,6 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
-/**
- * What one run consumed, as the envelope reports it.
- *
- * Deliberately a flat, provider-neutral shape rather than the raw `usage`
- * object: the CLI's envelope carries a dozen fields that change between
- * versions, and everything downstream only needs these five.
- */
-export interface RunUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  /** `total_cost_usd` — API list price for the tokens, not a subscription charge. */
-  costUsd: number;
-}
-
-export const NO_USAGE: RunUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheCreationTokens: 0,
-  costUsd: 0,
-};
-
-/** Called with each completed run's usage, for callers that account for spend. */
-export type UsageSink = (usage: RunUsage) => void;
-
 export interface ClaudeRunResult {
   isError: boolean; // claude's own `is_error` flag
   result: string; // claude's final result text
@@ -209,102 +169,34 @@ export interface ClaudeRunResult {
    * escape hatch when a run needs a human decision.
    */
   sessionId: string | null;
-  /** Tokens and list-price cost this run reported; zeros when it reported none. */
-  usage: RunUsage;
-}
-
-/** Finite numbers only — a missing or malformed field reads as zero, never NaN. */
-function num(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**
- * Pull usage out of the envelope.
+ * Parse the `--output-format json` envelope; tolerant of unexpected shapes.
  *
- * Read `modelUsage`, NOT the top-level `usage`: on a multi-turn run — every
- * stage is one — `usage` reports only the final turn (measured: 19 against
- * modelUsage's 967). `usage` stays as the fallback for shapes lacking it.
- *
- * Tolerant throughout: a CLI that renames these keys must degrade to zeros, not
- * break the pipeline that merely reports them. See `docs/token-usage-feature.md`.
+ * Usage is deliberately NOT read from here. The envelope arrives only when a
+ * run completes (a killed run prints none), and on `--resume` it reports the
+ * whole session's running total rather than this run's — so every figure
+ * comes from the transcript ledger instead. See `docs/token-usage-feature.md`.
  */
-function parseUsage(envelope: {
-  usage?: unknown;
-  modelUsage?: unknown;
-  total_cost_usd?: unknown;
-}): RunUsage {
-  const perModel = Object.values((envelope.modelUsage ?? {}) as Record<string, unknown>).filter(
-    (m): m is Record<string, unknown> => !!m && typeof m === 'object'
-  );
-
-  const totalled = perModel.reduce<RunUsage>(
-    (acc, m) => ({
-      inputTokens: acc.inputTokens + num(m.inputTokens),
-      outputTokens: acc.outputTokens + num(m.outputTokens),
-      cacheReadTokens: acc.cacheReadTokens + num(m.cacheReadInputTokens),
-      cacheCreationTokens: acc.cacheCreationTokens + num(m.cacheCreationInputTokens),
-      // Falls back to the per-model costs when the envelope omits the total.
-      costUsd: acc.costUsd + num(m.costUSD),
-    }),
-    { ...NO_USAGE }
-  );
-
-  const u = (envelope.usage ?? {}) as Record<string, unknown>;
-  const fallback: RunUsage = {
-    inputTokens: num(u.input_tokens),
-    outputTokens: num(u.output_tokens),
-    cacheReadTokens: num(u.cache_read_input_tokens),
-    cacheCreationTokens: num(u.cache_creation_input_tokens),
-    costUsd: 0,
-  };
-
-  const tokens = perModel.length > 0 ? totalled : fallback;
-  return {
-    ...tokens,
-    costUsd: num(envelope.total_cost_usd) || totalled.costUsd,
-  };
-}
-
-/** Parse the `--output-format json` envelope; tolerant of unexpected shapes. */
 export function parseClaudeResult(stdout: string): ClaudeRunResult {
-  return (
-    tryParseClaudeResult(stdout) ?? {
-      isError: false,
-      result: '',
-      permissionDenials: 0,
-      sessionId: null,
-      usage: NO_USAGE,
-    }
-  );
-}
-
-/**
- * Parse the envelope, or null when there wasn't one.
- *
- * The distinction matters on the failure paths: a killed run that never printed
- * an envelope has no usage to report, and recording a zero-token run for it
- * would claim the run cost nothing rather than that we don't know.
- */
-function tryParseClaudeResult(stdout: string): ClaudeRunResult | null {
-  if (!stdout.trim()) return null;
+  const empty: ClaudeRunResult = { isError: false, result: '', permissionDenials: 0, sessionId: null };
+  if (!stdout.trim()) return empty;
   try {
     const j = JSON.parse(stdout) as {
       is_error?: unknown;
       result?: unknown;
       permission_denials?: unknown;
       session_id?: unknown;
-      usage?: unknown;
-      total_cost_usd?: unknown;
     };
     return {
       isError: j.is_error === true,
       result: typeof j.result === 'string' ? j.result : '',
       permissionDenials: Array.isArray(j.permission_denials) ? j.permission_denials.length : 0,
       sessionId: typeof j.session_id === 'string' && j.session_id ? j.session_id : null,
-      usage: parseUsage(j),
     };
   } catch {
-    return null;
+    return empty;
   }
 }
 
@@ -327,6 +219,12 @@ export interface SpawnOptions {
    */
   resumeSessionId?: string;
   /**
+   * Start a NEW session under this id (`--session-id`), so its transcript is
+   * known before the process writes a line of it. Ignored with
+   * `resumeSessionId`, which keeps the resumed session's id.
+   */
+  sessionId?: string;
+  /**
    * Abort the run. Kills the child process tree if one is already running, and
    * skips spawning entirely if the run is still queued behind maxConcurrent —
    * which a registry of live child processes would miss.
@@ -347,18 +245,13 @@ export interface RunOptions extends SpawnOptions {
    */
   failOnDenial?: boolean;
   /**
-   * Receives this run's usage as soon as the envelope is parsed — BEFORE the
-   * error and denial checks below, and on the failure paths as well as the
-   * clean one. A run that produced an envelope has already spent its tokens
-   * whether or not we accept its output, and a run killed at the timeout spent
-   * every token it burned getting there, so recording only on success would
-   * under-report exactly the runs worth knowing the cost of.
-   *
-   * Not called when the run died before printing an envelope: there is no
-   * figure to report, and a zero-token run would claim it cost nothing rather
-   * than that we don't know.
+   * What this run is for — its project, and job/stage for a pipeline stage.
+   * The run is recorded under its session id BEFORE it spawns, which is what
+   * lets the usage ledger attribute its transcript, a killed run's included.
+   * Every caller passes one; an untagged run's spend reads as an interactive
+   * session's.
    */
-  onUsage?: UsageSink;
+  tag?: RunTag;
   /**
    * The queue lane this run belongs to — the project, for a pipeline stage.
    * Runs in different lanes never wait for each other.
@@ -446,6 +339,9 @@ export function spawnClaude(
         // Continuing the conversation that asked the question, rather than
         // starting one that has to rediscover the repository. See design.ts.
         ...(options.resumeSessionId ? ['--resume', options.resumeSessionId] : []),
+        // A new session named up front, so the usage ledger can attribute its
+        // transcript from the first line — before any envelope exists.
+        ...(!options.resumeSessionId && options.sessionId ? ['--session-id', options.sessionId] : []),
         '--output-format',
         'json',
       ],
@@ -471,20 +367,13 @@ export function spawnClaude(
     // Same teardown as the timeout path — the only difference is who asked.
     const onAbort = () => {
       killTree(child);
-      finish(() => reject(withSpent(new RunAbortedError(), tryParseClaudeResult(stdout))));
+      finish(() => reject(new RunAbortedError()));
     };
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
     const timer = setTimeout(() => {
       killTree(child);
-      finish(() =>
-        reject(
-          withSpent(
-            new Error(`run timed out after ${formatDuration(timeoutMs)}`),
-            tryParseClaudeResult(stdout)
-          )
-        )
-      );
+      finish(() => reject(new Error(`run timed out after ${formatDuration(timeoutMs)}`)));
     }, timeoutMs);
 
     child.stdout?.on('data', (d) => {
@@ -496,16 +385,7 @@ export function spawnClaude(
     child.on('error', (err) => finish(() => reject(err)));
     child.on('close', (code) => {
       if (code === 0) return finish(() => resolve(parseClaudeResult(stdout)));
-      // A non-zero exit usually still printed its envelope, so this is the
-      // failure path most likely to recover a real figure.
-      finish(() =>
-        reject(
-          withSpent(
-            new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`),
-            tryParseClaudeResult(stdout)
-          )
-        )
-      );
+      finish(() => reject(new Error(`claude exited with code ${code}: ${stderr.slice(0, 500)}`)));
     });
 
     // claude may close stdin before we finish writing (fast failure / auth
@@ -596,20 +476,6 @@ export async function revertOutOfScope(
 }
 
 /**
- * Hand one run's spend to the sink. Never throws: accounting must not be able to
- * fail a stage, and it runs on the failure path too, where a throw would mask
- * the error that actually killed the run.
- */
-function reportUsage(cwd: string, sink: UsageSink | undefined, usage: RunUsage | undefined): void {
-  if (!sink || !usage) return;
-  try {
-    sink(usage);
-  } catch (error) {
-    logger.warn({ cwd, error }, 'claude-run: usage sink threw');
-  }
-}
-
-/**
  * Queued `claude -p` run with two safety layers:
  *  - hard-fail if claude reports an error or any denied tool call, and
  *  - revert any file the run touched outside `allowedGlobs` (git projects).
@@ -628,17 +494,19 @@ export async function runClaude(
     if (options.signal?.aborted) throw new RunAbortedError();
     const preEntries = await gitStatusEntries(cwd);
 
+    // Name the session and record the run before the process exists: a run
+    // killed a second in has already written transcript lines, and they are
+    // only attributable if this row is there when the ledger reads them. A
+    // resumed run keeps its session's id; the run window tells it apart.
+    const sessionId = options.resumeSessionId ?? randomUUID();
+    const runId = options.tag ? recordRunStart(sessionId, options.tag) : null;
     let result: ClaudeRunResult;
     try {
-      result = await spawnClaude(cwd, prompt, options);
-    } catch (error) {
-      // A run killed by the timeout or a cancel still spent whatever it spent.
-      // Reporting only on the resolve path meant the expensive failures — the
-      // ones you most want the cost of — were recorded as free.
-      reportUsage(cwd, options.onUsage, (error as SpentOnFailure).spentUsage);
-      throw error;
+      result = await spawnClaude(cwd, prompt, { ...options, sessionId });
+    } finally {
+      recordRunEnd(runId);
+      emitRunSettled();
     }
-    reportUsage(cwd, options.onUsage, result.usage);
     if (result.isError || (failOnDenial && result.permissionDenials > 0)) {
       throw new Error(
         `claude run rejected (isError=${result.isError}, permissionDenials=${result.permissionDenials})` +

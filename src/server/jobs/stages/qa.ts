@@ -2,7 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
-import { runClaude, type UsageSink } from '../../agent/claude-run.js';
+import { runClaude, type RunTag } from '../../agent/claude-run.js';
 import { readProjectDoc } from '../../projects/project-store.js';
 import { checkDriver, readQaDoc, qaDocRelPath, type ProcessProbe } from '../qa-doc.js';
 
@@ -135,14 +135,14 @@ export async function runQaStage(opts: {
   jobId: string;
   worktreePath: string;
   isProcessRunning?: ProcessProbe;
-  onUsage?: UsageSink;
+  tag?: RunTag;
   /** Aborts the underlying claude run when the job is cancelled. */
   signal?: AbortSignal;
   /** Queue lane and spawn notification; see runner.ts. */
   laneKey?: string;
   onSpawn?: () => void;
 }): Promise<QaResult> {
-  const { jobId, worktreePath, isProcessRunning, onUsage, signal, laneKey, onSpawn } = opts;
+  const { jobId, worktreePath, isProcessRunning, tag, signal, laneKey, onSpawn } = opts;
 
   const qa = readQaDoc(worktreePath);
   // PROJECT.md's verify list is the other source of declared commands, so a
@@ -171,7 +171,7 @@ export async function runQaStage(opts: {
         timeoutMs: getConfig().jobs.stageTimeoutMs,
         signal,
         failOnDenial: false,
-        onUsage,
+        tag,
         laneKey,
         onSpawn,
       });

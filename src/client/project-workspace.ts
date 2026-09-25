@@ -1,6 +1,7 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog, type GuessedFile } from './track-branch-now-dialog.js';
+import { formatUsageCost, hasSpend, projectUsageTooltip, type ProjectUsage } from './job-board.js';
 
 /** Per track: uncommitted files on main its sessions wrote, and commits they made. A guess. */
 type UnbranchedWork = Record<string, { files: GuessedFile[]; commits: number }>;
@@ -76,6 +77,8 @@ export interface WorkspaceProject {
   lastActivity: string | null;
   lastModified: string | null;
   transcriptCount: number;
+  /** Everything the project spent, from the usage ledger; null before any is read. */
+  usage?: ProjectUsage | null;
 }
 
 /** Cycle order when clicking a feature's status box. */
@@ -1101,6 +1104,13 @@ export class ProjectWorkspace {
         `<span class="pw-badge" title="${escapeAttr(
           project.nested.join('\n')
         )}">+${project.nested.length} dirs</span>`
+      );
+    }
+    if (project.usage && hasSpend(project.usage.total)) {
+      badges.push(
+        `<span class="jb-usage project" title="${escapeAttr(projectUsageTooltip(project.usage))}">${escapeHtml(
+          formatUsageCost(project.usage.total)
+        )}</span>`
       );
     }
     return badges.join('');

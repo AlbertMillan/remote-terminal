@@ -338,7 +338,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
     // Edits allowed only to the log file (+ plan files when checkbox-ticking is on).
     const allowedWrites = cfg.editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
-    await runClaude(ctx.cwd, prompt, allowedWrites);
+    await runClaude(ctx.cwd, prompt, allowedWrites, { tag: { projectCwd: ctx.cwd, kind: 'session-log' } });
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —
@@ -469,7 +469,7 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');
-    await runClaude(cwd, prompt, [cfg.fileName]);
+    await runClaude(cwd, prompt, [cfg.fileName], { tag: { projectCwd: cwd, kind: 'session-log' } });
 
     // A run can exit 0 without writing the file (derailed); report error so the
     // dashboard surfaces it instead of silently flipping to "done".
@@ -515,7 +515,9 @@ export async function resyncProjectPhases(cwd: string): Promise<LogOutcome> {
       return 'skipped';
     }
     logger.info({ cwd }, 'project-log: re-syncing phases');
-    await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs), [cfg.fileName]);
+    await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs), [cfg.fileName], {
+      tag: { projectCwd: cwd, kind: 'session-log' },
+    });
     // A no-op re-sync (already current) is still success; just confirm the file survived.
     if (!existsSync(logPath)) {
       logger.warn({ cwd }, 'project-log: re-sync left no log file');
