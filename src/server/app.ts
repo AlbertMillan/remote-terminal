@@ -9,6 +9,7 @@ import { getConfig, loadConfig } from './config.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
+import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
@@ -316,8 +317,19 @@ export async function createApp(): Promise<FastifyInstance> {
     logger.warn('Dev endpoint enabled: POST /api/dev/project-log/:sessionId');
   }
 
-  // WebSocket endpoint
-  app.get('/ws', { websocket: true }, (socket, request) => {
+  // WebSocket endpoint. The origin check runs in preValidation so a cross-site socket is
+  // refused with a 403 before the upgrade, never reaching the Tailscale identity check —
+  // which would otherwise authenticate it as whichever user's browser opened it.
+  app.get('/ws', {
+    websocket: true,
+    preValidation: async (request, reply) => {
+      const origin = request.headers.origin;
+      if (!isAllowedWebSocketOrigin(origin, request.headers.host)) {
+        logger.warn({ origin, host: request.headers.host }, 'WebSocket rejected: cross-origin');
+        await reply.code(403).send('Forbidden');
+      }
+    },
+  }, (socket, request) => {
     handleConnection(socket, request);
   });
 
