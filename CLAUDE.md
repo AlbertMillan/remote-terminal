@@ -33,16 +33,24 @@ style by hand.
 **Server** (Fastify + WebSocket):
 
 - `src/server/index.ts` — entry point · `app.ts` — Fastify config and routes
-- `src/server/sessions/manager.ts` — session lifecycle · `pty-handler.ts` — node-pty + ScrollbackBuffer
-- `src/server/websocket/handler.ts` — connections · `protocol.ts` — message types · `validation.ts` — bounds
+- `src/server/sessions/manager.ts` — session lifecycle · `session-open.ts` — fork/resume/revive ·
+  `boot-sweep.ts` · `pty-handler.ts` — node-pty + ScrollbackBuffer
+- `src/server/websocket/handler.ts` — connect + dispatch · `connections.ts` — shared connection
+  state and broadcasts · `handlers/` — one module per message family · `protocol.ts` — message
+  types · `validation.ts` — bounds · `origin.ts` — same-origin check on the upgrade
 - `src/server/db/` — SQLite (better-sqlite3), schema and migrations
 - `src/server/auth/tailscale.ts` — identity via `tailscale whois`
 - `src/server/projects/` — registry, `PROJECT.md` parsing, workspace board
-- `src/server/jobs/` — pipeline: `runner.ts`, `store.ts`, `stages/`, `docs.ts`, `worktree.ts`
+- `src/server/jobs/` — pipeline: `runner.ts` (re-exports only) → `pipeline.ts` (pump, `runNextStage`,
+  stage executors) and `lifecycle.ts` (approve/answer/retry/cancel/discard), `in-flight.ts`,
+  `store.ts`, `stages/`, `docs.ts`, `worktree.ts`
 - `src/server/agent/claude-run.ts` — the one hardened path for headless `claude -p` runs
 
-**Client**: `terminal.ts` (xterm.js) · `session-manager.ts` (WebSocket + session UI) ·
-`project-workspace.ts` · `job-board.ts` · `job-overlay.ts` · `decision-format.ts`
+**Client**: `terminal.ts` (xterm.js) · `session-manager.ts` (WebSocket + session state; views in
+`session-list-view.ts`, `project-log-view.ts`, `new-session-modal.ts`, `mobile-nav.ts`,
+`shortcuts-modal.ts`) · `project-workspace.ts` (+ `project-feature-board.ts`) · `job-board.ts`
+(+ `job-board-docs.ts`, `job-board-decision.ts`, `job-board-types.ts`) · `job-overlay.ts` ·
+`decision-format.ts`
 
 **Data**: `~/.claude-remote/` (sessions.db, config.json, logs/, worktrees/)
 

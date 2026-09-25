@@ -1,15 +1,34 @@
 // Session and WebSocket management
 import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager } from './pip-manager.js';
-import { escapeHtml, escapeAttr } from './html-utils.js';
 import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
-import { JobOverlay, type JobSummary, type JobsSummary } from './job-overlay.js';
+import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
-import { SHORTCUT_GROUPS } from './shortcuts.js';
-import { TrackPicker } from './track-picker.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
+import { ShortcutsModal } from './shortcuts-modal.js';
+import { ProjectLogView } from './project-log-view.js';
+import { NewSessionModal } from './new-session-modal.js';
+import { SessionListView } from './session-list-view.js';
+import { MobileNav } from './mobile-nav.js';
+import type {
+  SessionInfo,
+  CategoryInfo,
+  SessionMovedPayload,
+  SessionReorderedPayload,
+  CategoryCreatedPayload,
+  CategoryRenamedPayload,
+  CategoryDeletedPayload,
+  CategoryReorderedPayload,
+  CategoryToggledPayload,
+  CategoryListPayload,
+  ErrorPayload,
+  NotificationPreferencesPayload,
+  NotificationPayload,
+  ServerMessage,
+  ConnectionStatus,
+} from './session-types.js';
 
 // Configuration constants
 const REQUEST_TIMEOUT_MS = 30000;
@@ -17,198 +36,6 @@ const NOTIFICATION_AUTO_CLOSE_MS = 10000;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const SESSION_REATTACH_DELAY_MS = 100;
-
-interface SessionInfo {
-  id: string;
-  name: string;
-  shell: string;
-  cwd: string;
-  createdAt: string;
-  lastAccessedAt: string;
-  status: string;
-  cols: number;
-  rows: number;
-  attachable: boolean;
-  categoryId: string | null;
-  sortOrder: number;
-  isFork: boolean;
-  /** Set once the session reports a Claude conversation (SessionStart/Stop hooks).
-   *  Decides whether reviving resumes that conversation or only respawns the shell. */
-  claudeSessionId: string | null;
-}
-
-interface CategoryInfo {
-  id: string;
-  name: string;
-  sortOrder: number;
-  collapsed: boolean;
-}
-
-// Project-log board (mirrors server's ProjectBoardItem / ParsedLogEntry / LogEntryMeta)
-interface LogEntryMeta {
-  date: string;
-  session: string;
-  branch: string;
-  claudeSessionId: string;
-  blockers: number;
-  openItems: number;
-}
-interface ParsedLogEntry {
-  meta: LogEntryMeta | null;
-  body: string;
-}
-interface PhaseItem {
-  id: string;
-  title: string;
-  status: 'done' | 'in_progress' | 'pending';
-  sessionIds: string[];
-}
-interface PhaseGroup {
-  group: string;
-  source: string;
-  items: PhaseItem[];
-}
-interface ProjectBoardItem {
-  cwd: string;
-  name: string;
-  hasLog: boolean;
-  lastActivity: string | null;
-  transcriptCount: number;
-  entries: ParsedLogEntry[];
-  latest: LogEntryMeta | null;
-  phaseGroups: PhaseGroup[];
-}
-
-// Type-safe server message definitions (issue #14)
-interface AuthSuccessPayload {
-  userId: string;
-  loginName: string;
-  displayName: string;
-}
-
-interface AuthFailurePayload {
-  message: string;
-}
-
-interface SessionListPayload {
-  sessions: SessionInfo[];
-}
-
-interface SessionCreatedPayload {
-  session: SessionInfo;
-}
-
-interface SessionAttachedPayload {
-  session: SessionInfo;
-  scrollback: string;
-}
-
-interface SessionTerminatedPayload {
-  sessionId: string;
-}
-
-interface SessionDeletedPayload {
-  sessionId: string;
-}
-
-interface SessionRenamedPayload {
-  sessionId: string;
-  name: string;
-}
-
-interface SessionMovedPayload {
-  sessionId: string;
-  categoryId: string | null;
-  sortOrder: number;
-}
-
-interface SessionReorderedPayload {
-  sessions: { id: string; sortOrder: number }[];
-}
-
-interface CategoryCreatedPayload {
-  category: CategoryInfo;
-}
-
-interface CategoryRenamedPayload {
-  categoryId: string;
-  name: string;
-}
-
-interface CategoryDeletedPayload {
-  categoryId: string;
-}
-
-interface CategoryReorderedPayload {
-  categories: { id: string; sortOrder: number }[];
-}
-
-interface CategoryToggledPayload {
-  categoryId: string;
-  collapsed: boolean;
-}
-
-interface CategoryListPayload {
-  categories: CategoryInfo[];
-}
-
-interface TerminalDataPayload {
-  sessionId: string;
-  data: string;
-}
-
-interface TerminalExitPayload {
-  sessionId: string;
-  exitCode: number;
-}
-
-interface ErrorPayload {
-  message: string;
-}
-
-interface NotificationPreferencesPayload {
-  browserEnabled: boolean;
-  visualEnabled: boolean;
-  notifyOnInput: boolean;
-  notifyOnCompleted: boolean;
-}
-
-interface NotificationPayload {
-  sessionId: string;
-  type: 'needs-input' | 'completed';
-  timestamp: string;
-}
-
-type ServerMessage =
-  | { type: 'auth.success'; id?: string; payload: AuthSuccessPayload }
-  | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
-  | { type: 'session.list'; id?: string; payload: SessionListPayload }
-  | { type: 'session.created'; id?: string; payload: SessionCreatedPayload }
-  | { type: 'session.attached'; id?: string; payload: SessionAttachedPayload }
-  | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
-  | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
-  | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
-  | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
-  | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
-  | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }
-  | { type: 'session.kept'; id?: string; payload: { sessionId: string } }
-  | { type: 'session.error'; id?: string; payload: ErrorPayload }
-  | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
-  | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
-  | { type: 'category.created'; id?: string; payload: CategoryCreatedPayload }
-  | { type: 'category.renamed'; id?: string; payload: CategoryRenamedPayload }
-  | { type: 'category.deleted'; id?: string; payload: CategoryDeletedPayload }
-  | { type: 'category.reordered'; id?: string; payload: CategoryReorderedPayload }
-  | { type: 'category.toggled'; id?: string; payload: CategoryToggledPayload }
-  | { type: 'category.list'; id?: string; payload: CategoryListPayload }
-  | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
-  | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
-  | { type: 'notification'; id?: string; payload: NotificationPayload }
-  | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
-  | { type: 'error'; id?: string; payload: ErrorPayload }
-  | { type: 'pong'; id?: string; payload?: undefined };
-
-type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 class SessionManager {
   private ws: WebSocket | null = null;
@@ -223,8 +50,6 @@ class SessionManager {
   private maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
   private reconnectDelay = RECONNECT_BASE_DELAY_MS;
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
-  private draggedSessionId: string | null = null;
-  private dropIndicatorEl: HTMLElement | null = null;
 
   // Notification state
   private sessionNotifications: Map<string, { type: 'needs-input' | 'completed'; timestamp: string }> = new Map();
@@ -236,28 +61,47 @@ class SessionManager {
   };
   private browserNotificationsPermission: 'default' | 'granted' | 'denied' = 'default';
 
-  // Mobile navigation state
-  private mobileNavVisible = true;
+  /** The sidebar session list: categories, drag/drop reordering, and session rows. */
+  private sessionListView = new SessionListView({
+    sessions: this.sessions,
+    categories: this.categories,
+    sessionNotifications: this.sessionNotifications,
+    getCurrentSessionId: () => this.currentSessionId,
+    attachToSession: (sessionId) => this.attachToSession(sessionId),
+    reviveSession: (sessionId) => this.reviveSession(sessionId),
+    deleteSession: (sessionId) => this.deleteSession(sessionId),
+    moveSession: (sessionId, categoryId) => this.moveSession(sessionId, categoryId),
+    toggleCategory: (categoryId, collapsed) => this.toggleCategory(categoryId, collapsed),
+    deleteCategory: (categoryId) => this.deleteCategory(categoryId),
+    showCategoryModal: (mode, category) => this.showCategoryModal(mode, category),
+    reorderSessions: (updates) => this.send('session.reorder', { sessions: updates }),
+  });
+
+  /** The mobile on-screen navigation bar. */
+  private mobileNav = new MobileNav({
+    hasCurrentSession: () => !!this.currentSessionId,
+    sendTerminalData: (data) => this.sendTerminalData(data),
+    fitTerminal: () => this.terminalMgr?.fit(),
+  });
 
   // PiP manager
   private pipManager = new PipManager();
 
-  // New-session "recent paths" dropdown state
-  private recentPaths: string[] = [];
-  private cwdSuggestionIndex = -1;
-  /** The New Session dialog's Track picker (track-picker.ts). */
-  private trackPicker = new TrackPicker();
+  /** The "New Session" modal: name/cwd fields, recent-path suggestions, the Track picker. */
+  private newSessionModal = new NewSessionModal({
+    createSession: (name, cwd) => this.createSession(name, cwd),
+  });
 
-  // Project-log board state
-  private activeTab: 'sessions' | 'projects' = 'sessions';
-  private projectBoard: ProjectBoardItem[] = [];
+  /** The keyboard shortcuts modal and the welcome-screen hints. */
+  private shortcutsModal = new ShortcutsModal();
+
   /**
    * The canonical PROJECT.md board. Owns the sidebar list and the feature
-   * editor; this class keeps the session-history half of the detail view,
-   * which still reads SESSION-LOG.md.
+   * editor; the project-log view keeps the session-history half of the
+   * detail view, which still reads SESSION-LOG.md.
    */
   private workspace = new ProjectWorkspace(
-    (cwd) => this.showProjectLog(cwd),
+    (cwd) => this.projectLogView.showProjectLog(cwd),
     (cwd) => this.showNewSessionModal(cwd),
     (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title),
     (worktreePath, trackName) => this.createSession(trackName, worktreePath)
@@ -271,31 +115,28 @@ class SessionManager {
     this.openHistorySession(claudeSessionId, cwd, 'resume')
   );
   /** Cross-project overview; clicking a row opens that project. */
-  private rollup = new RollupView((cwd) => this.showProjectLog(cwd));
+  private rollup = new RollupView((cwd) => this.projectLogView.showProjectLog(cwd));
   /**
    * The live job panel over the main area. Fed by pushed `jobs.summary`
    * messages, so it stays current while a terminal is in front of it.
    */
   private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
   private planUsage = new PlanUsageChip();
-  private selectedProjectCwd: string | null = null;
-  /** The board load in flight, so concurrent callers share one round trip. */
-  private boardLoad: Promise<void> | null = null;
-  // Entry targeted by the open delete-history-entry modal.
-  private pendingHistoryDelete: {
-    cwd: string;
-    entryIndex: number;
-    claudeSessionId: string | null;
-    siblingCount: number; // other entries sharing the same claudeSessionId
-  } | null = null;
-  private backfillPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private failedBackfills = new Set<string>();
+  /** The Projects tab: the PROJECT.md board plus the SESSION-LOG.md history/plan-progress view. */
+  private projectLogView = new ProjectLogView({
+    workspace: this.workspace,
+    jobBoard: this.jobBoard,
+    rollup: this.rollup,
+    detachCurrentSession: () => this.detachCurrentSession(),
+    syncJobOverlay: () => this.syncJobOverlay(),
+    showNewSessionModal: (cwd) => this.showNewSessionModal(cwd),
+  });
 
   constructor(terminal: TerminalManager = terminalManager) {
     this.terminalMgr = terminal;
     this.setupEventListeners();
-    this.setupMobileNavigation();
-    this.renderWelcomeShortcuts();
+    this.mobileNav.setupMobileNavigation();
+    this.shortcutsModal.renderWelcomeShortcuts();
     this.setupPipButton();
     this.jobOverlay.attach();
     this.planUsage.attach();
@@ -380,17 +221,17 @@ class SessionManager {
     document.getElementById('welcome-new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
 
     // Sidebar tabs (Sessions / Projects board)
-    document.getElementById('tab-sessions')?.addEventListener('click', () => this.switchTab('sessions'));
-    document.getElementById('tab-projects')?.addEventListener('click', () => this.switchTab('projects'));
-    document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.loadProjectBoard());
+    document.getElementById('tab-sessions')?.addEventListener('click', () => this.projectLogView.switchTab('sessions'));
+    document.getElementById('tab-projects')?.addEventListener('click', () => this.projectLogView.switchTab('projects'));
+    document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.projectLogView.loadProjectBoard());
     document.getElementById('overview-btn')?.addEventListener('click', () => {
       void this.rollup.show().then(() => this.syncJobOverlay());
     });
     document.getElementById('rollup-refresh-btn')?.addEventListener('click', () => void this.rollup.load());
     const rollupBody = document.getElementById('rollup-body');
     if (rollupBody) this.rollup.attach(rollupBody);
-    document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.openSessionForSelectedProject());
-    document.getElementById('project-log-resync-btn')?.addEventListener('click', () => this.resyncSelectedProject());
+    document.getElementById('project-log-open-btn')?.addEventListener('click', () => this.projectLogView.openSessionForSelectedProject());
+    document.getElementById('project-log-resync-btn')?.addEventListener('click', () => this.projectLogView.resyncSelectedProject());
     // Feature board interactions (delegated inside the workspace client).
     const featuresContainer = document.getElementById('project-features');
     if (featuresContainer) this.workspace.attach(featuresContainer);
@@ -403,7 +244,7 @@ class SessionManager {
       const target = e.target as HTMLElement;
       const backfillBtn = target.closest('[data-backfill-cwd]') as HTMLButtonElement | null;
       if (backfillBtn) {
-        void this.backfillProject(backfillBtn.getAttribute('data-backfill-cwd') || '', backfillBtn);
+        void this.projectLogView.backfillProject(backfillBtn.getAttribute('data-backfill-cwd') || '', backfillBtn);
         return;
       }
       const openBtn = target.closest('[data-open-session]') as HTMLElement | null;
@@ -416,7 +257,7 @@ class SessionManager {
       }
       const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
       if (delBtn) {
-        this.showDeleteEntryModal({
+        this.projectLogView.showDeleteEntryModal({
           cwd: delBtn.getAttribute('data-delete-cwd') || '',
           entryIndex: Number(delBtn.getAttribute('data-delete-entry')),
           claudeSessionId: delBtn.getAttribute('data-delete-session') || null,
@@ -446,31 +287,31 @@ class SessionManager {
 
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
-    document.getElementById('new-session-confirm')?.addEventListener('click', () => void this.createSessionFromModal());
+    document.getElementById('new-session-confirm')?.addEventListener('click', () => void this.newSessionModal.createSessionFromModal());
     document.getElementById('session-name-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') void this.createSessionFromModal();
+      if (e.key === 'Enter') void this.newSessionModal.createSessionFromModal();
     });
     const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement | null;
-    cwdInput?.addEventListener('keydown', (e) => this.handleCwdInputKeydown(e));
+    cwdInput?.addEventListener('keydown', (e) => this.newSessionModal.handleCwdInputKeydown(e));
     cwdInput?.addEventListener('input', () => {
-      this.renderCwdSuggestions();
-      this.trackPicker.schedule();
+      this.newSessionModal.renderCwdSuggestions();
+      this.newSessionModal.trackPicker.schedule();
     });
-    document.getElementById('session-track-select')?.addEventListener('change', () => this.trackPicker.sync());
+    document.getElementById('session-track-select')?.addEventListener('change', () => this.newSessionModal.trackPicker.sync());
     document.getElementById('session-track-new')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') void this.createSessionFromModal();
+      if (e.key === 'Enter') void this.newSessionModal.createSessionFromModal();
     });
-    cwdInput?.addEventListener('focus', () => this.renderCwdSuggestions());
+    cwdInput?.addEventListener('focus', () => this.newSessionModal.renderCwdSuggestions());
     // Close the dropdown when focus leaves the field (delay lets a click on an
     // option register before we hide it).
     cwdInput?.addEventListener('blur', () => {
-      setTimeout(() => this.hideCwdSuggestions(), 150);
+      setTimeout(() => this.newSessionModal.hideCwdSuggestions(), 150);
     });
     document.getElementById('cwd-toggle')?.addEventListener('mousedown', (e) => {
       // mousedown + preventDefault so the input doesn't blur (which would race
       // with the toggle and immediately re-hide the list).
       e.preventDefault();
-      this.toggleCwdSuggestions();
+      this.newSessionModal.toggleCwdSuggestions();
     });
 
     // Rename modal
@@ -488,8 +329,8 @@ class SessionManager {
     });
 
     // Delete history-entry modal
-    document.getElementById('delete-entry-cancel')?.addEventListener('click', () => this.hideDeleteEntryModal());
-    document.getElementById('delete-entry-confirm')?.addEventListener('click', () => this.confirmDeleteEntry());
+    document.getElementById('delete-entry-cancel')?.addEventListener('click', () => this.projectLogView.hideDeleteEntryModal());
+    document.getElementById('delete-entry-confirm')?.addEventListener('click', () => this.projectLogView.confirmDeleteEntry());
 
     // Settings modal
     document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
@@ -517,7 +358,7 @@ class SessionManager {
         this.hideCategoryModal();
         this.hideSettingsModal();
         this.hideShortcutsModal();
-        this.hideDeleteEntryModal();
+        this.projectLogView.hideDeleteEntryModal();
       }
       // Show keyboard shortcuts: ?
       // Skip when an input/textarea is focused (modal inputs or xterm helper
@@ -574,62 +415,7 @@ class SessionManager {
       if (e.target === e.currentTarget) this.hideShortcutsModal();
     });
     document.getElementById('delete-entry-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideDeleteEntryModal();
-    });
-  }
-
-  private setupMobileNavigation(): void {
-    const navToggle = document.getElementById('mobile-nav-toggle');
-    const navBar = document.getElementById('mobile-nav-bar');
-
-    if (!navToggle || !navBar) return;
-
-    // Load saved preference (default to visible)
-    const savedPref = localStorage.getItem('mobileNavVisible');
-    this.mobileNavVisible = savedPref === null ? true : savedPref === 'true';
-    this.updateMobileNavVisibility();
-
-    // Toggle button handlers
-    navToggle.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      this.toggleMobileNav();
-    }, { passive: false });
-
-    navToggle.addEventListener('click', () => this.toggleMobileNav());
-
-    // Navigation key button handlers
-    const navKeys = navBar.querySelectorAll('.mobile-nav-key');
-    navKeys.forEach((btn) => {
-      const handleKeyPress = () => {
-        const key = (btn as HTMLElement).dataset.key;
-        if (key) {
-          this.sendKeyToTerminal(key);
-        }
-      };
-
-      // Touch events for mobile
-      btn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        this.preventTerminalKeyboard();
-        (document.activeElement as HTMLElement)?.blur();
-        (btn as HTMLElement).classList.add('active');
-      }, { passive: false });
-
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        (btn as HTMLElement).classList.remove('active');
-        handleKeyPress();
-        setTimeout(() => this.allowTerminalKeyboard(), 300);
-      }, { passive: false });
-
-      btn.addEventListener('touchcancel', () => {
-        (btn as HTMLElement).classList.remove('active');
-        setTimeout(() => this.allowTerminalKeyboard(), 300);
-      });
-
-      // Mouse events for desktop
-      btn.addEventListener('mousedown', (e) => e.preventDefault());
-      btn.addEventListener('click', handleKeyPress);
+      if (e.target === e.currentTarget) this.projectLogView.hideDeleteEntryModal();
     });
   }
 
@@ -661,70 +447,6 @@ class SessionManager {
     toggle?.setAttribute('title', collapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)');
     // Refit the terminal once the width transition has finished.
     setTimeout(() => this.terminalMgr?.fit(), 300);
-  }
-
-  private toggleMobileNav(): void {
-    this.mobileNavVisible = !this.mobileNavVisible;
-    localStorage.setItem('mobileNavVisible', String(this.mobileNavVisible));
-    this.updateMobileNavVisibility();
-  }
-
-  private updateMobileNavVisibility(): void {
-    const navToggle = document.getElementById('mobile-nav-toggle');
-    const navBar = document.getElementById('mobile-nav-bar');
-    const mainContent = document.getElementById('main-content');
-
-    if (this.mobileNavVisible) {
-      navBar?.classList.add('visible');
-      navToggle?.classList.add('hidden');
-      mainContent?.classList.add('mobile-nav-active');
-    } else {
-      navBar?.classList.remove('visible');
-      navToggle?.classList.remove('hidden');
-      mainContent?.classList.remove('mobile-nav-active');
-    }
-
-    // Trigger terminal resize after visibility change
-    setTimeout(() => {
-      this.terminalMgr?.fit();
-    }, 350); // Wait for CSS transition to complete
-  }
-
-  private sendKeyToTerminal(key: string): void {
-    if (!this.currentSessionId) return;
-
-    // Map key names to ANSI escape sequences
-    const keyMap: Record<string, string> = {
-      'Escape': '\x1b',
-      'ArrowUp': '\x1b[A',
-      'ArrowDown': '\x1b[B',
-      'ArrowRight': '\x1b[C',
-      'ArrowLeft': '\x1b[D',
-      'Enter': '\r',
-    };
-
-    const sequence = keyMap[key];
-    if (sequence) {
-      this.sendTerminalData(sequence);
-    }
-  }
-
-  private preventTerminalKeyboard(): void {
-    // Find xterm's helper textarea and prevent it from showing keyboard
-    const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-    if (textarea) {
-      textarea.setAttribute('readonly', 'true');
-      textarea.setAttribute('inputmode', 'none');
-    }
-  }
-
-  private allowTerminalKeyboard(): void {
-    // Re-enable xterm's helper textarea
-    const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-    if (textarea) {
-      textarea.removeAttribute('readonly');
-      textarea.removeAttribute('inputmode');
-    }
   }
 
   private connect(): void {
@@ -1252,9 +974,9 @@ class SessionManager {
     // switchTab starts a board load of its own; join it rather than race a
     // second one, and re-check afterwards -- getProject() before that load
     // resolves says nothing about whether the project exists.
-    if (this.activeTab !== 'projects') this.switchTab('projects');
-    if (!this.workspace.getProject(job.projectCwd)) await this.joinProjectBoardLoad();
-    this.showProjectLog(job.projectCwd);
+    if (!this.projectLogView.isProjectsTabActive()) this.projectLogView.switchTab('projects');
+    if (!this.workspace.getProject(job.projectCwd)) await this.projectLogView.joinProjectBoardLoad();
+    this.projectLogView.showProjectLog(job.projectCwd);
     this.jobBoard.focusJob(job.id);
   }
 
@@ -1315,415 +1037,11 @@ class SessionManager {
   }
 
   private renderSessionList(): void {
-    const listEl = document.getElementById('session-list');
-    if (!listEl) return;
-
-    listEl.innerHTML = '';
-
-    // Sort sessions by sortOrder (ascending)
-    const sortedSessions = Array.from(this.sessions.values()).sort(
-      (a, b) => a.sortOrder - b.sortOrder
-    );
-
-    // Sort categories by sortOrder
-    const sortedCategories = Array.from(this.categories.values()).sort(
-      (a, b) => a.sortOrder - b.sortOrder
-    );
-
-    // Group sessions by category
-    const uncategorizedSessions = sortedSessions.filter(s => !s.categoryId);
-    const sessionsByCategory = new Map<string, SessionInfo[]>();
-    for (const cat of sortedCategories) {
-      sessionsByCategory.set(cat.id, []);
-    }
-    for (const session of sortedSessions) {
-      if (session.categoryId && sessionsByCategory.has(session.categoryId)) {
-        sessionsByCategory.get(session.categoryId)!.push(session);
-      }
-    }
-
-    // Add "Add Category" button at top
-    const addCategoryBtn = document.createElement('button');
-    addCategoryBtn.className = 'add-category-btn';
-    addCategoryBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="12" y1="5" x2="12" y2="19"></line>
-        <line x1="5" y1="12" x2="19" y2="12"></line>
-      </svg>
-      Add Category
-    `;
-    addCategoryBtn.addEventListener('click', () => this.showCategoryModal('create'));
-    listEl.appendChild(addCategoryBtn);
-
-    // Render categories with their sessions
-    for (const category of sortedCategories) {
-      const sessions = sessionsByCategory.get(category.id) || [];
-      this.renderCategory(listEl, category, sessions);
-    }
-
-    // Render uncategorized sessions at the bottom
-    if (uncategorizedSessions.length > 0 || sortedCategories.length > 0) {
-      this.renderUncategorizedSection(listEl, uncategorizedSessions);
-    } else {
-      // No categories, just render sessions directly
-      for (const session of sortedSessions) {
-        this.renderSessionItem(listEl, session);
-      }
-    }
-  }
-
-  private renderCategory(container: HTMLElement, category: CategoryInfo, sessions: SessionInfo[]): void {
-    const section = document.createElement('div');
-    section.className = 'category-section';
-    if (category.collapsed) section.classList.add('collapsed');
-    section.dataset.categoryId = category.id;
-
-    const header = document.createElement('div');
-    header.className = 'category-header';
-    header.innerHTML = `
-      <button class="category-toggle" title="${category.collapsed ? 'Expand' : 'Collapse'}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-      </button>
-      <span class="category-name">${escapeHtml(category.name)}</span>
-      <span class="category-count">(${sessions.length})</span>
-      <div class="category-actions">
-        <button class="category-rename-btn" title="Rename">
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-          </svg>
-        </button>
-        <button class="category-delete-btn" title="Delete">
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-    `;
-
-    // Category toggle
-    header.querySelector('.category-toggle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleCategory(category.id, !category.collapsed);
-    });
-
-    // Category rename
-    header.querySelector('.category-rename-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.showCategoryModal('rename', category);
-    });
-
-    // Category delete
-    header.querySelector('.category-delete-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm(`Delete category "${category.name}"? Sessions will become uncategorized.`)) {
-        this.deleteCategory(category.id);
-      }
-    });
-
-    // Allow dropping on category header (for empty categories)
-    header.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      header.classList.add('drop-target');
-    });
-
-    header.addEventListener('dragleave', (e) => {
-      if (!header.contains(e.relatedTarget as Node)) {
-        header.classList.remove('drop-target');
-      }
-    });
-
-    header.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      header.classList.remove('drop-target');
-
-      if (this.draggedSessionId) {
-        const session = this.sessions.get(this.draggedSessionId);
-        if (session && session.categoryId !== category.id) {
-          this.moveSession(this.draggedSessionId, category.id);
-        }
-      }
-    });
-
-    section.appendChild(header);
-
-    const sessionList = document.createElement('ul');
-    sessionList.className = 'category-sessions';
-
-    // Drop zone handling
-    this.setupDropZone(sessionList, category.id);
-
-    for (const session of sessions) {
-      this.renderSessionItem(sessionList, session);
-    }
-
-    section.appendChild(sessionList);
-    container.appendChild(section);
-  }
-
-  private renderUncategorizedSection(container: HTMLElement, sessions: SessionInfo[]): void {
-    const section = document.createElement('div');
-    section.className = 'category-section uncategorized';
-    section.dataset.categoryId = '';
-
-    const header = document.createElement('div');
-    header.className = 'category-header';
-    header.innerHTML = `
-      <span class="category-name">Uncategorized</span>
-      <span class="category-count">(${sessions.length})</span>
-    `;
-
-    // Allow dropping on uncategorized header
-    header.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      header.classList.add('drop-target');
-    });
-
-    header.addEventListener('dragleave', (e) => {
-      if (!header.contains(e.relatedTarget as Node)) {
-        header.classList.remove('drop-target');
-      }
-    });
-
-    header.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      header.classList.remove('drop-target');
-
-      if (this.draggedSessionId) {
-        const session = this.sessions.get(this.draggedSessionId);
-        if (session && session.categoryId !== null) {
-          this.moveSession(this.draggedSessionId, null);
-        }
-      }
-    });
-
-    section.appendChild(header);
-
-    const sessionList = document.createElement('ul');
-    sessionList.className = 'category-sessions';
-
-    // Drop zone handling for uncategorized
-    this.setupDropZone(sessionList, null);
-
-    for (const session of sessions) {
-      this.renderSessionItem(sessionList, session);
-    }
-
-    section.appendChild(sessionList);
-    container.appendChild(section);
-  }
-
-  private renderSessionItem(container: HTMLElement, session: SessionInfo): void {
-    const li = document.createElement('li');
-    li.className = 'session-item';
-    li.draggable = true;
-    li.dataset.sessionId = session.id;
-    if (session.id === this.currentSessionId) li.classList.add('active');
-    if (session.status === 'terminated') li.classList.add('terminated');
-    if (!session.attachable) li.classList.add('not-attachable');
-
-    // Check for notification badge - validate notification type to prevent XSS
-    const notification = this.sessionNotifications.get(session.id);
-    const validNotificationTypes = ['needs-input', 'completed'] as const;
-    const notificationType = notification && validNotificationTypes.includes(notification.type) ? notification.type : null;
-    const badgeHtml = notificationType
-      ? `<span class="notification-badge ${notificationType}" title="${notificationType === 'needs-input' ? 'Waiting for input' : 'Task completed'}"></span>`
-      : '';
-
-    // Escape values for safe HTML attribute insertion
-    const escapedSessionId = escapeAttr(session.id);
-    const escapedStatus = escapeHtml(session.status);
-
-    // A stale row is a session whose PTY died with the server -- it outlived its process and
-    // can be brought back. Forks cannot: their transcript is unlinked at boot, so there would
-    // be nothing to resume. Both the "(stale)" label and the button derive from this one
-    // expression so they can never disagree about what stale means.
-    const isStale = !session.attachable && session.status !== 'terminated';
-    const canRevive = isStale && !session.isFork;
-    const reviveHtml = canRevive
-      ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedSessionId}">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
-        </button>`
-      : '';
-
-    li.innerHTML = `
-      <span class="session-drag-handle">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/>
-          <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
-        </svg>
-      </span>
-      ${badgeHtml}
-      <span class="session-icon">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="4 17 10 11 4 5"></polyline>
-          <line x1="12" y1="19" x2="20" y2="19"></line>
-        </svg>
-      </span>
-      <div class="session-info">
-        <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-status">${escapedStatus}${isStale ? ' (stale)' : ''}</div>
-      </div>
-      ${reviveHtml}
-      <button class="session-delete-btn" title="Delete session" data-session-id="${escapedSessionId}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-        </svg>
-      </button>
-    `;
-
-    // Drag handling
-    li.addEventListener('dragstart', (e) => {
-      this.draggedSessionId = session.id;
-      li.classList.add('dragging');
-      e.dataTransfer?.setData('text/plain', session.id);
-    });
-
-    li.addEventListener('dragend', () => {
-      this.draggedSessionId = null;
-      li.classList.remove('dragging');
-      if (this.dropIndicatorEl) {
-        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        this.dropIndicatorEl = null;
-      }
-      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
-    });
-
-    // Allow drops on session items for reordering within same category or moving between categories
-    li.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      if (!this.draggedSessionId || this.draggedSessionId === session.id) return;
-
-      const draggedSession = this.sessions.get(this.draggedSessionId);
-      if (!draggedSession) return;
-
-      const categorySection = li.closest('.category-section') as HTMLElement | null;
-      const categoryIdAttr = categorySection?.dataset.categoryId;
-      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
-
-      // Same category: show insertion indicator
-      if (draggedSession.categoryId === targetCategoryId) {
-        // Clear previous indicator if it's a different element
-        if (this.dropIndicatorEl && this.dropIndicatorEl !== li) {
-          this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        }
-        this.dropIndicatorEl = li;
-
-        const rect = li.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        li.classList.remove('drop-before', 'drop-after');
-        if (e.clientY < midY) {
-          li.classList.add('drop-before');
-        } else {
-          li.classList.add('drop-after');
-        }
-      } else {
-        // Different category: highlight the target category's session list
-        const sessionList = categorySection?.querySelector('.category-sessions');
-        sessionList?.classList.add('drop-target');
-      }
-    });
-
-    li.addEventListener('dragleave', () => {
-      li.classList.remove('drop-before', 'drop-after');
-    });
-
-    li.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const categorySection = li.closest('.category-section') as HTMLElement | null;
-      const categoryIdAttr = categorySection?.dataset.categoryId;
-      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
-
-      if (this.draggedSessionId) {
-        const draggedSession = this.sessions.get(this.draggedSessionId);
-        if (!draggedSession) return;
-
-        if (draggedSession.categoryId === targetCategoryId) {
-          // Same category: reorder
-          const rect = li.getBoundingClientRect();
-          const midY = rect.top + rect.height / 2;
-          const insertBefore = e.clientY < midY;
-          this.reorderSessionInCategory(this.draggedSessionId, session.id, targetCategoryId, insertBefore);
-        } else {
-          // Different category: move
-          this.moveSession(this.draggedSessionId, targetCategoryId);
-        }
-      }
-
-      if (this.dropIndicatorEl) {
-        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        this.dropIndicatorEl = null;
-      }
-      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
-    });
-
-    // Click handler for session selection
-    li.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.session-delete-btn')) return;
-      if ((e.target as HTMLElement).closest('.session-revive-btn')) return;
-      if ((e.target as HTMLElement).closest('.session-drag-handle')) return;
-
-      if (session.attachable) {
-        this.attachToSession(session.id);
-        document.getElementById('sidebar')?.classList.remove('open');
-        document.getElementById('sidebar-overlay')?.classList.remove('open');
-        document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
-      }
-    });
-
-    // Revive button handler (stale rows only)
-    const reviveBtn = li.querySelector('.session-revive-btn');
-    reviveBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.reviveSession(session.id);
-    });
-
-    // Delete button handler
-    const deleteBtn = li.querySelector('.session-delete-btn');
-    deleteBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.deleteSession(session.id);
-    });
-
-    container.appendChild(li);
-  }
-
-  private setupDropZone(element: HTMLElement, categoryId: string | null): void {
-    element.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      element.classList.add('drop-target');
-    });
-
-    element.addEventListener('dragleave', (e) => {
-      if (!element.contains(e.relatedTarget as Node)) {
-        element.classList.remove('drop-target');
-      }
-    });
-
-    element.addEventListener('drop', (e) => {
-      e.preventDefault();
-      element.classList.remove('drop-target');
-
-      if (this.draggedSessionId) {
-        const session = this.sessions.get(this.draggedSessionId);
-        if (session && session.categoryId !== categoryId) {
-          this.moveSession(this.draggedSessionId, categoryId);
-        }
-      }
-    });
+    this.sessionListView.render();
   }
 
   private showTerminal(session: SessionInfo): void {
-    this.selectedProjectCwd = null;
+    this.projectLogView.clearSelection();
     this.jobBoard.stopPolling();
     document.getElementById('project-log-view')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
@@ -1757,7 +1075,7 @@ class SessionManager {
     document.getElementById('terminal-container')?.classList.add('hidden');
     document.getElementById('terminal-header')?.classList.add('hidden');
     // Only reveal the welcome screen if the project-log view isn't taking over.
-    if (this.selectedProjectCwd === null) {
+    if (!this.projectLogView.hasSelection()) {
       document.getElementById('welcome-screen')?.classList.remove('hidden');
     }
 
@@ -1766,444 +1084,17 @@ class SessionManager {
   }
 
   // ── Project-log board ──────────────────────────────────────────────
+  // The board itself (tabs, PROJECT.md workspace, SESSION-LOG.md history,
+  // delete/backfill modals) lives in ProjectLogView (project-log-view.ts).
+  // What stays here is "current session" ownership it calls back into.
 
-  private switchTab(tab: 'sessions' | 'projects'): void {
-    this.activeTab = tab;
-    const onProjects = tab === 'projects';
-
-    document.getElementById('tab-sessions')?.classList.toggle('active', !onProjects);
-    document.getElementById('tab-projects')?.classList.toggle('active', onProjects);
-    document.getElementById('tab-sessions')?.setAttribute('aria-selected', String(!onProjects));
-    document.getElementById('tab-projects')?.setAttribute('aria-selected', String(onProjects));
-
-    document.getElementById('session-list')?.classList.toggle('hidden', onProjects);
-    document.getElementById('project-list')?.classList.toggle('hidden', !onProjects);
-    document.getElementById('new-session-btn')?.classList.toggle('hidden', onProjects);
-    document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
-    document.getElementById('overview-btn')?.classList.toggle('hidden', !onProjects);
-    if (!onProjects) this.rollup.hide();
-    this.syncJobOverlay();
-
-    if (onProjects) void this.loadProjectBoard();
-  }
-
-  /** Load both halves of the board: the PROJECT.md workspace and the session logs. */
-  private loadProjectBoard(): Promise<void> {
-    const load = Promise.all([this.workspace.loadBoard(), this.loadProjectLogData()]).then(
-      () => undefined
-    );
-    this.boardLoad = load;
-    void load.finally(() => {
-      if (this.boardLoad === load) this.boardLoad = null;
-    });
-    return load;
-  }
-
-  /**
-   * Wait for the board, joining a load already in flight rather than starting
-   * a second one.
-   *
-   * Only for callers that just need the board *present* — the overlay's
-   * click-through, which arrives right behind the unawaited load `switchTab`
-   * kicks off. A caller that has just mutated the board must call
-   * `loadProjectBoard()` instead: a fetch that began before its write cannot
-   * see it.
-   */
-  private joinProjectBoardLoad(): Promise<void> {
-    return this.boardLoad ?? this.loadProjectBoard();
-  }
-
-  /**
-   * Session-log data for the detail view's history section. Unlike the
-   * workspace board this is best-effort: SESSION-LOG.md is a changelog, not a
-   * status source, so a failure here must not blank the projects list.
-   */
-  private async loadProjectLogData(): Promise<void> {
-    try {
-      const res = await fetch('/api/project-logs');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { projects: ProjectBoardItem[] };
-      this.projectBoard = data.projects || [];
-    } catch {
-      this.projectBoard = [];
-    }
-  }
-
-  /** The sidebar list belongs to the workspace board now; keep the selection in sync. */
-  private renderProjectList(): void {
-    this.workspace.setSelected(this.selectedProjectCwd);
-    this.workspace.renderList();
-  }
-
-  private relativeTime(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return '';
-    const secs = Math.max(0, (Date.now() - then) / 1000);
-    if (secs < 60) return 'just now';
-    const mins = Math.floor(secs / 60);
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}d ago`;
-    const months = Math.floor(days / 30);
-    if (months < 12) return `${months}mo ago`;
-    return `${Math.floor(months / 12)}y ago`;
-  }
-
-  /**
-   * Open a project in the main area. The top half is the canonical PROJECT.md
-   * feature board (owned by the workspace client); the bottom half is the
-   * SESSION-LOG.md history, which remains a changelog view rather than a
-   * status source.
-   *
-   * A project only needs to exist on the workspace board to be shown — it may
-   * well have no session log at all, which is the common case now that the
-   * board lists every project on disk rather than only those with transcripts.
-   */
-  private showProjectLog(cwd: string): void {
-    const wsProject = this.workspace.getProject(cwd);
-    if (!wsProject) return;
-    const logProject = this.projectBoard.find((p) => p.cwd === cwd);
-    this.selectedProjectCwd = cwd;
-    this.workspace.setSelected(cwd);
-
-    // Detach any live session view so the project takes over the main area.
+  /** Detach the live terminal session (if any) so the project view can take over the main area. */
+  private detachCurrentSession(): void {
     if (this.currentSessionId) {
       this.send('session.detach', { sessionId: this.currentSessionId });
       this.terminalMgr?.dispose();
       this.currentSessionId = null;
     }
-    document.getElementById('terminal-container')?.classList.add('hidden');
-    document.getElementById('terminal-header')?.classList.add('hidden');
-    document.getElementById('welcome-screen')?.classList.add('hidden');
-    this.rollup.hide();
-    document.getElementById('project-log-view')?.classList.remove('hidden');
-    this.syncJobOverlay();
-
-    const titleEl = document.getElementById('project-log-title');
-    if (titleEl) titleEl.textContent = wsProject.name;
-    const pathEl = document.getElementById('project-log-path');
-    if (pathEl) pathEl.textContent = wsProject.cwd;
-    const badgesEl = document.getElementById('project-badges-row');
-    if (badgesEl) badgesEl.innerHTML = this.workspace.renderHeaderBadges(wsProject);
-    document.getElementById('project-flash')?.classList.add('hidden');
-
-    // Re-sync only makes sense against an existing session log.
-    const resyncBtn = document.getElementById('project-log-resync-btn');
-    resyncBtn?.classList.toggle('hidden', !logProject?.hasLog);
-
-    const featuresEl = document.getElementById('project-features');
-    if (featuresEl) this.workspace.renderFeatures(featuresEl, cwd);
-    void this.workspace.loadQa(cwd);
-    void this.jobBoard.load(cwd);
-
-    const entriesEl = document.getElementById('project-log-entries');
-    if (entriesEl) {
-      entriesEl.innerHTML = logProject
-        ? this.renderPhaseGroups(logProject.phaseGroups) + this.renderHistorySection(logProject)
-        : '';
-    }
-    this.renderProjectList(); // refresh active highlight
-  }
-
-  /** The SESSION-LOG.md history section of the detail view. */
-  private renderHistorySection(project: ProjectBoardItem): string {
-    if (!project.hasLog) {
-      return `<div class="project-history-empty">
-          <h3 class="project-log-subhead">Session history</h3>
-          <p class="pw-hint">No session log for this project yet.</p>
-          <button class="btn-secondary project-generate-btn" data-backfill-cwd="${escapeAttr(
-            project.cwd
-          )}">Generate session log</button>
-        </div>`;
-    }
-    if (project.entries.length === 0) {
-      return '<h3 class="project-log-subhead">Session history</h3><div class="project-empty">No entries yet.</div>';
-    }
-    return (
-      '<h3 class="project-log-subhead">Session history</h3>' +
-      project.entries
-        .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
-        .join('')
-    );
-  }
-
-  private renderPhaseGroups(groups: PhaseGroup[]): string {
-    if (!groups || groups.length === 0) return '';
-    const icon = (s: string): string =>
-      s === 'done' ? '✓' : s === 'in_progress' ? '◷' : '○';
-    const sidChip = (sid: string): string => {
-      if (!sid || sid === 'backfill' || sid === 'unknown') return '';
-      const short = escapeHtml(sid.slice(0, 8));
-      return `<button class="sid-chip" data-copy="${escapeAttr(sid)}" title="Copy session id ${escapeAttr(sid)}">${short}<span class="sid-copy">⧉</span></button>`;
-    };
-    const renderGroup = (g: PhaseGroup): string => {
-      const done = g.items.filter((i) => i.status === 'done').length;
-      const rows = g.items
-        .map(
-          (it) => `
-        <li class="phase-item">
-          <span class="phase-status ${it.status}" title="${it.status}">${icon(it.status)}</span>
-          ${it.id ? `<span class="phase-id">${escapeHtml(it.id)}</span>` : ''}
-          <span class="phase-title">${escapeHtml(it.title)}</span>
-          <span class="phase-sessions">${it.sessionIds.map(sidChip).join('')}</span>
-        </li>`
-        )
-        .join('');
-      return `
-        <div class="phase-group">
-          <div class="phase-group-head" role="button" tabindex="0" aria-expanded="true">
-            <span class="phase-chevron" aria-hidden="true">▾</span>
-            <span class="phase-group-name">${escapeHtml(g.group)}</span>
-            ${g.source ? `<span class="phase-group-src">${escapeHtml(g.source)}</span>` : ''}
-            <span class="phase-progress">${done}/${g.items.length}</span>
-          </div>
-          <ul class="phase-list">${rows}</ul>
-        </div>`;
-    };
-    return `<div class="phase-groups"><h3 class="project-log-subhead">Plan progress</h3>${groups
-      .map(renderGroup)
-      .join('')}</div>`;
-  }
-
-  /**
-   * How many OTHER entries in the same log point at this entry's Claude session.
-   * The generator writes one entry per session close, so a long-running
-   * conversation has several entries backed by a single transcript file — which
-   * the transcript can only be deleted along with.
-   */
-  private countSiblingEntries(project: ProjectBoardItem, entry: ParsedLogEntry): number {
-    const sid = entry.meta?.claudeSessionId;
-    if (!sid || sid === 'backfill' || sid === 'unknown') return 0;
-    return project.entries.filter((e) => e.meta?.claudeSessionId === sid).length - 1;
-  }
-
-  private renderLogEntry(entry: ParsedLogEntry, cwd: string, index: number, siblingCount: number): string {
-    const meta = entry.meta;
-    const date = meta?.date ? new Date(meta.date) : null;
-    const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
-    // Strip the marker comment and the "## heading" line; render the rest as the body.
-    const lines = entry.body.split('\n');
-    const bodyLines = lines.filter((l) => !l.startsWith('<!--') && !l.startsWith('## '));
-    // Resume/Fork controls only make sense when the entry carries a real Claude session id.
-    const sid = meta?.claudeSessionId;
-    const hasSid = !!sid && sid !== 'backfill' && sid !== 'unknown';
-    const openButtons = hasSid
-      ? `<button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" title="Resume this Claude session">Resume</button>
-          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" title="Fork this Claude session into a new branch">Fork</button>`
-      : '';
-    // Delete is offered for every entry, including ones with no usable session id
-    // (those are log-only removals — there's no transcript to find).
-    const actions = `<span class="log-entry-actions">
-          ${openButtons}
-          <button class="log-entry-open log-entry-delete" data-delete-entry="${index}" data-delete-cwd="${escapeAttr(cwd)}" data-delete-session="${escapeAttr(hasSid ? (sid as string) : '')}" data-delete-siblings="${siblingCount}" title="Delete this entry and its local conversation">Delete</button>
-        </span>`;
-    const head = `
-      <div class="log-entry-head">
-        ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
-        ${meta?.session ? `<span class="log-entry-session">${escapeHtml(meta.session)}</span>` : ''}
-        ${meta?.branch ? `<span class="log-entry-branch">${escapeHtml(meta.branch)}</span>` : ''}
-        ${actions}
-      </div>`;
-    return `<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;
-  }
-
-  /** Minimal, safe markdown: escape first, then bold + inline code + paragraphs. */
-  private renderMarkdownInline(md: string): string {
-    const escaped = escapeHtml(md);
-    return escaped
-      .split(/\n{2,}/)
-      .map((para) => {
-        const withInline = para
-          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-          .replace(/`([^`]+)`/g, '<code>$1</code>')
-          .replace(/\n/g, '<br>');
-        return `<p>${withInline}</p>`;
-      })
-      .join('');
-  }
-
-  /**
-   * Confirm removal of one session-history entry. Wording depends on what the
-   * click will actually destroy: an entry whose conversation is referenced by
-   * other entries can't take the transcript with it unless the user opts into
-   * clearing all of them, so the checkbox appears only in that case.
-   */
-  private showDeleteEntryModal(target: {
-    cwd: string;
-    entryIndex: number;
-    claudeSessionId: string | null;
-    siblingCount: number;
-  }): void {
-    if (!target.cwd || !Number.isInteger(target.entryIndex) || target.entryIndex < 0) return;
-    this.pendingHistoryDelete = target;
-
-    const { claudeSessionId: sid, siblingCount } = target;
-    const shortSid = sid ? sid.slice(0, 8) : '';
-    let summary: string;
-    if (!sid) {
-      summary =
-        'Remove this entry from <code>SESSION-LOG.md</code>. It carries no Claude session id, so there is no local conversation to delete.';
-    } else if (siblingCount > 0) {
-      summary =
-        `Remove this entry from <code>SESSION-LOG.md</code>. ${siblingCount} other ` +
-        `${siblingCount === 1 ? 'entry' : 'entries'} also came from conversation <code>${escapeHtml(shortSid)}</code>, ` +
-        `so its local transcript is kept unless you delete ${siblingCount === 1 ? 'both' : 'all of them'}.`;
-    } else {
-      summary =
-        `Remove this entry from <code>SESSION-LOG.md</code> and permanently delete the local ` +
-        `conversation <code>${escapeHtml(shortSid)}.jsonl</code>. It can no longer be resumed or forked. This cannot be undone.`;
-    }
-    const summaryEl = document.getElementById('delete-entry-summary');
-    if (summaryEl) summaryEl.innerHTML = summary;
-
-    const allRow = document.getElementById('delete-entry-all-row');
-    const allBox = document.getElementById('delete-entry-all') as HTMLInputElement | null;
-    const allLabel = document.getElementById('delete-entry-all-label');
-    const showAll = !!sid && siblingCount > 0;
-    allRow?.classList.toggle('hidden', !showAll);
-    if (allBox) allBox.checked = false;
-    if (allLabel && showAll) {
-      allLabel.textContent = `Delete all ${siblingCount + 1} entries for this conversation, and the conversation itself`;
-    }
-
-    const errEl = document.getElementById('delete-entry-error');
-    errEl?.classList.add('hidden');
-    const confirmBtn = document.getElementById('delete-entry-confirm') as HTMLButtonElement | null;
-    if (confirmBtn) {
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = 'Delete';
-    }
-    document.getElementById('delete-entry-modal')?.classList.remove('hidden');
-  }
-
-  private hideDeleteEntryModal(): void {
-    document.getElementById('delete-entry-modal')?.classList.add('hidden');
-    this.pendingHistoryDelete = null;
-  }
-
-  private async confirmDeleteEntry(): Promise<void> {
-    const target = this.pendingHistoryDelete;
-    if (!target) return;
-    const allRow = document.getElementById('delete-entry-all-row');
-    const allBox = document.getElementById('delete-entry-all') as HTMLInputElement | null;
-    const scope = allBox?.checked && allRow && !allRow.classList.contains('hidden') ? 'conversation' : 'entry';
-    const confirmBtn = document.getElementById('delete-entry-confirm') as HTMLButtonElement | null;
-    const errEl = document.getElementById('delete-entry-error');
-    if (confirmBtn) {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Deleting...';
-    }
-    try {
-      const res = await fetch('/api/project-logs/entry/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cwd: target.cwd,
-          entryIndex: target.entryIndex,
-          claudeSessionId: target.claudeSessionId,
-          scope,
-        }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      this.hideDeleteEntryModal();
-      // Refresh the board, then re-render the open project so the entry disappears.
-      await this.loadProjectBoard();
-      if (this.selectedProjectCwd) this.showProjectLog(this.selectedProjectCwd);
-    } catch (err) {
-      if (errEl) {
-        errEl.textContent = err instanceof Error ? err.message : 'Delete failed';
-        errEl.classList.remove('hidden');
-      }
-      if (confirmBtn) {
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Delete';
-      }
-    }
-  }
-
-  private async resyncSelectedProject(): Promise<void> {
-    const cwd = this.selectedProjectCwd;
-    if (!cwd) return;
-    const btn = document.getElementById('project-log-resync-btn') as HTMLButtonElement | null;
-    const original = btn?.textContent ?? 'Re-sync plan';
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Re-syncing…';
-    }
-    try {
-      const res = await fetch('/api/project-logs/resync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await this.loadProjectBoard();
-      // Re-render the detail view with the refreshed phases (still on this project).
-      if (this.selectedProjectCwd === cwd) this.showProjectLog(cwd);
-    } catch {
-      if (btn) btn.textContent = 'Re-sync failed';
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        setTimeout(() => {
-          if (btn) btn.textContent = original;
-        }, 1500);
-      }
-    }
-  }
-
-  private openSessionForSelectedProject(): void {
-    if (!this.selectedProjectCwd) return;
-    // Open the modal over the project view. If the user cancels, the project log
-    // stays put; if they create a session, showTerminal() takes over the area.
-    this.showNewSessionModal(this.selectedProjectCwd);
-  }
-
-  private async backfillProject(cwd: string, btn: HTMLButtonElement): Promise<void> {
-    this.failedBackfills.delete(cwd);
-    btn.disabled = true;
-    btn.textContent = 'Generating…';
-    try {
-      const res = await fetch('/api/project-logs/backfill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwds: [cwd] }),
-      });
-      if (!res.ok && res.status !== 202) throw new Error(`HTTP ${res.status}`);
-      // Backfill is async on the server; poll the board until this project's log appears.
-      this.pollBackfill(cwd, 0);
-    } catch {
-      btn.disabled = false;
-      btn.textContent = 'Retry';
-    }
-  }
-
-  private pollBackfill(cwd: string, attempt: number): void {
-    // Timers are keyed by cwd so concurrent backfills each poll independently.
-    const existing = this.backfillPollTimers.get(cwd);
-    if (existing) clearTimeout(existing);
-    if (attempt > 40) {
-      // Gave up waiting — the run never produced a log. Surface a Retry affordance.
-      this.backfillPollTimers.delete(cwd);
-      this.failedBackfills.add(cwd);
-      void this.loadProjectBoard();
-      return;
-    }
-    const timer = setTimeout(async () => {
-      await this.loadProjectBoard();
-      const project = this.projectBoard.find((p) => p.cwd === cwd);
-      if (this.activeTab === 'projects' && !project?.hasLog) {
-        this.pollBackfill(cwd, attempt + 1);
-      } else {
-        this.backfillPollTimers.delete(cwd);
-      }
-    }, 3000);
-    this.backfillPollTimers.set(cwd, timer);
   }
 
   private handleSessionForked(payload: { session: SessionInfo }): void {
@@ -2341,43 +1232,6 @@ class SessionManager {
     this.send('session.move', { sessionId, categoryId });
   }
 
-  private reorderSessionInCategory(draggedId: string, targetId: string, categoryId: string | null, insertBefore: boolean): void {
-    // Get all sessions in this category, sorted by current sortOrder
-    const sessionsInCategory = Array.from(this.sessions.values())
-      .filter(s => s.categoryId === categoryId)
-      .sort((a, b) => a.sortOrder - b.sortOrder);
-
-    // Remove dragged session from the list
-    const filtered = sessionsInCategory.filter(s => s.id !== draggedId);
-
-    // Find insertion index
-    const targetIndex = filtered.findIndex(s => s.id === targetId);
-    if (targetIndex === -1) return;
-
-    const insertIndex = insertBefore ? targetIndex : targetIndex + 1;
-
-    // Insert at new position
-    const draggedSession = this.sessions.get(draggedId);
-    if (!draggedSession) return;
-    filtered.splice(insertIndex, 0, draggedSession);
-
-    // Assign new sort orders
-    const updates: { id: string; sortOrder: number }[] = filtered.map((s, i) => ({
-      id: s.id,
-      sortOrder: i,
-    }));
-
-    // Optimistically update local state
-    for (const u of updates) {
-      const session = this.sessions.get(u.id);
-      if (session) session.sortOrder = u.sortOrder;
-    }
-    this.renderSessionList();
-
-    // Send to server
-    this.send('session.reorder', { sessions: updates });
-  }
-
   // PiP sync
 
   private syncPip(): void {
@@ -2389,157 +1243,11 @@ class SessionManager {
   // Modal handlers
 
   private showNewSessionModal(prefillCwd?: string): void {
-    const modal = document.getElementById('new-session-modal');
-    if (modal) {
-      modal.classList.remove('hidden');
-      (document.getElementById('session-name-input') as HTMLInputElement).value = '';
-      (document.getElementById('session-cwd-input') as HTMLInputElement).value = prefillCwd ?? '';
-      this.hideCwdSuggestions();
-      void this.loadRecentPaths();
-      void this.trackPicker.refresh();
-      document.getElementById('session-name-input')?.focus();
-    }
+    this.newSessionModal.show(prefillCwd);
   }
 
   private hideNewSessionModal(): void {
-    document.getElementById('new-session-modal')?.classList.add('hidden');
-    this.hideCwdSuggestions();
-  }
-
-  // Recent working-directory suggestions
-
-  private async loadRecentPaths(): Promise<void> {
-    try {
-      const res = await fetch('/api/recent-paths');
-      if (!res.ok) return;
-      const data = (await res.json()) as { paths?: string[] };
-      this.recentPaths = Array.isArray(data.paths) ? data.paths : [];
-    } catch {
-      // Suggestions are a convenience — silently degrade to a plain text field.
-      this.recentPaths = [];
-    }
-    // Only show the dropdown affordance when there's something to suggest.
-    document
-      .getElementById('cwd-toggle')
-      ?.classList.toggle('hidden', this.recentPaths.length === 0);
-  }
-
-  private toggleCwdSuggestions(): void {
-    const list = document.getElementById('cwd-suggestions');
-    const input = document.getElementById('session-cwd-input') as HTMLInputElement | null;
-    if (list && !list.classList.contains('hidden')) {
-      this.hideCwdSuggestions();
-    } else {
-      this.renderCwdSuggestions();
-    }
-    input?.focus();
-  }
-
-  private renderCwdSuggestions(): void {
-    const input = document.getElementById('session-cwd-input') as HTMLInputElement | null;
-    const list = document.getElementById('cwd-suggestions');
-    if (!input || !list) return;
-
-    const query = input.value.trim().toLowerCase();
-    const matches = this.recentPaths.filter((p) => p.toLowerCase().includes(query));
-
-    if (matches.length === 0) {
-      this.hideCwdSuggestions();
-      return;
-    }
-
-    this.cwdSuggestionIndex = -1;
-    const folderIcon =
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/></svg>';
-
-    list.innerHTML = matches
-      .map(
-        (p) =>
-          `<li class="cwd-suggestion" role="option" data-path="${escapeAttr(p)}" title="${escapeAttr(p)}">` +
-          `${folderIcon}<span class="cwd-suggestion-path">&lrm;${escapeHtml(p)}</span></li>`
-      )
-      .join('');
-
-    list.querySelectorAll<HTMLLIElement>('.cwd-suggestion').forEach((el) => {
-      // mousedown (not click) so it fires before the input's blur handler.
-      el.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        this.selectCwdSuggestion(el.dataset.path ?? '');
-      });
-    });
-
-    list.classList.remove('hidden');
-    document.getElementById('cwd-toggle')?.classList.add('open');
-  }
-
-  private hideCwdSuggestions(): void {
-    const list = document.getElementById('cwd-suggestions');
-    if (list) {
-      list.classList.add('hidden');
-      list.innerHTML = '';
-    }
-    document.getElementById('cwd-toggle')?.classList.remove('open');
-    this.cwdSuggestionIndex = -1;
-  }
-
-  private selectCwdSuggestion(path: string): void {
-    const input = document.getElementById('session-cwd-input') as HTMLInputElement | null;
-    if (input && path) input.value = path;
-    this.hideCwdSuggestions();
-    void this.trackPicker.refresh();
-    input?.focus();
-  }
-
-  private handleCwdInputKeydown(e: KeyboardEvent): void {
-    const list = document.getElementById('cwd-suggestions');
-    const items = list && !list.classList.contains('hidden')
-      ? Array.from(list.querySelectorAll<HTMLLIElement>('.cwd-suggestion'))
-      : [];
-
-    if (items.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      e.preventDefault();
-      const delta = e.key === 'ArrowDown' ? 1 : -1;
-      this.cwdSuggestionIndex =
-        (this.cwdSuggestionIndex + delta + items.length) % items.length;
-      items.forEach((el, i) => el.classList.toggle('active', i === this.cwdSuggestionIndex));
-      items[this.cwdSuggestionIndex].scrollIntoView({ block: 'nearest' });
-      return;
-    }
-
-    if (e.key === 'Escape' && items.length > 0) {
-      e.preventDefault();
-      this.hideCwdSuggestions();
-      return;
-    }
-
-    if (e.key === 'Enter') {
-      if (this.cwdSuggestionIndex >= 0 && items[this.cwdSuggestionIndex]) {
-        e.preventDefault();
-        this.selectCwdSuggestion(items[this.cwdSuggestionIndex].dataset.path ?? '');
-        return;
-      }
-      void this.createSessionFromModal();
-    }
-  }
-
-  private async createSessionFromModal(): Promise<void> {
-    const nameInput = document.getElementById('session-name-input') as HTMLInputElement;
-    const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement;
-
-    let name = nameInput.value.trim() || undefined;
-    let cwd = cwdInput.value.trim() || undefined;
-
-    const picked = await this.trackPicker.resolve();
-    if (picked === false) return; // the picker is showing why
-    if (picked) {
-      cwd = picked.worktreePath;
-      name = name ?? picked.track;
-    }
-
-    this.createSession(name, cwd);
-    this.hideNewSessionModal();
+    this.newSessionModal.hide();
   }
 
   private showRenameModal(): void {
@@ -2671,84 +1379,18 @@ class SessionManager {
     document.getElementById('settings-modal')?.classList.add('hidden');
   }
 
-  // Keyboard shortcuts modal — rendered from the SHORTCUT_GROUPS registry so
-  // new shortcuts appear here automatically once added to shortcuts.ts.
-
-  private shortcutsRendered = false;
-  private shortcutsPreviousFocus: HTMLElement | null = null;
-
-  /** Render key tokens as <kbd> elements joined by a "+" separator. */
-  private renderKeys(keys: string[], plusClass = ''): string {
-    const plus = plusClass ? `<span class="${plusClass}">+</span>` : '<span>+</span>';
-    return keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join(plus);
-  }
-
-  private renderShortcutsModal(): void {
-    if (this.shortcutsRendered) return;
-
-    const container = document.getElementById('shortcuts-list');
-    if (!container) return;
-
-    container.innerHTML = SHORTCUT_GROUPS.map(
-      (group) => `
-        <div class="shortcuts-group">
-          <div class="shortcuts-group-title">${escapeHtml(group.title)}</div>
-          ${group.shortcuts
-            .map(
-              (s) => `
-            <div class="shortcuts-row">
-              <span class="shortcuts-keys">${this.renderKeys(s.keys, 'shortcuts-plus')}</span>
-              <span class="shortcuts-desc">${escapeHtml(s.label)}</span>
-            </div>`
-            )
-            .join('')}
-        </div>`
-    ).join('');
-
-    this.shortcutsRendered = true;
-  }
-
-  private renderWelcomeShortcuts(): void {
-    const container = document.getElementById('welcome-shortcut-group');
-    if (!container) return;
-
-    const items = SHORTCUT_GROUPS.flatMap((group) => group.shortcuts).filter((s) => s.welcome);
-    container.innerHTML = items
-      .map(
-        (s) => `
-        <div class="shortcut-item">
-          ${this.renderKeys(s.keys)}
-          <span class="shortcut-label">${escapeHtml(s.label)}</span>
-        </div>`
-      )
-      .join('');
-  }
+  // Keyboard shortcuts modal — delegates to ShortcutsModal (shortcuts-modal.ts).
 
   private showShortcutsModal(): void {
-    this.renderShortcutsModal();
-    document.getElementById('shortcuts-modal')?.classList.remove('hidden');
-    // Remember what had focus so we can restore it when the modal closes.
-    this.shortcutsPreviousFocus = document.activeElement as HTMLElement | null;
-    document.getElementById('shortcuts-close')?.focus();
+    this.shortcutsModal.showShortcutsModal();
   }
 
   private hideShortcutsModal(): void {
-    const modal = document.getElementById('shortcuts-modal');
-    if (!modal || modal.classList.contains('hidden')) return;
-    modal.classList.add('hidden');
-    // Restore focus to wherever it was before the modal opened.
-    this.shortcutsPreviousFocus?.focus();
-    this.shortcutsPreviousFocus = null;
+    this.shortcutsModal.hideShortcutsModal();
   }
 
   private toggleShortcutsModal(): void {
-    const modal = document.getElementById('shortcuts-modal');
-    if (!modal) return;
-    if (modal.classList.contains('hidden')) {
-      this.showShortcutsModal();
-    } else {
-      this.hideShortcutsModal();
-    }
+    this.shortcutsModal.toggleShortcutsModal();
   }
 
   private saveSettings(): void {

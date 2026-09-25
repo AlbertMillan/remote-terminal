@@ -1,11 +1,48 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import {
-  findReferences,
-  parseDecision,
-  resolveReference,
-  stripMarks,
-  type DecisionCard,
-} from './decision-format.js';
+  hasSpend,
+  formatUsageCost,
+  usageTooltip,
+  usageOf,
+  isQueued,
+  elapsedSince,
+  type StageName,
+  type JobStatus,
+  type StageStatus,
+  type ParkReason,
+  type StageUsage,
+  type ProjectUsage,
+  type JobStage,
+  type Job,
+  type Severity,
+  type Finding,
+  type DiffStat,
+  BODYLESS_POST,
+  jsonPost,
+} from './job-board-types.js';
+import { renderDocs, specPathOf, highlightDiff, type JobDoc } from './job-board-docs.js';
+import { renderDecision, renderFindings } from './job-board-decision.js';
+
+export type {
+  StageName,
+  JobStatus,
+  StageStatus,
+  ParkReason,
+  StageUsage,
+  ProjectUsage,
+  JobStage,
+  Job,
+  Severity,
+  Finding,
+  DiffStat,
+  JobDoc,
+};
+export { hasSpend, formatUsageCost, usageTooltip, usageOf, isQueued, elapsedSince, BODYLESS_POST, jsonPost };
+export {
+  formatTokens,
+  formatCost,
+  projectUsageTooltip,
+} from './job-board-types.js';
 
 /**
  * Client for the job pipeline: dispatching a feature, watching its stages, and
@@ -16,195 +53,6 @@ import {
  * stops as soon as nothing is running.
  */
 
-export type StageName =
-  | 'design'
-  | 'implement'
-  | 'integrate'
-  | 'review'
-  | 'fix'
-  | 'qa'
-  | 'merge'
-  | 'rebuild';
-
-export type JobStatus = 'queued' | 'running' | 'parked' | 'done' | 'failed' | 'cancelled';
-export type StageStatus =
-  | 'pending'
-  | 'running'
-  | 'passed'
-  | 'skipped'
-  | 'failed'
-  | 'needs_decision';
-export type ParkReason = 'gate' | 'question';
-
-/** Mirrors StageUsage in src/server/jobs/types.ts. */
-export interface StageUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  costUsd: number;
-  runCount: number;
-  /** Some tokens came from a model the server's price table does not know. */
-  unpriced?: boolean;
-}
-
-/** Mirrors ProjectUsage in src/server/usage/store.ts. */
-export interface ProjectUsage {
-  total: StageUsage;
-  pipeline: StageUsage;
-  background: StageUsage;
-  sessions: StageUsage;
-}
-
-const ZERO_USAGE: StageUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheCreationTokens: 0,
-  costUsd: 0,
-  runCount: 0,
-};
-
-/**
- * Anything to show. A job can have tokens and no run: a Take over spends in a
- * terminal, outside any pipeline run, and still belongs to the job.
- */
-export function hasSpend(usage: StageUsage): boolean {
-  return (
-    usage.runCount > 0 ||
-    usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens > 0
-  );
-}
-
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(Math.round(n));
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
-/**
- * Cost is the headline because a token total is not a meaningful one: cache
- * reads dwarf real input and output, so "31k tokens" reads as effort when it
- * is mostly the cache doing its job.
- */
-export function formatCost(usd: number): string {
-  if (usd <= 0) return '$0.00';
-  if (usd < 0.01) return '<$0.01';
-  return `$${usd.toFixed(2)}`;
-}
-
-/**
- * The headline figure for something that spent: its cost, or "—" when every
- * token came from a model the server cannot price. `formatCost(0)` would read
- * "$0.00" there, claiming free what is merely unknown; the tooltip says why.
- */
-export function formatUsageCost(usage: StageUsage): string {
-  return usage.unpriced && usage.costUsd === 0 ? '—' : formatCost(usage.costUsd);
-}
-
-/**
- * The breakdown behind the headline. Says "est." and names list price on
- * purpose: these runs bill against the Pro/Max subscription, so the figure is
- * what the tokens would cost at API rates, not a charge anyone made.
- */
-export function usageTooltip(usage: StageUsage): string {
-  if (!hasSpend(usage)) return 'no agent runs';
-  const runs =
-    usage.runCount > 0 ? `${usage.runCount} run${usage.runCount === 1 ? '' : 's'}` : 'outside any agent run';
-  return `${spendSummary(usage)} · ${runs}`;
-}
-
-function spendSummary(usage: StageUsage): string {
-  const cached = usage.cacheReadTokens + usage.cacheCreationTokens;
-  return (
-    `est. ${formatCost(usage.costUsd)} at API list price · ` +
-    `in ${formatTokens(usage.inputTokens)} · out ${formatTokens(usage.outputTokens)} · ` +
-    `cached ${formatTokens(cached)}` +
-    (usage.unpriced ? ' · some tokens are from a model with no known price' : '')
-  );
-}
-
-/**
- * The project total's breakdown: who spent it. Sessions and background runs
- * are counted too, which is why the figure sits in the project header and not
- * beside the Jobs list.
- */
-export function projectUsageTooltip(usage: ProjectUsage): string {
-  const part = (label: string, u: StageUsage) => `${label} ${formatCost(u.costUsd)}`;
-  return (
-    `${spendSummary(usage.total)}
-` +
-    [
-      part('pipeline', usage.pipeline),
-      part('sessions', usage.sessions),
-      part('background (session log, migration, QA drafts)', usage.background),
-    ].join(' · ')
-  );
-}
-
-/** Tolerates jobs and stages that predate usage accounting. */
-export function usageOf(item: { usage?: StageUsage | null }): StageUsage {
-  return item.usage ?? ZERO_USAGE;
-}
-
-export interface JobStage {
-  name: StageName;
-  status: StageStatus;
-  detail: string | null;
-  startedAt: string | null;
-  /** When the agent process started; null while the stage is still queued. */
-  spawnedAt?: string | null;
-  finishedAt: string | null;
-  usage?: StageUsage;
-}
-
-/**
- * A running stage whose process has not started yet is WAITING, not working.
- *
- * Runs queue per project, so a stage can be admitted and then sit behind
- * another run in the same project. Reporting that as execution is what makes a
- * job look hung: the elapsed time climbs, the stage says "running", and
- * nothing is happening. Stages recorded before this existed have no
- * `spawnedAt` at all and are shown as running, which is what they were.
- */
-export function isQueued(stage: JobStage): boolean {
-  return stage.status === 'running' && stage.spawnedAt === null;
-}
-
-/** How long a stage has been doing what it is currently doing. */
-export function elapsedSince(iso: string | null, now = Date.now()): string {
-  if (!iso) return '';
-  const ms = now - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return `${Math.floor(ms / 1000)}s`;
-  if (mins < 60) return `${mins}m`;
-  return `${Math.floor(mins / 60)}h${mins % 60}m`;
-}
-
-export interface Job {
-  id: string;
-  projectCwd: string;
-  featureId: string | null;
-  title: string;
-  status: JobStatus;
-  stage: StageName | null;
-  gate: string | null;
-  approvedGate: string | null;
-  parkReason: ParkReason | null;
-  detail: string | null;
-  worktreePath: string | null;
-  branch: string | null;
-  /** The branch this job forked from, and the one its merge lands on. */
-  baseBranch: string | null;
-  claudeSessionId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  stages: JobStage[];
-  /** Sum over this job's stages; absent on jobs served by an older server. */
-  usage?: StageUsage;
-}
-
 const STAGE_ICON: Record<StageStatus, string> = {
   pending: '·',
   running: '◐',
@@ -214,65 +62,6 @@ const STAGE_ICON: Record<StageStatus, string> = {
   // Deliberately not a tick: the stage ran but is waiting on the user.
   needs_decision: '?',
 };
-
-export type Severity = 'critical' | 'important' | 'nice';
-
-export interface Finding {
-  id: string;
-  severity: Severity;
-  file: string;
-  line: number | null;
-  title: string;
-  detail: string;
-  suggestion: string;
-  selected: boolean;
-}
-
-export interface DiffStat {
-  files: number;
-  insertions: number;
-  deletions: number;
-}
-
-/** Mirrors JobDoc in src/server/jobs/docs.ts. */
-export interface JobDoc {
-  path: string;
-  status: 'added' | 'edited' | 'deleted' | 'renamed' | 'unchanged';
-  insertions: number;
-  deletions: number;
-  isSpec: boolean;
-  headings: string[];
-}
-
-/** How a document row describes itself, once you know what the run did to it. */
-const DOC_STATUS_LABEL: Record<JobDoc['status'], string> = {
-  added: 'written by this run',
-  edited: 'edited by this run',
-  deleted: 'deleted by this run',
-  renamed: 'renamed by this run',
-  unchanged: 'read-only',
-};
-
-/** Unchanged documents past this point are folded away until asked for. */
-const DOCS_SHOWN = 8;
-
-/**
- * A POST that carries no body.
- *
- * Deliberately sends no Content-Type: Fastify rejects an `application/json`
- * request with an empty body as 400 before the route is ever reached, so
- * declaring a body the request does not have turned every bodyless action
- * (retry, approve, cancel, discard) into "Bad Request".
- */
-export const BODYLESS_POST = { method: 'POST' as const };
-
-export function jsonPost(body: Record<string, unknown>) {
-  return {
-    method: 'POST' as const,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-}
 
 /** How often to re-poll while any job is still moving. */
 const POLL_MS = 4000;
@@ -602,13 +391,15 @@ ${usageTooltip(usageOf(s))}` : '')
     const parts: string[] = [];
 
     if (job.parkReason === 'question' && job.detail) {
-      parts.push(this.renderDecision(job));
+      parts.push(renderDecision(job, this.answerDrafts, this.docs));
     } else if (job.detail) {
       parts.push(`<div class="jb-detail">${escapeHtml(job.detail)}</div>`);
     }
 
     const docs = this.docs.get(job.id);
-    if (docs !== undefined) parts.push(this.renderDocs(job, docs));
+    if (docs !== undefined) {
+      parts.push(renderDocs(job, docs, this.docsExpanded, this.docsCollapsed, this.openDoc, this.docBodies));
+    }
 
     const notRun = job.stages.filter((st) => st.status === 'skipped' && st.detail);
     if (notRun.length > 0) {
@@ -628,7 +419,7 @@ ${usageTooltip(usageOf(s))}` : '')
 
     const findings = this.findings.get(job.id);
     if (findings && job.gate === 'review') {
-      parts.push(this.renderFindings(job, findings));
+      parts.push(renderFindings(job, findings));
     }
 
     const diff = this.diffs.get(job.id);
@@ -640,7 +431,7 @@ ${usageTooltip(usageOf(s))}` : '')
         diff.diff
           ? `<div class="jb-diff-head">${escapeHtml(stat)}${
               diff.truncated ? ' · truncated' : ''
-            }</div><pre class="jb-diff">${this.highlightDiff(diff.diff)}</pre>`
+            }</div><pre class="jb-diff">${highlightDiff(diff.diff)}</pre>`
           : '<div class="pw-hint">No changes on this branch yet.</div>'
       );
     }
@@ -695,350 +486,6 @@ ${usageTooltip(usageOf(s))}` : '')
     }
   }
 
-  /**
-   * The decision a parked run is waiting on: `job.detail` parsed
-   * (decision-format.ts) with each part rendered as its own element rather than
-   * printed as prose. See `docs/job-decisions.md`.
-   *
-   * Parsing is best-effort by design — a detail it cannot make sense of falls
-   * back to the text as written, never to a wrong reading of it.
-   */
-  private renderDecision(job: Job): string {
-    const detail = job.detail as string;
-    const parsed = parseDecision(detail);
-    const head = (extra = ''): string =>
-      `<div class="jb-question-label">This run stopped rather than guess${extra}</div>`;
-    const form = (inner: string): string => `
-      <form class="jb-answer" data-job="${escapeAttr(job.id)}">
-        ${inner}
-        <div class="jb-answer-actions">
-          <button type="submit" class="btn-secondary">Answer &amp; continue</button>
-        </div>
-      </form>`;
-
-    if (!parsed) {
-      return `
-        <div class="jb-question">
-          ${head()}
-          <div class="jb-question-text">${this.linked(job, this.plainDetail(detail))}</div>
-          ${form(`<input type="text" class="jb-answer-input" data-index="1"
-                   value="${escapeAttr(this.answerDrafts.get(`${job.id}#1`) || '')}"
-                   placeholder="Your decision…" aria-label="Answer" maxlength="500" />`)}
-        </div>`;
-    }
-
-    let numbered = 0;
-    const cards = parsed.cards
-      .map((card) =>
-        this.renderDecisionCard(job, card, card.question ? ++numbered : null, parsed.questionCount)
-      )
-      .join('');
-
-    return `
-      <div class="jb-question">
-        ${head(parsed.questionCount > 1 ? ` · ${parsed.questionCount} questions` : '')}
-        ${
-          parsed.preamble.length
-            ? `<div class="jb-q-preamble">${this.paragraphs(job, parsed.preamble)}</div>`
-            : ''
-        }
-        ${form(`<div class="jb-q-cards">${cards}</div>`)}
-      </div>`;
-  }
-
-  /** One question: what is being asked, what informs it, and the box to answer in. */
-  private renderDecisionCard(
-    job: Job,
-    card: DecisionCard,
-    number: number | null,
-    total: number
-  ): string {
-    // A block that asks nothing is something the run wanted said alongside the
-    // questions. It keeps its text and does not pretend to need an answer.
-    if (number === null) {
-      return `<div class="jb-q-note">${this.paragraphs(job, card.context)}</div>`;
-    }
-
-    const part = (label: string, body: string): string => `
-      <div class="jb-q-part">
-        <span class="jb-q-part-label">${label}</span>
-        <div class="jb-q-part-body">${body}</div>
-      </div>`;
-
-    const options = card.options
-      .map(
-        (option) => `
-        <li class="jb-q-option">
-          <span class="jb-q-opt">${escapeHtml(option.label)}</span>
-          <span class="jb-q-opt-text">${this.linked(job, option.text)}</span>
-        </li>`
-      )
-      .join('');
-
-    const rec = card.recommendation;
-    const recLabel = rec
-      ? `${rec.kind === 'assumes' ? 'Assumed' : 'Recommends'}${rec.option ? ` (${escapeHtml(rec.option)})` : ''}`
-      : '';
-
-    return `
-      <div class="jb-q-card">
-        <div class="jb-q-head">
-          <span class="jb-q-num">Q${number}</span>
-          <span class="jb-q-text">${this.linked(job, card.question)}</span>
-        </div>
-        ${card.context.length ? part('Context', this.paragraphs(job, card.context)) : ''}
-        ${card.options.length ? part('Options', `<ul class="jb-q-options">${options}</ul>`) : ''}
-        ${
-          rec
-            ? `<div class="jb-q-rec ${rec.kind}">
-                 <span class="jb-q-rec-label">${recLabel}</span>
-                 <span class="jb-q-rec-text">${this.linked(job, rec.text)}</span>
-               </div>`
-            : ''
-        }
-        <input type="text" class="jb-answer-input" data-index="${number}"
-               data-question="${escapeAttr(card.question)}"
-               value="${escapeAttr(this.answerDrafts.get(`${job.id}#${number}`) || '')}"
-               placeholder="${total > 1 ? `Your decision on Q${number}…` : 'Your decision…'}"
-               aria-label="Answer to question ${number}" maxlength="500" />
-      </div>`;
-  }
-
-  /**
-   * The documents behind this job: what its branch changed, and the markdown it
-   * could have been reading.
-   *
-   * The two are marked differently on purpose. A changed document is something
-   * the run did that the user had no way of knowing about; an unchanged one is
-   * context a question cites. The unchanged tail folds away, because in a
-   * docs-heavy repo it is long and nobody opens the end of it.
-   *
-   * The head is a disclosure control over the whole list, and the shell is
-   * rendered even for an empty one: a loaded pane with no header would be a
-   * pane with nothing to unfold it by. The count chip stays outside the folding
-   * body, because "3 changed by this run" is the line that makes anyone open it.
-   */
-  private renderDocs(job: Job, docs: JobDoc[]): string {
-    const changed = docs.filter((d) => d.status !== 'unchanged');
-    const unchanged = docs.filter((d) => d.status === 'unchanged');
-    const showAll = this.docsExpanded.has(job.id);
-    const shown = showAll ? unchanged : unchanged.slice(0, DOCS_SHOWN);
-    const hidden = unchanged.length - shown.length;
-    const collapsed = this.docsCollapsed.has(job.id);
-
-    const rows = [...changed, ...shown].map((doc) => this.renderDocRow(job, doc)).join('');
-
-    const body =
-      docs.length === 0
-        ? '<div class="pw-hint">No documents for this job yet.</div>'
-        : `<ul class="jb-doc-list">${rows}</ul>
-           ${
-             hidden > 0
-               ? `<button type="button" class="jb-doc-more" data-job="${escapeAttr(job.id)}">
-                    Show ${hidden} more document${hidden === 1 ? '' : 's'}
-                  </button>`
-               : ''
-           }`;
-
-    // aria-expanded on its own announces a state without saying whose, so the
-    // body carries an id for the head to point at.
-    const bodyId = `jb-docs-body-${escapeAttr(job.id)}`;
-
-    return `
-      <div class="jb-docs${collapsed ? ' collapsed' : ''}">
-        <button type="button" class="jb-docs-head" data-job="${escapeAttr(job.id)}"
-                aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="${bodyId}">
-          <span>Documents</span>
-          <span class="jb-docs-count">${
-            docs.length === 0 ? 'no documents' : `${changed.length} changed by this run`
-          }</span>
-          <span class="jb-chevron">${collapsed ? '▸' : '▾'}</span>
-        </button>
-        <div class="jb-docs-body" id="${bodyId}">${body}</div>
-      </div>`;
-  }
-
-  private renderDocRow(job: Job, doc: JobDoc): string {
-    const open = this.openDoc.get(job.id);
-    const isOpen = open?.path === doc.path;
-    const changed = doc.status !== 'unchanged';
-    const stat =
-      changed && (doc.insertions || doc.deletions)
-        ? `<span class="jb-doc-stat">+${doc.insertions} −${doc.deletions}</span>`
-        : '';
-
-    return `
-      <li class="jb-doc ${changed ? 'changed' : 'unchanged'}${isOpen ? ' open' : ''}">
-        <button type="button" class="jb-doc-row" data-job="${escapeAttr(job.id)}"
-                data-path="${escapeAttr(doc.path)}">
-          <span class="jb-doc-mark" aria-hidden="true">${changed ? '●' : '○'}</span>
-          <span class="jb-doc-path">${escapeHtml(doc.path)}</span>
-          ${doc.isSpec ? '<span class="jb-doc-tag">spec</span>' : ''}
-          ${stat}
-          <span class="jb-doc-status">${DOC_STATUS_LABEL[doc.status]}</span>
-        </button>
-        ${isOpen ? this.renderDocView(job, doc, open.mode) : ''}
-      </li>`;
-  }
-
-  private renderDocView(job: Job, doc: JobDoc, mode: 'text' | 'diff'): string {
-    const cached = this.docBodies.get(`${job.id}|${mode}|${doc.path}`);
-    const changed = doc.status !== 'unchanged';
-    const tab = (value: 'text' | 'diff', label: string): string => `
-      <button type="button" class="jb-doc-tab${mode === value ? ' on' : ''}"
-              data-job="${escapeAttr(job.id)}" data-path="${escapeAttr(doc.path)}"
-              data-mode="${value}">${label}</button>`;
-
-    const body = !cached
-      ? '<div class="pw-hint">Loading…</div>'
-      : !cached.body.trim()
-        ? `<div class="pw-hint">${
-            mode === 'diff'
-              ? 'This run has not committed a change to this file.'
-              : 'This file is empty.'
-          }</div>`
-        : mode === 'diff'
-          ? `<pre class="jb-diff">${this.highlightDiff(cached.body)}</pre>`
-          : `<pre class="jb-doc-body">${this.renderDocText(cached.body)}</pre>`;
-
-    return `
-      <div class="jb-doc-view" data-doc="${escapeAttr(doc.path)}">
-        <div class="jb-doc-tabs">
-          ${tab('text', 'text')}
-          ${changed ? tab('diff', 'diff') : ''}
-          ${cached?.truncated ? '<span class="jb-doc-trunc">truncated</span>' : ''}
-        </div>
-        ${body}
-      </div>`;
-  }
-
-  /**
-   * Document text, with its numbered headings marked.
-   *
-   * Only the headings become elements — enough for a reference to scroll to one
-   * and for the eye to find it, without pretending to render markdown.
-   */
-  private renderDocText(text: string): string {
-    return text
-      .split('\n')
-      .map((line) => {
-        // Kept in step with headingNumbers() in src/server/jobs/docs.ts: a
-        // single-level number counts only under a `#`, where the file has
-        // already said the line is a heading.
-        const match =
-          /^\s{0,3}#{1,6}\s*§?\s*(\d+(?:\.\d+)*)[.)]?\s+\S/.exec(line) ??
-          /^\s{0,3}§?\s*(\d+(?:\.\d+)+)[.)]?\s+\S/.exec(line);
-        if (!match) return escapeHtml(line);
-        return `<span class="jb-doc-h" data-section="${escapeAttr(match[1])}">${escapeHtml(
-          line
-        )}</span>`;
-      })
-      .join('\n');
-  }
-
-  private paragraphs(job: Job, parts: string[]): string {
-    return parts.map((p) => `<p>${this.linked(job, p)}</p>`).join('');
-  }
-
-  /**
-   * Escape a question's prose and turn its references into buttons.
-   *
-   * ONE helper, not a call per site: a decision card escapes in eight places,
-   * and linking in only some leaves refs live in the options and dead in the
-   * recommendation. Escaping and linking must happen together — splicing into
-   * escaped text needs offsets the escaping has already moved — and linking
-   * only ever WRAPS, so nothing the model wrote is dropped.
-   */
-  private linked(job: Job, raw: string): string {
-    const refs = findReferences(raw);
-    if (refs.length === 0) return escapeHtml(raw);
-
-    const docs = this.docs.get(job.id) || [];
-    let out = '';
-    let at = 0;
-    for (const ref of refs) {
-      out += escapeHtml(raw.slice(at, ref.start));
-      const target = resolveReference(ref, docs);
-      out += target
-        ? `<button type="button" class="jb-ref" data-job="${escapeAttr(job.id)}"
-                   data-path="${escapeAttr(target.path)}"
-                   data-section="${escapeAttr(ref.kind === 'section' ? ref.value : '')}"
-                   title="Open ${escapeAttr(target.path)}">${escapeHtml(ref.raw)}</button>`
-        : escapeHtml(ref.raw);
-      at = ref.end;
-    }
-    return out + escapeHtml(raw.slice(at));
-  }
-
-  /** The detail as the model laid it out, minus the syntax it wrote it in. */
-  private plainDetail(text: string): string {
-    return text
-      .replace(/\r\n?/g, '\n')
-      .split('\n')
-      .map((line) => line.slice(0, line.length - line.trimStart().length) + stripMarks(line))
-      .join('\n')
-      .trim();
-  }
-
-  /**
-   * The review gate: every finding with a checkbox, nothing pre-ticked. The
-   * user decides what is worth acting on; the fix stage applies exactly that
-   * and is told explicitly to leave the rest alone.
-   */
-  private renderFindings(job: Job, findings: Finding[]): string {
-    if (findings.length === 0) {
-      return '<div class="pw-hint">No findings.</div>';
-    }
-    const rows = findings
-      .map((f) => {
-        const where = f.file
-          ? `${escapeHtml(f.file)}${f.line ? `:${f.line}` : ''}`
-          : '';
-        return `
-        <li class="jb-finding ${f.severity}">
-          <label class="jb-finding-head">
-            <input type="checkbox" class="jb-finding-box" data-job="${escapeAttr(job.id)}"
-                   data-finding="${escapeAttr(f.id)}" ${f.selected ? 'checked' : ''} />
-            <span class="jb-sev ${f.severity}">${f.severity}</span>
-            <span class="jb-finding-title">${escapeHtml(stripMarks(f.title))}</span>
-            ${where ? `<code class="jb-finding-where">${where}</code>` : ''}
-          </label>
-          ${f.detail ? `<div class="jb-finding-detail">${escapeHtml(stripMarks(f.detail))}</div>` : ''}
-          ${
-            f.suggestion
-              ? `<div class="jb-finding-fix"><strong>Fix:</strong> ${escapeHtml(stripMarks(f.suggestion))}</div>`
-              : ''
-          }
-        </li>`;
-      })
-      .join('');
-
-    const chosen = findings.filter((f) => f.selected).length;
-    return `
-      <div class="jb-findings">
-        <div class="jb-findings-head">
-          <span>${findings.length} finding${findings.length === 1 ? '' : 's'} — tick the ones to fix</span>
-          <span class="jb-findings-count">${chosen} selected</span>
-        </div>
-        <ul class="jb-finding-list">${rows}</ul>
-      </div>`;
-  }
-
-  /** Escape first, then colour by diff prefix — never the other way round. */
-  private highlightDiff(diff: string): string {
-    return escapeHtml(diff)
-      .split('\n')
-      .map((line) => {
-        if (line.startsWith('+++') || line.startsWith('---')) return `<span class="d-meta">${line}</span>`;
-        if (line.startsWith('@@')) return `<span class="d-hunk">${line}</span>`;
-        if (line.startsWith('diff --git')) return `<span class="d-file">${line}</span>`;
-        if (line.startsWith('+')) return `<span class="d-add">${line}</span>`;
-        if (line.startsWith('-')) return `<span class="d-del">${line}</span>`;
-        return line;
-      })
-      .join('\n');
-  }
-
   private renderActions(job: Job): string {
     const id = escapeAttr(job.id);
     const buttons: string[] = [];
@@ -1057,7 +504,7 @@ ${usageTooltip(usageOf(s))}` : '')
     // rather than a second viewer — two surfaces on one file drift apart the
     // first time either changes. Offered for a design that parked on a question
     // too: that spec is exactly what the question is about.
-    const specPath = this.specPathOf(job);
+    const specPath = specPathOf(job, this.docs);
     if (specPath) {
       const shown = this.openDoc.get(job.id)?.path === specPath;
       buttons.push(
@@ -1186,17 +633,6 @@ ${usageTooltip(usageOf(s))}` : '')
     } catch (error) {
       this.flash(error instanceof Error ? error.message : 'Could not discard');
     }
-  }
-
-  /**
-   * Which document is this job's spec, as the server marked it.
-   *
-   * Read from the document list rather than recomputed from the stage: whether
-   * a parked design's detail holds a spec path is the server's rule
-   * (routes.ts), and a second copy of that rule here is how the two drift.
-   */
-  private specPathOf(job: Job): string | null {
-    return (this.docs.get(job.id) || []).find((d) => d.isSpec)?.path ?? null;
   }
 
   /** Open a document on a job's card, or close it if it is already open. */
