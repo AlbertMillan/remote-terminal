@@ -194,6 +194,99 @@ body {
   box-shadow: 0 0 8px var(--danger-glow);
 }
 
+/* Plan usage chip — sits under the connection status; a <details>, so it opens itself. */
+.plan-usage {
+  margin-top: 8px;
+  font-size: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.plan-usage[data-level='warn'] {
+  border-color: rgba(224, 175, 104, 0.4);
+}
+.plan-usage[data-level='danger'] {
+  border-color: rgba(247, 118, 142, 0.5);
+}
+.plan-usage-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono);
+}
+.plan-usage-summary::-webkit-details-marker {
+  display: none;
+}
+.plan-usage.stale .plan-usage-summary {
+  opacity: 0.6;
+}
+.pu-label {
+  font-family: inherit;
+}
+.pu-muted,
+.pu-sep {
+  color: var(--text-muted);
+}
+.pu-window.warn,
+.pu-pct.warn {
+  color: var(--warning);
+}
+.pu-window.danger,
+.pu-pct.danger {
+  color: var(--danger);
+}
+.plan-usage-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.pu-row {
+  margin-top: 8px;
+}
+.pu-row-head {
+  display: flex;
+  justify-content: space-between;
+}
+.pu-bar {
+  height: 4px;
+  margin: 4px 0;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+.pu-fill {
+  height: 100%;
+  background: var(--accent);
+}
+.pu-fill.warn {
+  background: var(--warning);
+}
+.pu-fill.danger {
+  background: var(--danger);
+}
+.pu-detail,
+.pu-foot {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.pu-foot {
+  margin-top: 8px;
+}
+.pu-foot.stale {
+  color: var(--warning);
+}
+.pu-snippet {
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
 .status.connecting {
   border-color: rgba(224, 175, 104, 0.3);
 }

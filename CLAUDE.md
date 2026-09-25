@@ -230,3 +230,5 @@ Hook configuration for notifications, fork and session ids: `docs/notifications.
 `docs/session-fork.md`. Windows auto-start (`start-server.bat`, the hidden VBS launcher):
 `docs/windows-auto-start.md`. Session-log generation: `docs/session-log-feature.md`.
 Token accounting: `docs/token-usage-feature.md`.
+Plan usage chip (status line relay, `scripts/statusline.mjs`): `docs/plan-usage.md` — the script
+runs on every status line render, so it prints first and never waits on the server.
