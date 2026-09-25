@@ -111,9 +111,16 @@ describe('the chip in the sidebar', () => {
       vi.fn(async () => new Response(JSON.stringify(data(reading(85, 2), reading(22, 50)))))
     );
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it('appears on its first reading and keeps an open popover open across refreshes', async () => {
+    // refresh() renders at the real Date.now(); pin it to NOW, or the fixture's windows
+    // are hours stale by the time the suite runs and the chip reads 'ok' instead of 'warn'.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
     const chip = new PlanUsageChip();
     const root = document.getElementById('plan-usage') as HTMLDetailsElement;
     await chip.refresh();
