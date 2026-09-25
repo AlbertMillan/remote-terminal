@@ -24,8 +24,9 @@ npm test              # Run tests (vitest)
 npm run lint          # Lint with eslint
 ```
 
-Do **not** run `npm run format` / prettier: there is no `.prettierrc`, so it reformats the
-whole tree to double quotes against the house style. Match the surrounding style by hand.
+There is no formatter. Do **not** run prettier (e.g. via `npx`): with no `.prettierrc` it
+reformats the whole tree to double quotes against the house style. Match the surrounding
+style by hand.
 
 ## Architecture
 
