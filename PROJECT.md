@@ -75,4 +75,4 @@ status: active
 - [x] `f-nk734f` P1 Delete track — cancel/discard jobs, drop the branch, revert landed merges, spec rule, one commit → project/track-branches-and-delete.md
 - [x] `f-4blxce` P2 Work on main outside any branch — detect a track's edits on main from its sessions, Branch now, unticked guesses in Delete → project/track-branches-and-delete.md
 ## Track: Plan usage limits
-- [ ] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
+- [x] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
