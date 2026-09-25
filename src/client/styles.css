@@ -2251,8 +2251,8 @@ body {
 }
 
 /*
- * The one scroller in the project detail view. The header and badge row stay
- * pinned; features, jobs and session history scroll together beneath them.
+ * The one scroller in the project detail view. The header (badges included)
+ * stays pinned; features, jobs and session history scroll together beneath them.
  * Without `min-height: 0` a flex child refuses to shrink below its content and
  * the list is simply clipped by the view's `overflow: hidden`.
  */
@@ -2260,6 +2260,7 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  padding-top: 16px;
 }
 
 .project-log-entries {
@@ -2527,8 +2528,9 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 0 24px 12px;
+  margin-top: 10px;
 }
+.pw-badges:empty { display: none; }
 
 .pw-badge {
   display: inline-flex;
@@ -2551,7 +2553,7 @@ body {
 }
 
 .pw-flash {
-  margin: 0 24px 12px;
+  margin: 12px 24px 0;
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
@@ -2827,8 +2829,7 @@ body {
 
 @media (max-width: 640px) {
   .pw-features { padding: 0 14px; }
-  .pw-badges { padding: 0 14px 10px; }
-  .pw-flash { margin: 0 14px 10px; }
+  .pw-flash { margin: 10px 14px 0; }
   .pw-progress-bar { width: 72px; }
   .pw-delete { opacity: 1; }
 }
