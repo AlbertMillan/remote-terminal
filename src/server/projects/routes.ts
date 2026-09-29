@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { createLogger } from '../utils/logger.js';
-import { getWorkspaceBoard, findWorkspaceProject } from './workspace.js';
+import { getWorkspaceBoard, findWorkspaceProject, listBoardCwds } from './workspace.js';
 import { getRollup } from './rollup.js';
 import { pathKey } from '../sessions/project-discovery.js';
-import { loadRegistry, saveRegistry, normalizeRegistry } from './registry.js';
+import {
+  RegistryUnreadableError,
+  loadRegistry,
+  normalizeRegistry,
+  saveRegistry,
+  setFavorite,
+} from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
 import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
@@ -120,6 +126,35 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       return reply.status(500).send({ error: 'Failed to save registry' });
     }
   });
+
+  // Star or unstar one project. Its own endpoint rather than a registry PUT so
+  // a toggle edits only `favorites` and leaves the rest of the hand-editable
+  // file as written (see setFavorite).
+  app.post<{ Body?: { cwd?: string; favorite?: unknown } }>(
+    '/api/projects/favorite',
+    async (request, reply) => {
+      const { cwd, favorite } = request.body ?? {};
+      if (typeof cwd !== 'string' || !cwd || typeof favorite !== 'boolean') {
+        return reply.status(400).send({ error: 'cwd and favorite (boolean) required' });
+      }
+      // Registered projects are always among these, so this is the same guard
+      // as findWorkspaceProject() without building the board to apply it.
+      const boardCwds = listBoardCwds();
+      const onBoard = new Set(boardCwds.map(pathKey));
+      const target = boardCwds.find((c) => pathKey(c) === pathKey(cwd));
+      if (!target) return reply.status(404).send({ error: 'Unknown project' });
+      try {
+        const favorites = setFavorite(target, favorite, (f) => onBoard.has(pathKey(f)));
+        return { cwd: target, favorite, favorites };
+      } catch (error) {
+        if (error instanceof RegistryUnreadableError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        logger.error({ error }, 'registry: favourite save failed');
+        return reply.status(500).send({ error: 'Failed to save favourite' });
+      }
+    }
+  );
 
   // --- Migration ---------------------------------------------------------
   // Convert a project's existing plan docs into a canonical PROJECT.md. This is

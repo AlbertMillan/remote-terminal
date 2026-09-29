@@ -35,6 +35,8 @@ export interface WorkspaceProject {
   nested: string[];
   /** True when the project is explicitly listed in projects.json. */
   registered: boolean;
+  /** Starred in the sidebar (projects.json `favorites`). */
+  favorite: boolean;
   vcs: VcsCapabilities;
 
   hasDoc: boolean;
@@ -162,6 +164,27 @@ function countFeatures(features: Feature[]): FeatureCounts {
   return counts;
 }
 
+/** Which projects the board lists, before any of their docs are read. */
+function rollUpBoard(discovered: string[], registry: Registry) {
+  const cwds = dedupeByKey([
+    ...discovered,
+    ...registry.projects.map((p) => p.cwd),
+    ...recoverCwdsFromSlugs(),
+  ]).filter((cwd) => !isJobWorktree(cwd));
+  return rollUpProjects(cwds, registry);
+}
+
+/**
+ * The cwds getWorkspaceBoard() would list, without parsing any PROJECT.md or
+ * probing VCS — a membership check must not pay for the whole board.
+ */
+export function listBoardCwds(registry: Registry = loadRegistry()): string[] {
+  return rollUpBoard(
+    discoverProjects().map((p) => p.cwd),
+    registry
+  ).map((p) => p.cwd);
+}
+
 /**
  * Assemble the project board.
  *
@@ -178,6 +201,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
   const byKey = new Map(discovered.map((p) => [pathKey(p.cwd), p]));
 
   const registeredKeys = new Set(registry.projects.map((p) => pathKey(p.cwd)));
+  const favoriteKeys = new Set(registry.favorites.map(pathKey));
   const docOverrides = new Map(
     registry.projects.filter((p) => p.doc).map((p) => [pathKey(p.cwd), p.doc as string])
   );
@@ -191,13 +215,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
   // discovery needs a transcript to learn a project's real cwd, but most
   // transcript directories outlive their transcripts, which would silently drop
   // those projects.
-  const cwds = dedupeByKey([
-    ...discovered.map((p) => p.cwd),
-    ...registry.projects.map((p) => p.cwd),
-    ...recoverCwdsFromSlugs(),
-  ]).filter((cwd) => !isJobWorktree(cwd));
-
-  const rolled = rollUpProjects(cwds, registry);
+  const rolled = rollUpBoard(discovered.map((p) => p.cwd), registry);
   const board: WorkspaceProject[] = [];
 
   for (const { cwd, nested } of rolled) {
@@ -249,6 +267,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       name: nameOverrides.get(key) || basename(cwd) || cwd,
       nested,
       registered: registeredKeys.has(key),
+      favorite: favoriteKeys.has(key),
       vcs: capabilitiesFor(vcsKind),
       hasDoc: state?.exists ?? hasProjectDoc(entry),
       revision: state?.revision ?? 'absent',
@@ -293,6 +312,7 @@ export function findWorkspaceProject(
 
   // Not explicitly registered — accept it only if it is actually on the board,
   // so a request can never point the store at an arbitrary directory.
-  const onBoard = (board ?? getWorkspaceBoard(registry)).find((p) => pathKey(p.cwd) === key);
-  return onBoard ? { cwd: onBoard.cwd } : null;
+  const cwds = board ? board.map((p) => p.cwd) : listBoardCwds(registry);
+  const onBoard = cwds.find((c) => pathKey(c) === key);
+  return onBoard ? { cwd: onBoard } : null;
 }

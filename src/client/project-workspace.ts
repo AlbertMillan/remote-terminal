@@ -74,6 +74,8 @@ export interface WorkspaceProject {
   name: string;
   nested: string[];
   registered: boolean;
+  /** Starred in the sidebar; pinned above the rest of the list. */
+  favorite: boolean;
   vcs: VcsCapabilities;
   hasDoc: boolean;
   revision: string;
@@ -115,6 +117,17 @@ function saveCollapsedTracks(keys: Set<string>): void {
   }
 }
 
+/** Favourites first; `sort` is stable, so each group keeps the server's recency order. */
+export function favoritesFirst<T extends { favorite: boolean }>(board: T[]): T[] {
+  return [...board].sort((a, b) => Number(b.favorite) - Number(a.favorite));
+}
+
+/** True for the row the favourites divider goes under: only when a rest follows. */
+export function isLastFavorite(ordered: { favorite: boolean }[], i: number): boolean {
+  const next = ordered[i + 1];
+  return ordered[i].favorite && next !== undefined && !next.favorite;
+}
+
 export class ProjectWorkspace {
   private board: WorkspaceProject[] = [];
   private selectedCwd: string | null = null;
@@ -151,6 +164,8 @@ export class ProjectWorkspace {
    * persisted so a long index doesn't unfold itself on every reload.
    */
   private collapsedTracks = new Set<string>(loadCollapsedTracks());
+  /** Projects whose star toggle is still being saved. */
+  private favoriteBusy = new Set<string>();
 
   constructor(
     private readonly onSelect: (cwd: string) => void,
@@ -204,10 +219,12 @@ export class ProjectWorkspace {
       return;
     }
 
-    for (const project of this.board) {
+    const ordered = favoritesFirst(this.board);
+    for (const [i, project] of ordered.entries()) {
       const li = document.createElement('li');
       li.className = 'project-item';
       if (this.selectedCwd === project.cwd) li.classList.add('active');
+      if (isLastFavorite(ordered, i)) li.classList.add('last-favorite');
 
       const dot = document.createElement('span');
       dot.className = `project-status-dot ${this.statusClass(project)}`;
@@ -245,8 +262,63 @@ export class ProjectWorkspace {
         li.appendChild(badges);
       }
 
+      const star = document.createElement('button');
+      star.type = 'button';
+      star.className = `project-fav-btn${project.favorite ? ' on' : ''}`;
+      // A class, not `disabled`: a click on a disabled button may reach the row
+      // and open the project. toggleFavorite() ignores it while busy.
+      star.classList.toggle('busy', this.favoriteBusy.has(project.cwd));
+      star.textContent = project.favorite ? '★' : '☆';
+      star.title = project.favorite ? 'Remove from favourites' : 'Add to favourites';
+      // Fixed name: aria-pressed carries the state, and a label that flips with
+      // it reads backwards ("Remove from favourites, pressed").
+      star.setAttribute('aria-label', 'Favourite');
+      star.setAttribute('aria-pressed', String(project.favorite));
+      star.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void this.toggleFavorite(project);
+      });
+      li.appendChild(star);
+
       li.addEventListener('click', () => this.onSelect(project.cwd));
       listEl.appendChild(li);
+    }
+  }
+
+  /**
+   * Star or unstar a project. Applied optimistically so the row moves at once,
+   * and rolled back if the server refuses — a star that silently didn't save
+   * would reappear unstarred on the next device.
+   */
+  private async toggleFavorite(project: WorkspaceProject): Promise<void> {
+    // One request per project at a time: two in flight can land in either
+    // order, and a failed first one would roll back over the second click.
+    const { cwd } = project;
+    if (this.favoriteBusy.has(cwd)) return;
+    this.favoriteBusy.add(cwd);
+    const previous = project.favorite;
+    project.favorite = !previous;
+    this.renderList();
+    try {
+      const res = await fetch('/api/projects/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd, favorite: !previous }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+    } catch (error) {
+      console.error('Failed to save favourite:', error);
+      this.flash(error instanceof Error ? error.message : 'Could not save favourite.');
+      // A reload while the request was out replaces the board, so roll back the
+      // row that is on screen now, not the object this call started with.
+      const current = this.getProject(cwd);
+      if (current) current.favorite = previous;
+    } finally {
+      this.favoriteBusy.delete(cwd);
+      this.renderList();
     }
   }
 
