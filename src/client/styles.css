@@ -2208,6 +2208,7 @@ body {
 
 .project-fav-btn:hover { color: var(--warning); }
 .project-fav-btn.on { color: var(--warning); }
+.project-fav-btn.busy { cursor: progress; opacity: 0.5; }
 
 /* Touch screens have no hover, so the star must stay reachable. */
 @media (hover: none) {

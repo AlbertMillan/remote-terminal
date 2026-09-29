@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
@@ -96,22 +96,72 @@ export function normalizeRegistry(raw: unknown): Registry {
 
 export function saveRegistry(registry: Registry): void {
   const path = getRegistryPath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(registry, null, 2)}\n`);
+  writeFileAtomic(path, `${JSON.stringify(registry, null, 2)}\n`);
   logger.info({ path, projects: registry.projects.length }, 'registry: saved');
 }
 
 /**
- * Star or unstar a project. Matched by pathKey so a favourite saved as
- * `c:\foo` is still found (and removed) when the board reports `C:\foo`.
+ * Write via a temp file and rename, so a crash mid-write never leaves a
+ * truncated projects.json — loadRegistry() would read that as empty, and the
+ * next write would save the empty registry over the user's layout.
  */
-export function setFavorite(cwd: string, favorite: boolean): Registry {
-  const registry = loadRegistry();
+function writeFileAtomic(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, content);
+  renameSync(tmp, path);
+}
+
+/** projects.json exists but is not a JSON object, so it must not be rewritten. */
+export class RegistryUnreadableError extends Error {
+  constructor(readonly path: string) {
+    super(`${path} is not valid JSON — fix it by hand before changing favourites`);
+    this.name = 'RegistryUnreadableError';
+  }
+}
+
+/**
+ * Star or unstar a project, returning the new favourites.
+ *
+ * Edits the parsed file in place rather than round-tripping it through
+ * normalizeRegistry(): loadRegistry() reads a malformed file as EMPTY, and
+ * normalizing drops keys and entries it doesn't recognise, so either would let
+ * one click on a star erase a hand-edited layout. An unparseable file throws
+ * instead of being overwritten.
+ *
+ * Matched by pathKey so a favourite saved as `c:\foo` is still found (and
+ * removed) when the board reports `C:\foo`. `isOnBoard`, when given, prunes
+ * favourites whose project has gone — nothing in the UI could unstar them.
+ */
+export function setFavorite(
+  cwd: string,
+  favorite: boolean,
+  isOnBoard?: (cwd: string) => boolean
+): string[] {
+  const path = getRegistryPath();
+  let raw: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      throw new RegistryUnreadableError(path);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new RegistryUnreadableError(path);
+    }
+    raw = parsed as Record<string, unknown>;
+  }
+
   const key = pathKey(cwd);
-  const rest = registry.favorites.filter((f) => pathKey(f) !== key);
-  registry.favorites = favorite ? [...rest, cwd] : rest;
-  saveRegistry(registry);
-  return registry;
+  const rest = normalizeRegistry(raw).favorites.filter(
+    (f) => pathKey(f) !== key && (!isOnBoard || isOnBoard(f))
+  );
+  const favorites = favorite ? [...rest, cwd] : rest;
+  raw.favorites = favorites;
+  writeFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
+  logger.info({ path, cwd, favorite }, 'registry: favourite saved');
+  return favorites;
 }
 
 /** Absolute path to a project's canonical index document. */
