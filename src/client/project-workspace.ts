@@ -74,6 +74,8 @@ export interface WorkspaceProject {
   name: string;
   nested: string[];
   registered: boolean;
+  /** Starred in the sidebar; pinned above the rest of the list. */
+  favorite: boolean;
   vcs: VcsCapabilities;
   hasDoc: boolean;
   revision: string;
@@ -204,10 +206,19 @@ export class ProjectWorkspace {
       return;
     }
 
-    for (const project of this.board) {
+    // Favourites first; each group keeps the server's most-recent-first order.
+    const ordered = [
+      ...this.board.filter((p) => p.favorite),
+      ...this.board.filter((p) => !p.favorite),
+    ];
+    for (const [i, project] of ordered.entries()) {
       const li = document.createElement('li');
       li.className = 'project-item';
       if (this.selectedCwd === project.cwd) li.classList.add('active');
+      // Rule under the last favourite, only when there is a rest to separate.
+      if (project.favorite && !ordered[i + 1]?.favorite && i < ordered.length - 1) {
+        li.classList.add('last-favorite');
+      }
 
       const dot = document.createElement('span');
       dot.className = `project-status-dot ${this.statusClass(project)}`;
@@ -245,8 +256,44 @@ export class ProjectWorkspace {
         li.appendChild(badges);
       }
 
+      const star = document.createElement('button');
+      star.type = 'button';
+      star.className = `project-fav-btn${project.favorite ? ' on' : ''}`;
+      star.textContent = project.favorite ? '★' : '☆';
+      star.title = project.favorite ? 'Remove from favourites' : 'Add to favourites';
+      star.setAttribute('aria-label', star.title);
+      star.setAttribute('aria-pressed', String(project.favorite));
+      star.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void this.toggleFavorite(project);
+      });
+      li.appendChild(star);
+
       li.addEventListener('click', () => this.onSelect(project.cwd));
       listEl.appendChild(li);
+    }
+  }
+
+  /**
+   * Star or unstar a project. Applied optimistically so the row moves at once,
+   * and rolled back if the server refuses — a star that silently didn't save
+   * would reappear unstarred on the next device.
+   */
+  private async toggleFavorite(project: WorkspaceProject): Promise<void> {
+    const favorite = !project.favorite;
+    project.favorite = favorite;
+    this.renderList();
+    try {
+      const res = await fetch('/api/projects/favorite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: project.cwd, favorite }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (error) {
+      console.error('Failed to save favourite:', error);
+      project.favorite = !favorite;
+      this.renderList();
     }
   }
 

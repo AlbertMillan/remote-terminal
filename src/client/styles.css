@@ -2186,6 +2186,48 @@ body {
   line-height: 1.6;
 }
 
+.project-fav-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+/* Unstarred rows show the star only on hover/focus; starred ones always. */
+.project-item:hover .project-fav-btn,
+.project-fav-btn:focus-visible,
+.project-fav-btn.on {
+  opacity: 1;
+}
+
+.project-fav-btn:hover { color: var(--warning); }
+.project-fav-btn.on { color: var(--warning); }
+
+/* Touch screens have no hover, so the star must stay reachable. */
+@media (hover: none) {
+  .project-fav-btn { opacity: 1; }
+}
+
+.project-item.last-favorite {
+  position: relative;
+  margin-bottom: 9px;
+}
+
+.project-item.last-favorite::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 .project-badge.blockers { color: var(--danger); background: rgba(247, 118, 142, 0.14); }
 .project-badge.open { color: var(--warning); background: rgba(224, 175, 104, 0.14); }
 

@@ -28,7 +28,7 @@ const DISCOVERED = [
 ];
 
 function registry(partial: Partial<Registry> = {}): Registry {
-  return { projects: [], splitChildren: [], ...partial };
+  return { projects: [], splitChildren: [], favorites: [], ...partial };
 }
 
 describe('isDescendantOf', () => {
@@ -93,7 +93,7 @@ describe('rollUpProjects', () => {
 describe('normalizeRegistry', () => {
   it('degrades junk input to an empty registry', () => {
     for (const input of [null, undefined, 42, 'nope', []]) {
-      expect(normalizeRegistry(input)).toEqual({ projects: [], splitChildren: [] });
+      expect(normalizeRegistry(input)).toEqual({ projects: [], splitChildren: [], favorites: [] });
     }
   });
 
@@ -101,9 +101,11 @@ describe('normalizeRegistry', () => {
     const out = normalizeRegistry({
       projects: [{ cwd: UNITY }, { nope: 1 }, null, { cwd: '' }, { cwd: IDEAS, doc: 'DOCS.md' }],
       splitChildren: [IDEAS, 42, ''],
+      favorites: [UNITY, null, ' '],
     });
     expect(out.projects).toEqual([{ cwd: UNITY }, { cwd: IDEAS, doc: 'DOCS.md' }]);
     expect(out.splitChildren).toEqual([IDEAS]);
+    expect(out.favorites).toEqual([UNITY]);
   });
 });
 

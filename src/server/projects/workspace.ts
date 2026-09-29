@@ -35,6 +35,8 @@ export interface WorkspaceProject {
   nested: string[];
   /** True when the project is explicitly listed in projects.json. */
   registered: boolean;
+  /** Starred in the sidebar (projects.json `favorites`). */
+  favorite: boolean;
   vcs: VcsCapabilities;
 
   hasDoc: boolean;
@@ -178,6 +180,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
   const byKey = new Map(discovered.map((p) => [pathKey(p.cwd), p]));
 
   const registeredKeys = new Set(registry.projects.map((p) => pathKey(p.cwd)));
+  const favoriteKeys = new Set(registry.favorites.map(pathKey));
   const docOverrides = new Map(
     registry.projects.filter((p) => p.doc).map((p) => [pathKey(p.cwd), p.doc as string])
   );
@@ -249,6 +252,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       name: nameOverrides.get(key) || basename(cwd) || cwd,
       nested,
       registered: registeredKeys.has(key),
+      favorite: favoriteKeys.has(key),
       vcs: capabilitiesFor(vcsKind),
       hasDoc: state?.exists ?? hasProjectDoc(entry),
       revision: state?.revision ?? 'absent',

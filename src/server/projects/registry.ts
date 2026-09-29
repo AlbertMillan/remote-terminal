@@ -34,12 +34,17 @@ export interface Registry {
    * merely share a parent folder.
    */
   splitChildren: string[];
+  /**
+   * Projects starred in the sidebar, pinned above the rest. Kept here rather
+   * than in the browser so every device sees the same list.
+   */
+  favorites: string[];
 }
 
 const DEFAULT_DOC = 'PROJECT.md';
 
 function emptyRegistry(): Registry {
-  return { projects: [], splitChildren: [] };
+  return { projects: [], splitChildren: [], favorites: [] };
 }
 
 export function getRegistryPath(): string {
@@ -83,11 +88,10 @@ export function normalizeRegistry(raw: unknown): Registry {
     }
   }
 
-  const splitChildren = Array.isArray(obj.splitChildren)
-    ? obj.splitChildren.filter((s): s is string => typeof s === 'string' && !!s.trim())
-    : [];
+  const paths = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && !!s.trim()) : [];
 
-  return { projects, splitChildren };
+  return { projects, splitChildren: paths(obj.splitChildren), favorites: paths(obj.favorites) };
 }
 
 export function saveRegistry(registry: Registry): void {
@@ -95,6 +99,19 @@ export function saveRegistry(registry: Registry): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(registry, null, 2)}\n`);
   logger.info({ path, projects: registry.projects.length }, 'registry: saved');
+}
+
+/**
+ * Star or unstar a project. Matched by pathKey so a favourite saved as
+ * `c:\foo` is still found (and removed) when the board reports `C:\foo`.
+ */
+export function setFavorite(cwd: string, favorite: boolean): Registry {
+  const registry = loadRegistry();
+  const key = pathKey(cwd);
+  const rest = registry.favorites.filter((f) => pathKey(f) !== key);
+  registry.favorites = favorite ? [...rest, cwd] : rest;
+  saveRegistry(registry);
+  return registry;
 }
 
 /** Absolute path to a project's canonical index document. */

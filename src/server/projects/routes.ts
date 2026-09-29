@@ -3,7 +3,7 @@ import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject } from './workspace.js';
 import { getRollup } from './rollup.js';
 import { pathKey } from '../sessions/project-discovery.js';
-import { loadRegistry, saveRegistry, normalizeRegistry } from './registry.js';
+import { loadRegistry, saveRegistry, normalizeRegistry, setFavorite } from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
 import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
@@ -120,6 +120,27 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       return reply.status(500).send({ error: 'Failed to save registry' });
     }
   });
+
+  // Star or unstar one project. Its own endpoint rather than a registry PUT so
+  // a toggle can't overwrite a hand edit made to the rest of the file.
+  app.post<{ Body?: { cwd?: string; favorite?: unknown } }>(
+    '/api/projects/favorite',
+    async (request, reply) => {
+      const { cwd, favorite } = request.body ?? {};
+      if (!cwd || typeof favorite !== 'boolean') {
+        return reply.status(400).send({ error: 'cwd and favorite (boolean) required' });
+      }
+      const project = findWorkspaceProject(cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      try {
+        setFavorite(project.cwd, favorite);
+        return { cwd: project.cwd, favorite };
+      } catch (error) {
+        logger.error({ error }, 'registry: favorite save failed');
+        return reply.status(500).send({ error: 'Failed to save favorite' });
+      }
+    }
+  );
 
   // --- Migration ---------------------------------------------------------
   // Convert a project's existing plan docs into a canonical PROJECT.md. This is
