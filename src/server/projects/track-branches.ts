@@ -17,58 +17,67 @@ import {
 } from '../jobs/worktree.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive } from '../jobs/types.js';
-import type { RegistryProject } from './registry.js';
-import { mutateProjectDoc, readProjectDoc } from './project-store.js';
+import { loadRegistry, type RegistryProject } from './registry.js';
+import { readProjectDoc } from './project-store.js';
+import { featuresOf, findFeature } from './project-doc-format.js';
 import {
-  ensureTrack,
-  featuresOf,
-  findFeature,
-  parseProjectDoc,
-  updateFeature,
-  type FeatureStatus,
-} from './project-doc-format.js';
+  getActiveTrackBranch,
+  listUnmigratedTrackBranches,
+  markLanded,
+  markPlanInBranch,
+  type TrackBranch,
+} from './track-store.js';
+import { readProjectPlan, type ProjectPlan } from './project-plan.js';
 import { guessTrackWork, type GuessedFile } from './track-attribution.js';
+import {
+  commitWorktreePlanning,
+  isPlanningPath,
+  moveSectionOffMain,
+  nameFiles,
+  returnSectionToMain,
+  specsOf,
+  statusEntries,
+  type MoveMode,
+  type MoveResult,
+} from './track-plan.js';
 
 const logger = createLogger('track-branches');
+
+// The table and the plan readers live in their own modules (track-store.ts,
+// project-plan.ts) so attribution can read plans without importing this
+// file, which imports attribution. Re-exported for existing callers.
+export {
+  deleteTrackBranchRows,
+  findActiveTrackBranchByName,
+  getActiveTrackBranch,
+  isTrackBranch,
+  listTrackBranches,
+  type TrackBranch,
+} from './track-store.js';
+export {
+  allFeatureIds,
+  planCopies,
+  planFileFor,
+  readProjectPlan,
+  worktreeProject,
+  type PlanCopy,
+  type ProjectPlan,
+} from './project-plan.js';
 
 /**
  * A track's own branch and worktree.
  *
- * Planning happens on main (PROJECT.md lines and specs, which Delete track can
- * always remove). Implementation happens here, so that everything a track did
- * — a session's commits, its uncommitted edits, the jobs merged into it — can
- * be told apart from other work and landed or deleted as one unit. The
- * reasoning is in docs/track-branches.md.
+ * A track's plan lives where its work lives (docs/track-branches.md):
+ *  - backlog (no branch): its PROJECT.md section and specs are on main;
+ *  - in progress (an unlanded branch): ONLY on the track branch — the move
+ *    happens when the branch is created (track-plan.ts);
+ *  - landed: on main again, put back by Land.
  *
- * PROJECT.md in the MAIN checkout stays the one source of truth: the board,
- * dispatch and rebuild all read and write it there. The worktree's copy is
- * never authoritative; Land copies its ticks across and then drops it.
+ * So main's PROJECT.md is authoritative for the backlog and landed tracks,
+ * and an in-progress track's worktree is authoritative for that track. The
+ * board, dispatch, rebuild and attribution read both through readProjectPlan.
+ * Land copies the section across and never merges the file.
  */
-
-export interface TrackBranch {
-  id: string;
-  projectCwd: string;
-  trackName: string;
-  branch: string;
-  worktreePath: string;
-  baseBranch: string;
-  createdAt: string;
-  landedAt: string | null;
-  mergeSha: string | null;
-}
-
-interface TrackBranchRow {
-  id: string;
-  project_cwd: string;
-  project_key: string;
-  track_name: string;
-  branch: string;
-  worktree_path: string;
-  base_branch: string;
-  created_at: string;
-  landed_at: string | null;
-  merge_sha: string | null;
-}
 
 export class TrackBranchError extends Error {
   constructor(
@@ -78,86 +87,6 @@ export class TrackBranchError extends Error {
     super(message);
     this.name = 'TrackBranchError';
   }
-}
-
-function toTrackBranch(row: TrackBranchRow): TrackBranch {
-  return {
-    id: row.id,
-    projectCwd: row.project_cwd,
-    trackName: row.track_name,
-    branch: row.branch,
-    worktreePath: row.worktree_path,
-    baseBranch: row.base_branch,
-    createdAt: row.created_at,
-    landedAt: row.landed_at,
-    mergeSha: row.merge_sha,
-  };
-}
-
-// --- Store -------------------------------------------------------------
-
-/** The track's branch that has not landed yet, if it has one. */
-export function getActiveTrackBranch(cwd: string, trackName: string): TrackBranch | null {
-  const row = getDatabase()
-    .prepare(
-      `SELECT * FROM track_branches
-       WHERE project_key = ? AND track_name = ? AND landed_at IS NULL`
-    )
-    .get(pathKey(cwd), trackName) as TrackBranchRow | undefined;
-  return row ? toTrackBranch(row) : null;
-}
-
-/** Every track branch of a project, landed ones included, oldest first. */
-export function listTrackBranches(cwd: string): TrackBranch[] {
-  const rows = getDatabase()
-    .prepare('SELECT * FROM track_branches WHERE project_key = ? ORDER BY created_at')
-    .all(pathKey(cwd)) as TrackBranchRow[];
-  return rows.map(toTrackBranch);
-}
-
-/** The not-yet-landed track branch named `branch`, used by the merge stage. */
-export function findActiveTrackBranchByName(cwd: string, branch: string): TrackBranch | null {
-  const row = getDatabase()
-    .prepare(
-      `SELECT * FROM track_branches
-       WHERE project_key = ? AND branch = ? AND landed_at IS NULL`
-    )
-    .get(pathKey(cwd), branch) as TrackBranchRow | undefined;
-  return row ? toTrackBranch(row) : null;
-}
-
-/** True when `branch` is, or was, one of this project's track branches. */
-export function isTrackBranch(cwd: string, branch: string): boolean {
-  return (
-    getDatabase()
-      .prepare('SELECT 1 FROM track_branches WHERE project_key = ? AND branch = ?')
-      .get(pathKey(cwd), branch) !== undefined
-  );
-}
-
-/**
- * Forget a track's rows. Only Delete track calls this. `keepUnlanded` keeps the
- * row of a branch whose worktree could not be removed, so it stays on the
- * board and can be deleted again instead of being left on disk unrecorded.
- */
-export function deleteTrackBranchRows(
-  cwd: string,
-  trackName: string,
-  opts: { keepUnlanded?: boolean } = {}
-): void {
-  getDatabase()
-    .prepare(
-      `DELETE FROM track_branches WHERE project_key = ? AND track_name = ?${
-        opts.keepUnlanded ? ' AND landed_at IS NOT NULL' : ''
-      }`
-    )
-    .run(pathKey(cwd), trackName);
-}
-
-function markLanded(id: string, mergeSha: string): void {
-  getDatabase()
-    .prepare('UPDATE track_branches SET landed_at = ?, merge_sha = ? WHERE id = ?')
-    .run(new Date().toISOString(), mergeSha, id);
 }
 
 // --- Naming ------------------------------------------------------------
@@ -177,8 +106,33 @@ export function trackBranchNameFor(id: string, trackName: string): string {
   return `track/${slugOf(trackName)}-${id.slice(0, 8)}`;
 }
 
+/**
+ * A new track's worktree folder. Named by the first 8 characters of the row
+ * id, not all 36: git on Windows refuses a worktree whose path passes about
+ * 210 characters, so every character here comes off how deep
+ * `persistence.dataDir` may be. The full id is
+ * the fallback for the rare prefix already taken — createWorktree reuses an
+ * existing folder, which would hand this track another one's checkout — and
+ * so is a prefix an unlanded row records, whose missing folder reattachIfMissing
+ * would otherwise re-create inside this track's. The path is stored on the
+ * row, so existing tracks keep their full-id folders.
+ */
 export function trackWorktreePathFor(id: string): string {
-  return join(worktreeRoot(), 'tracks', id);
+  const short = join(worktreeRoot(), 'tracks', id.slice(0, 8));
+  const recorded = getDatabase()
+    .prepare('SELECT 1 FROM track_branches WHERE worktree_path = ? AND landed_at IS NULL')
+    .get(short);
+  return existsSync(short) || recorded ? join(worktreeRoot(), 'tracks', id) : short;
+}
+
+/** Spec paths linked from every section except `trackName`'s, on main and in every worktree. */
+function specsOutside(plan: ProjectPlan, trackName: string): Set<string> {
+  const out = new Set<string>();
+  for (const t of plan.main.doc.tracks) if (t.name !== trackName) specsOf(t).forEach((s) => out.add(s));
+  for (const c of plan.copies) {
+    if (c.track && c.branch.trackName !== trackName) specsOf(c.track).forEach((s) => out.add(s));
+  }
+  return out;
 }
 
 // --- Branching ---------------------------------------------------------
@@ -187,10 +141,10 @@ export function trackWorktreePathFor(id: string): string {
  * The track's branch and worktree, created on first use.
  *
  * Called by everything that starts implementation: Open session on a track
- * heading, the new-session dialog's track picker, and dispatching a job for
- * one of the track's features. A track that is only ever planned never gets
- * one. When the track has no heading in PROJECT.md yet (the picker's "New
- * track…"), the heading is added on main so the board shows it.
+ * heading, the new-session dialog's track picker, dispatch, and Branch now.
+ * A track that is only ever planned never gets one. Creating the branch moves
+ * the track's plan into it (track-plan.ts); a track with no heading yet (the
+ * picker's "New track…") gets its heading in the worktree, never on main.
  */
 export async function ensureTrackBranch(
   project: RegistryProject,
@@ -218,9 +172,11 @@ export async function ensureTrackBranch(
   try {
     getDatabase()
       .prepare(
+        // plan_in_branch = 1: this row's plan moves into the branch below, so
+        // the boot migration (old rows only) must never move it again.
         `INSERT INTO track_branches
-           (id, project_cwd, project_key, track_name, branch, worktree_path, base_branch, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, project_cwd, project_key, track_name, branch, worktree_path, base_branch, created_at, plan_in_branch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
       )
       .run(id, project.cwd, pathKey(project.cwd), name, created.branch, created.path, baseBranch, now);
   } catch (error) {
@@ -233,12 +189,104 @@ export async function ensureTrackBranch(
     return winner;
   }
 
-  if (!readProjectDoc(project).doc.tracks.some((t) => t.name === name)) {
-    mutateProjectDoc(project, null, (doc) => ensureTrack(doc, name));
-  }
+  // A failed move is logged, not thrown: the branch exists and the plan is
+  // then in both places, which the board ("also has lines on main") and
+  // Land (merge by id) both handle.
+  await movePlan(project, name, created.path, 'replace');
 
   logger.info({ cwd: project.cwd, track: name, branch: created.branch }, 'track branch created');
   return getActiveTrackBranch(project.cwd, name) as TrackBranch;
+}
+
+async function movePlan(
+  project: RegistryProject,
+  trackName: string,
+  worktreePath: string,
+  mode: MoveMode
+): Promise<MoveResult | null> {
+  try {
+    return await moveSectionOffMain({
+      project,
+      worktreePath,
+      trackName,
+      sharedSpecs: specsOutside(readProjectPlan(project), trackName),
+      mode,
+    });
+  } catch (error) {
+    logger.warn(
+      { cwd: project.cwd, track: trackName, error: (error as Error).message },
+      'track plan: move off main failed — left in both places'
+    );
+    return null;
+  }
+}
+
+/**
+ * Move into branch: lines written on main for a track that already has a
+ * branch go into its worktree, the worktree's lines winning by id.
+ */
+export async function moveIntoBranch(project: RegistryProject, trackName: string): Promise<MoveResult> {
+  const track = getActiveTrackBranch(project.cwd, trackName);
+  if (!track) throw new TrackBranchError('This track has no branch to move its lines into', 404);
+  await reattachIfMissing(project, track);
+  if (!readProjectDoc(project).doc.tracks.some((t) => t.name === trackName)) {
+    throw new TrackBranchError('Main has no lines for this track', 404);
+  }
+  return moveSectionOffMain({
+    project,
+    worktreePath: track.worktreePath,
+    trackName,
+    sharedSpecs: specsOutside(readProjectPlan(project), trackName),
+    mode: 'worktree-wins',
+  });
+}
+
+/**
+ * One-time migration at server start, for tracks branched before plans moved
+ * into branches: their section is still on main. Move each once, keeping
+ * main's lines (main was authoritative then) and the worktree's
+ * further-along ticks, and flag the row so it is never moved this way again.
+ *
+ * Only unflagged rows (`plan_in_branch = 0`). A flagged track whose section
+ * is on main again had it written there after branching: there the worktree
+ * is authoritative, and Move into branch and Land merge it worktree-first.
+ * Moving it main-first on every restart would revert the worktree's own edits.
+ *
+ * Flagged after any attempt, failed ones included: step 1 may already have
+ * put main's lines in the worktree, and a retry would let main win again
+ * over whatever was edited there since. A failed move is logged and left as
+ * a "both copies" track, which the board (Move into branch) and Land handle.
+ */
+export async function migrateBranchedPlans(): Promise<void> {
+  let rows: TrackBranch[];
+  try {
+    rows = listUnmigratedTrackBranches();
+  } catch (error) {
+    logger.warn({ error }, 'track plan migration: could not read track branches');
+    return;
+  }
+  const registry = loadRegistry();
+  for (const row of rows) {
+    const project: RegistryProject = registry.projects.find((p) => pathKey(p.cwd) === pathKey(row.projectCwd)) ?? {
+      cwd: row.projectCwd,
+    };
+    try {
+      if (!existsSync(project.cwd)) continue; // the project may come back; retry then
+      if (!readProjectDoc(project).doc.tracks.some((t) => t.name === row.trackName)) {
+        markPlanInBranch(row.id); // nothing on main to move
+        continue;
+      }
+      await reattachIfMissing(project, row);
+      const moved = await movePlan(project, row.trackName, row.worktreePath, 'main-wins');
+      markPlanInBranch(row.id);
+      if (moved) logger.info({ cwd: project.cwd, track: row.trackName }, 'track plan migration: moved');
+    } catch (error) {
+      logger.warn(
+        { cwd: project.cwd, track: row.trackName, error: (error as Error).message },
+        'track plan migration failed'
+      );
+    }
+  }
 }
 
 /**
@@ -256,9 +304,9 @@ async function reattachIfMissing(project: RegistryProject, track: TrackBranch): 
   });
 }
 
-/** The track a feature sits in on main, or null for an unknown id. */
+/** The track a feature sits in — main's plan or any in-progress worktree's — or null for an unknown id. */
 export function trackOfFeature(project: RegistryProject, featureId: string): string | null {
-  return findFeature(readProjectDoc(project).doc, featureId)?.track.name ?? null;
+  return findFeature(readProjectPlan(project).doc, featureId)?.track.name ?? null;
 }
 
 /**
@@ -287,32 +335,33 @@ export function readSpecForTrack(
 
 // --- Land --------------------------------------------------------------
 
-const STATUS_RANK: Record<FeatureStatus, number> = {
-  pending: 0,
-  blocked: 0,
-  in_progress: 1,
-  done: 2,
-};
-
 export interface LandResult {
   mergeSha: string;
   pushed: boolean;
-  /** Feature ids whose status was carried over from the worktree's PROJECT.md. */
+  /** Feature ids in the section Land put back on main. */
   synced: string[];
   detail: string;
 }
 
 /**
- * Land a track: merge its branch into the base once, then retire the worktree.
+ * Land a track: put its plan back on main, merge its branch into the base
+ * once, then retire the worktree.
  *
- * Refused unless every job for the track has finished, both checkouts are
- * clean, and no live session is running inside the worktree (on Windows an
- * open shell holds the directory and `git worktree remove` fails half-way).
+ * Refused unless every job for the track has finished, no live session is
+ * running inside the worktree (on Windows an open shell holds the directory
+ * and `git worktree remove` fails half-way), the project is on the base
+ * branch, and the checkouts hold nothing Land can't account for:
+ *  - the worktree: uncommitted planning files are committed there first
+ *    (it belongs to this track and never pushes); anything else refuses;
+ *  - main: uncommitted planning files (backlog edits) are let through and
+ *    left uncommitted; anything else refuses, since code edited on main may
+ *    be this track's work. Nothing may be STAGED: git refuses to merge then.
+ * Every refusal names the files.
  *
- * PROJECT.md never goes through the merge. Ticks a session made in the
- * worktree's copy are applied to main's through mutateProjectDoc, and the
- * branch's copy is reset to its merge-base first, so the merge cannot conflict
- * on the file every track touches.
+ * PROJECT.md never goes through the merge. The branch's copy is reset to its
+ * merge-base first, and the section is copied onto main by its own commit
+ * (returnSectionToMain), so the merge cannot conflict on the file every track
+ * touches.
  */
 export async function landTrack(
   project: RegistryProject,
@@ -321,10 +370,14 @@ export async function landTrack(
 ): Promise<LandResult> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
-  const docRel = project.doc || 'PROJECT.md';
+  const docRel = (project.doc || 'PROJECT.md').replace(/\\/g, '/');
 
-  const onMain = readProjectDoc(project).doc.tracks.find((t) => t.name === trackName);
-  const featureIds = new Set((onMain ? featuresOf(onMain) : []).map((f) => f.id));
+  const plan = readProjectPlan(project);
+  const sections = [
+    plan.main.doc.tracks.find((t) => t.name === trackName),
+    plan.copies.find((c) => c.branch.id === track.id)?.track ?? undefined,
+  ];
+  const featureIds = new Set(sections.flatMap((t) => (t ? featuresOf(t) : [])).map((f) => f.id));
   const liveJobs = listJobsForProject(project.cwd).filter(
     (j) =>
       isLive(j.status) &&
@@ -346,18 +399,6 @@ export async function landTrack(
   }
 
   await reattachIfMissing(project, track);
-  if (await isDirty(track.worktreePath)) {
-    throw new TrackBranchError(
-      `The track worktree has uncommitted changes (${track.worktreePath}). Commit or discard them first.`,
-      409
-    );
-  }
-  if (await isDirty(project.cwd)) {
-    throw new TrackBranchError(
-      'The project has uncommitted changes. Commit or stash them before landing this track.',
-      409
-    );
-  }
   const current = (await git(project.cwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim();
   if (current !== track.baseBranch) {
     throw new TrackBranchError(
@@ -366,10 +407,48 @@ export async function landTrack(
       409
     );
   }
+  const mainEntries = await statusEntries(project.cwd);
+  if (mainEntries === null) {
+    throw new TrackBranchError(`Could not read the repository state at ${project.cwd}`, 500);
+  }
+  const mainCode = mainEntries.filter((e) => !isPlanningPath(e.path, docRel)).map((e) => e.path);
+  if (mainCode.length > 0) {
+    throw new TrackBranchError(
+      `The project has uncommitted changes outside the plan: ${nameFiles(mainCode)}. ` +
+        'Commit or stash them before landing this track — code edited on main may be this track’s work.',
+      409
+    );
+  }
+  const mainStaged = mainEntries.filter((e) => !e.untracked && e.staged !== ' ').map((e) => e.path);
+  if (mainStaged.length > 0) {
+    throw new TrackBranchError(
+      `These files are staged on main: ${nameFiles(mainStaged)}. git refuses to merge while anything ` +
+        'is staged — commit or unstage them (they can stay uncommitted), then land again.',
+      409
+    );
+  }
+  const worktreeCode = await commitWorktreePlanning(
+    track.worktreePath,
+    docRel,
+    `chore: commit "${trackName}" planning before landing`
+  );
+  if (worktreeCode) {
+    throw new TrackBranchError(
+      `The track worktree has uncommitted changes (${track.worktreePath}): ${nameFiles(worktreeCode)}. ` +
+        'Commit or discard them first.',
+      409
+    );
+  }
 
-  // 1. Read the worktree's ticks, then take PROJECT.md out of the merge.
-  const worktreeStatuses = readWorktreeStatuses(track.worktreePath, docRel, featureIds);
-  const beforeReset = await resetDocToMergeBase(track, docRel);
+  // 1. The plan back onto main, then PROJECT.md out of the merge.
+  const returned = await returnSectionToMain({ project, worktreePath: track.worktreePath, trackName });
+  let beforeReset: string | null = null;
+  try {
+    beforeReset = await resetDocToMergeBase(track, docRel);
+  } catch (error) {
+    await returned.rollback();
+    throw error;
+  }
 
   // 2. Merge.
   const merged = await git(project.cwd, [
@@ -382,34 +461,38 @@ export async function landTrack(
   ]);
   if (merged === null) {
     await git(project.cwd, ['merge', '--abort']);
-    // Take the reset commit back off the track branch. Without this the
-    // worktree's ticks exist only in memory, and the next Land reads the
-    // already-reset copy: the progress is gone for good. Safe: the worktree
-    // was checked clean above, so --hard discards nothing else.
+    await returned.rollback();
+    // Take the reset commit back off the track branch. Without this the next
+    // Land reads the already-reset copy and the track's section is gone for
+    // good. Safe: the worktree was committed clean above, so --hard discards
+    // nothing else.
     if (beforeReset) await git(track.worktreePath, ['reset', '--hard', beforeReset]);
+    const planning = mainEntries.map((e) => e.path);
     throw new TrackBranchError(
-      `Merging ${track.branch} into ${track.baseBranch} failed. Merge ${track.baseBranch} into the track in its worktree, resolve, and land again.`,
+      `Merging ${track.branch} into ${track.baseBranch} failed. Merge ${track.baseBranch} into the track in its worktree, resolve, and land again.` +
+        (planning.length > 0
+          ? ` If the uncommitted planning files on main are in the way (${nameFiles(planning)}), commit or stash them.`
+          : ''),
       409
     );
   }
   const mergeSha = (await git(project.cwd, ['rev-parse', 'HEAD']))?.trim() || '';
   markLanded(track.id, mergeSha);
 
-  // 3. Carry the ticks over to main, committing only PROJECT.md.
-  const synced = await syncTicks(project, docRel, worktreeStatuses, trackName);
-
-  // 4. Publish, as the merge stage does for a job.
+  // 3. Publish, as the merge stage does for a job. Only commits go: the
+  // uncommitted backlog edits on main stay where they are.
   let pushed = false;
   if (await hasRemote(project.cwd)) {
     pushed = (await git(project.cwd, ['push'])) !== null;
   }
 
-  // 5. The branch's commits now live on the base; only the label goes.
+  // 4. The branch's commits now live on the base; only the label goes.
   await removeWorktree(project.cwd, track.id, {
     path: track.worktreePath,
     deleteBranch: track.branch,
   });
 
+  const synced = returned.featureIds;
   logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced }, 'track landed');
   return {
     mergeSha,
@@ -419,28 +502,6 @@ export async function landTrack(
       ? `Landed into ${track.baseBranch} and pushed`
       : `Landed into ${track.baseBranch}`,
   };
-}
-
-async function isDirty(cwd: string): Promise<boolean> {
-  const status = await git(cwd, ['status', '--porcelain']);
-  if (status === null) throw new TrackBranchError(`Could not read the repository state at ${cwd}`, 500);
-  return status.trim().length > 0;
-}
-
-function readWorktreeStatuses(
-  worktreePath: string,
-  docRel: string,
-  featureIds: Set<string>
-): Map<string, FeatureStatus> {
-  const out = new Map<string, FeatureStatus>();
-  const path = join(worktreePath, docRel);
-  if (!existsSync(path)) return out;
-  const doc = parseProjectDoc(readFileSync(path, 'utf-8'));
-  for (const id of featureIds) {
-    const found = findFeature(doc, id);
-    if (found) out.set(id, found.feature.status);
-  }
-  return out;
 }
 
 /**
@@ -472,38 +533,6 @@ async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<
     docRel,
   ]);
   return before;
-}
-
-async function syncTicks(
-  project: RegistryProject,
-  docRel: string,
-  worktreeStatuses: Map<string, FeatureStatus>,
-  trackName: string
-): Promise<string[]> {
-  const main = readProjectDoc(project).doc;
-  const toApply: [string, FeatureStatus][] = [];
-  for (const [id, status] of worktreeStatuses) {
-    const onMain = findFeature(main, id);
-    if (onMain && STATUS_RANK[status] > STATUS_RANK[onMain.feature.status]) {
-      toApply.push([id, status]);
-    }
-  }
-  if (toApply.length === 0) return [];
-
-  mutateProjectDoc(project, null, (doc) => {
-    for (const [id, status] of toApply) updateFeature(doc, id, { status });
-  });
-  await git(project.cwd, ['add', '--', docRel]);
-  await git(project.cwd, [
-    ...COMMIT_IDENTITY,
-    'commit',
-    '-m',
-    `chore: carry "${trackName}" progress over from its track branch`,
-    '--no-verify',
-    '--',
-    docRel,
-  ]);
-  return toApply.map(([id]) => id);
 }
 
 // --- Branch now ----------------------------------------------------------

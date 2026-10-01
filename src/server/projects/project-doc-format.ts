@@ -291,9 +291,15 @@ export function generateFeatureId(taken: Set<string>): string {
   return `f-${Date.now().toString(36)}`;
 }
 
-/** Ids already used anywhere in the doc. */
-export function usedIds(doc: ProjectDoc): Set<string> {
-  return new Set(allFeatures(doc).map((f) => f.id).filter(Boolean));
+/**
+ * Ids already used anywhere in the doc — or in any of several docs. A branched
+ * track's lines live in its worktree's copy, so a new id has to be checked
+ * against main and every unlanded worktree, or two tracks could hand out the
+ * same one.
+ */
+export function usedIds(doc: ProjectDoc | ProjectDoc[]): Set<string> {
+  const docs = Array.isArray(doc) ? doc : [doc];
+  return new Set(docs.flatMap(allFeatures).map((f) => f.id).filter(Boolean));
 }
 
 /**
@@ -342,19 +348,38 @@ export interface FeatureInput {
 
 const DEFAULT_TRACK = 'Feature roadmap';
 
-/** Append a new feature and return it (with its freshly generated id). */
-export function addFeature(doc: ProjectDoc, input: FeatureInput): Feature {
+/**
+ * Append a new feature and return it (with its freshly generated id). Pass
+ * `taken` when other copies of the plan exist (track worktrees), so the id is
+ * unique across all of them and not just this doc.
+ */
+export function addFeature(doc: ProjectDoc, input: FeatureInput, taken?: Set<string>): Feature {
   const trackName = input.track || doc.tracks[0]?.name || DEFAULT_TRACK;
   const track = ensureTrack(doc, trackName);
   const feature: Feature = {
-    id: generateFeatureId(usedIds(doc)),
+    id: generateFeatureId(new Set([...usedIds(doc), ...(taken ?? [])])),
     status: input.status ?? 'pending',
     priority: input.priority ?? null,
     title: input.title.trim(),
     spec: input.spec ?? null,
   };
-  track.items.push({ kind: 'feature', feature });
+  appendFeature(track, feature);
   return feature;
+}
+
+/**
+ * Add a feature line at the end of a section's content, before the blank
+ * lines that separate it from the next section. Pushed after them instead,
+ * the line would sit glued to the next `## Track:` heading.
+ */
+function appendFeature(track: Track, feature: Feature): void {
+  let at = track.items.length;
+  while (at > 0) {
+    const prev = track.items[at - 1];
+    if (prev.kind !== 'raw' || prev.text.trim() !== '') break;
+    at--;
+  }
+  track.items.splice(at, 0, { kind: 'feature', feature });
 }
 
 /**
@@ -381,7 +406,7 @@ export function updateFeature(
     found.track.items = found.track.items.filter(
       (i) => !(i.kind === 'feature' && i.feature.id === id)
     );
-    ensureTrack(doc, patch.track).items.push({ kind: 'feature', feature });
+    appendFeature(ensureTrack(doc, patch.track), feature);
   }
   return feature;
 }
@@ -396,6 +421,70 @@ export function removeTrack(doc: ProjectDoc, name: string): boolean {
   const before = doc.tracks.length;
   doc.tracks = doc.tracks.filter((t) => t.name !== name);
   return doc.tracks.length !== before;
+}
+
+// --- Sections --------------------------------------------------------------
+// A branched track's section lives in its worktree's copy of the file and is
+// moved between copies whole (docs/track-branches.md). These keep the blank
+// line that separates sections intact wherever a section lands.
+
+function endsBlank(track: Track): boolean {
+  const last = track.items[track.items.length - 1];
+  return last !== undefined && last.kind === 'raw' && last.text.trim() === '';
+}
+
+function withTrailingBlank(track: Track): Track {
+  return endsBlank(track) ? track : { ...track, items: [...track.items, { kind: 'raw', text: '' }] };
+}
+
+/** A deep copy of one section, safe to put into another doc. */
+export function cloneTrack(track: Track): Track {
+  return {
+    name: track.name,
+    items: track.items.map((i) => (i.kind === 'feature' ? { kind: 'feature', feature: { ...i.feature } } : { ...i })),
+  };
+}
+
+/**
+ * Put `track` into the doc: in place of the section with its name, or after
+ * the last section when there is none. Sections stay separated by a blank
+ * line; renderProjectDoc trims the one a last section ends with.
+ */
+export function replaceTrack(doc: ProjectDoc, track: Track): void {
+  const at = doc.tracks.findIndex((t) => t.name === track.name);
+  const next = withTrailingBlank(cloneTrack(track));
+  if (at !== -1) {
+    doc.tracks[at] = next;
+    return;
+  }
+  const last = doc.tracks.length - 1;
+  if (last >= 0) doc.tracks[last] = withTrailingBlank(doc.tracks[last]);
+  else if (doc.preamble.length > 0 && doc.preamble[doc.preamble.length - 1].trim() !== '') doc.preamble.push('');
+  doc.tracks.push(next);
+}
+
+/**
+ * Two copies of one section, merged by feature id. `winner`'s lines are kept
+ * as they are and in its order; each feature only `other` has is appended, and
+ * so is any non-blank prose line `winner` lacks. Nothing is dropped — this is
+ * what lets a line written on main for a branched track survive Land.
+ */
+export function mergeTracks(winner: Track, other: Track): Track {
+  const out = cloneTrack(winner);
+  while (endsBlank(out)) out.items.pop();
+  const ids = new Set(featuresOf(winner).map((f) => f.id).filter(Boolean));
+  const lines = new Set(
+    winner.items.map((i) => (i.kind === 'feature' ? renderFeatureLine(i.feature) : i.text.trim()))
+  );
+  for (const item of other.items) {
+    if (item.kind === 'feature') {
+      const known = item.feature.id ? ids.has(item.feature.id) : lines.has(renderFeatureLine(item.feature));
+      if (!known) out.items.push({ kind: 'feature', feature: { ...item.feature } });
+    } else if (item.text.trim() !== '' && !lines.has(item.text.trim())) {
+      out.items.push({ ...item });
+    }
+  }
+  return out;
 }
 
 /** Remove a feature. Returns true when something was actually removed. */

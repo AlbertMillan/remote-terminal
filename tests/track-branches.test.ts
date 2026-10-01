@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { execFileSync } from 'child_process';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { execFileSync, spawn } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// Real repositories: every git spawn costs ~50-100ms on Windows, and the
+// suites run in parallel, so the 5s default is too tight under load.
+vi.setConfig({ testTimeout: 30_000 });
 
 /**
  * Track branches against a real repository and a real database.
@@ -92,9 +96,11 @@ describe('ensureTrackBranch', () => {
     expect(git(repo, 'branch', '--list', 'track/*').split('\n').filter(Boolean)).toHaveLength(1);
   });
 
-  it('adds the heading on main for a track that does not exist yet', async () => {
-    await tracks.ensureTrackBranch(project(), 'Gamma');
-    expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).toContain('## Track: Gamma');
+  it('adds the heading in the worktree, never on main, for a track that does not exist yet', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Gamma');
+    expect(readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8')).toContain('## Track: Gamma');
+    expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).not.toContain('## Track: Gamma');
+    expect(git(repo, 'status', '--porcelain')).toBe('');
   });
 
   it('re-attaches a worktree whose directory went missing, keeping its commits', async () => {
@@ -109,22 +115,94 @@ describe('ensureTrackBranch', () => {
   });
 });
 
+describe('worktree creation', () => {
+  // Git on Windows (2.39) refuses a worktree whose own path passes about 210
+  // characters, whatever core.longpaths says.
+  it.skipIf(process.platform !== 'win32')(
+    'leaves no branch and no folder behind when git refuses the worktree, and says why',
+    async () => {
+      const { createWorktree } = await import('../src/server/jobs/worktree.js');
+      const parent = mkdtempSync(join(tmpdir(), 'cr-deep-'));
+      const deep = join(parent, 'd'.repeat(230 - parent.length - 38));
+      const path = join(deep, '0123456789abcdef-0123-4567-89ab-0123456789ab');
+      try {
+        await expect(createWorktree(repo, 'job-deep', 'Deep', { path, branch: 'job/deep' })).rejects.toThrow(
+          /too long for git on Windows/
+        );
+        expect(git(repo, 'branch', '--list', 'job/deep')).toBe('');
+        expect(existsSync(path)).toBe(false);
+        expect(git(repo, 'worktree', 'list').split('\n')).toHaveLength(1);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('keeps an existing branch when attaching to it fails', async () => {
+    const { createWorktree } = await import('../src/server/jobs/worktree.js');
+    git(repo, 'branch', 'job/kept');
+    // The branch is checked out here already, so a second worktree of it fails.
+    git(repo, 'checkout', '-q', 'job/kept');
+    const path = join(dataDir, 'worktrees', 'kept');
+    await expect(createWorktree(repo, 'job-kept', 'Kept', { path, branch: 'job/kept' })).rejects.toThrow();
+    expect(git(repo, 'branch', '--list', 'job/kept')).toContain('job/kept');
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'still deletes the branch when a process holds the folder, and the sweep takes the leftover',
+    async () => {
+      const { createWorktree, removeWorktree, sweepLeftoverWorktrees } = await import(
+        '../src/server/jobs/worktree.js'
+      );
+      const path = join(dataDir, 'worktrees', 'held');
+      await createWorktree(repo, 'job-held', 'Held', { path, branch: 'job/held' });
+      // What a session-log run does: a process whose cwd is the worktree.
+      const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { cwd: path });
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        const torn = await removeWorktree(repo, 'job-held', { path, deleteBranch: 'job/held' });
+        expect(torn).toEqual({ removed: false, branchDeleted: true });
+        expect(git(repo, 'branch', '--list', 'job/held')).toBe('');
+        expect(git(repo, 'worktree', 'list').split('\n')).toHaveLength(1);
+      } finally {
+        holder.kill();
+        await new Promise((r) => holder.once('exit', r));
+      }
+      writeFileSync(join(path, 'SESSION-LOG.md'), 'written after the teardown\n');
+      const kept = join(dataDir, 'worktrees', 'not-a-stub');
+      mkdirSync(kept, { recursive: true });
+      writeFileSync(join(kept, 'notes.txt'), 'someone’s work\n');
+
+      expect(sweepLeftoverWorktrees('SESSION-LOG.md')).toEqual([path]);
+      expect(existsSync(path)).toBe(false);
+      expect(existsSync(kept)).toBe(true);
+      rmSync(kept, { recursive: true, force: true });
+    }
+  );
+
+  it('names a track worktree by 8 characters of its id, leaving room under the limit', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    expect(t.worktreePath).toBe(join(dataDir, 'worktrees', 'tracks', t.id.slice(0, 8)));
+    expect(git(t.worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(t.branch);
+  });
+});
+
 describe('landTrack', () => {
-  it('merges the code once, carries worktree ticks to main, and never merges PROJECT.md', async () => {
+  it('merges the code once, puts the section back on main, and never merges PROJECT.md', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
 
-    // Implementation in the worktree: code, plus a tick in the worktree's copy.
+    // Implementation in the worktree: code, plus edits to the worktree's copy.
     commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'implement a');
-    const wtDoc = readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8').replace(
-      '- [ ] `f-aaaaaa`',
-      '- [x] `f-aaaaaa`'
-    );
+    const wtDoc = readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8')
+      .replace('- [ ] `f-aaaaaa` First step', '- [x] `f-aaaaaa` First step, renamed in the track')
+      .replace('- [ ] `f-cccccc`', '- [x] `f-cccccc`'); // Beta's stale copy: must not reach main
     commitFile(t.worktreePath, 'PROJECT.md', wtDoc, 'tick in the worktree');
 
     // Meanwhile main's PROJECT.md moves on in a way that would conflict.
     const mainDoc = readFileSync(join(repo, 'PROJECT.md'), 'utf-8').replace(
-      '- [ ] `f-aaaaaa` First step',
-      '- [ ] `f-aaaaaa` First step, renamed on main'
+      '- [ ] `f-cccccc` Unrelated',
+      '- [ ] `f-cccccc` Unrelated, renamed on main'
     );
     commitFile(repo, 'PROJECT.md', mainDoc, 'rename on main');
 
@@ -132,11 +210,14 @@ describe('landTrack', () => {
 
     expect(existsSync(join(repo, 'src', 'a.ts'))).toBe(true);
     expect(git(repo, 'log', '-1', '--format=%s', result.mergeSha)).toBe('Merge track: Alpha');
-    expect(result.synced).toEqual(['f-aaaaaa']);
+    expect(result.synced).toEqual(['f-aaaaaa', 'f-bbbbbb']);
 
     const landedDoc = readFileSync(join(repo, 'PROJECT.md'), 'utf-8');
-    expect(landedDoc).toContain('- [x] `f-aaaaaa` First step, renamed on main');
+    expect(landedDoc).toContain('- [x] `f-aaaaaa` First step, renamed in the track');
     expect(landedDoc).toContain('- [ ] `f-bbbbbb`');
+    expect(landedDoc).toContain('- [ ] `f-cccccc` Unrelated, renamed on main');
+    // The spec the move took off main came back with the land.
+    expect(readFileSync(join(repo, 'project', 'alpha.md'), 'utf-8')).toContain('Planned on main');
     expect(git(repo, 'status', '--porcelain')).toBe('');
 
     expect(existsSync(t.worktreePath)).toBe(false);
@@ -192,10 +273,13 @@ describe('landTrack', () => {
     expect(result.mergeSha).toBe(git(repo, 'rev-parse', 'HEAD~0'));
   });
 
-  it('refuses while the worktree has uncommitted changes', async () => {
+  it('refuses while the worktree has uncommitted code, naming the file', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('scratch.ts'),
+    });
     expect(existsSync(t.worktreePath)).toBe(true);
   });
 

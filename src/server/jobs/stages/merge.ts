@@ -2,6 +2,7 @@ import { createLogger } from '../../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
 import { hasRemote } from '../worktree.js';
 import { jobMergeMessageArgs } from '../merge-trailers.js';
+import { commitWorktreePlanning } from '../../projects/track-plan.js';
 
 const logger = createLogger('stage-merge');
 
@@ -38,10 +39,19 @@ export async function runMergeStage(opts: {
   featureId: string | null;
   /** Where `baseBranch` is checked out, when not the project itself. */
   mergeCwd?: string;
+  /** The project's index document, relative to its root. Defaults to PROJECT.md. */
+  docRel?: string;
 }): Promise<MergeResult> {
   const { branch, baseBranch, title } = opts;
   const projectCwd = opts.mergeCwd || opts.projectCwd;
   const intoTrack = Boolean(opts.mergeCwd);
+
+  // A track worktree's uncommitted planning (board ticks, a session's spec
+  // edits) is committed there first: the worktree is the track's own and never
+  // pushes, and leaving it would block every job merge into the track.
+  if (intoTrack) {
+    await commitWorktreePlanning(projectCwd, opts.docRel || 'PROJECT.md', `chore: commit planning before merging "${title}"`);
+  }
 
   // Refuse to merge into a dirty tree: git would either refuse anyway or
   // entangle the user's uncommitted work with the job's merge commit.

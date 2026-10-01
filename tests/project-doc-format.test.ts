@@ -156,6 +156,14 @@ describe('mutations', () => {
     expect(renderProjectDoc(doc)).toContain('- [ ] `' + f.id + '` P3 New thing');
   });
 
+  it('adds a line before the blank that separates the track from the next heading', () => {
+    const doc = parseProjectDoc('## Track: A\n- [ ] `f-aaaaaa` One\n\n## Track: B\n- [ ] `f-bbbbbb` Two\n');
+    const f = addFeature(doc, { title: 'Added', track: 'A' });
+    expect(renderProjectDoc(doc)).toBe(
+      `## Track: A\n- [ ] \`f-aaaaaa\` One\n- [ ] \`${f.id}\` Added\n\n## Track: B\n- [ ] \`f-bbbbbb\` Two\n`
+    );
+  });
+
   it('creates a named track on demand', () => {
     const doc = parseProjectDoc(SAMPLE);
     addFeature(doc, { title: 'Docs', track: 'Documentation' });

@@ -3,6 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+// Real repositories: every git spawn costs ~50-100ms on Windows, and the
+// suites run in parallel, so the 5s default is too tight under load.
+vi.setConfig({ testTimeout: 30_000 });
+
 /**
  * Drives the REAL runner — runNextStage, approveGate, answerQuestion, cancelJob,
  * retryJob — against a real SQLite database with the stages stubbed.

@@ -20,6 +20,8 @@ import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './
 import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
+import { migrateBranchedPlans } from './projects/track-branches.js';
+import { sweepLeftoverWorktrees } from './jobs/worktree.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
 import { registerServerRestartRoutes } from './server-restart.js';
@@ -44,6 +46,14 @@ export async function createApp(): Promise<FastifyInstance> {
   sweepUnloggedSessions();
   // A job marked running cannot have survived the restart — re-queue it.
   reconcileJobsOnStartup();
+  // Tracks branched before plans moved into track branches still have their
+  // section on main: move each once (docs/track-branches.md). In the
+  // background — it is git work per track, and a failure only logs.
+  void migrateBranchedPlans();
+  // Folders a teardown could not delete (a session-log run held them open)
+  // and that hold nothing but its stub: no longer worktrees, so nothing else
+  // would ever remove them.
+  sweepLeftoverWorktrees(config.projectLog.fileName);
   // The last plan-usage reading, so a restart does not blank the chip.
   loadPlanUsage();
   // Import transcript usage (all history on first boot), then keep up. Runs in

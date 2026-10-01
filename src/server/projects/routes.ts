@@ -9,19 +9,22 @@ import {
   normalizeRegistry,
   saveRegistry,
   setFavorite,
+  type RegistryProject,
 } from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
 import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
-import { ProjectStoreError, mutateProjectDoc, readProjectDoc, readSpec } from './project-store.js';
+import { ProjectStoreError, mutateProjectDoc, readSpec } from './project-store.js';
 import {
   TrackBranchError,
   branchNow,
   ensureTrackBranch,
   getActiveTrackBranch,
   landTrack,
+  moveIntoBranch,
   readSpecForTrack,
 } from './track-branches.js';
+import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
 import { buildProject } from './project-build.js';
@@ -86,7 +89,9 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
       const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
-      const state = readProjectDoc(project);
+      // Main's plan with each in-progress track's section from its worktree.
+      const plan = readProjectPlan(project);
+      const state = { revision: plan.main.revision, doc: plan.doc };
       const target = feature
         ? state.doc.tracks
             .flatMap((t) => t.items)
@@ -195,9 +200,13 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   );
 
   // --- Feature mutations -------------------------------------------------
-  // All three take a `revision` echoed from the board and return 409 when
-  // PROJECT.md changed underneath, because the board is a poll snapshot and the
-  // file is also written by hand and by pipeline stages.
+  // All take a `revision` echoed from the board and return 409 when the file
+  // changed underneath, because the board is a poll snapshot and the file is
+  // also written by hand and by pipeline stages. The file is the one that
+  // holds the feature (planFileFor): an in-progress track's lines live in its
+  // worktree's PROJECT.md, so the revision is that file's — the board gives
+  // each branched track its own. Worktree writes stay uncommitted; Land and
+  // the next job merge into the track commit them.
 
   app.post<{
     Body?: { cwd?: string; revision?: string; title?: string; track?: string; priority?: unknown };
@@ -210,14 +219,22 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
     return withErrors(reply, () => {
-      const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
-        addFeature(doc, {
-          title: body.title as string,
-          track: body.track,
-          priority: parsePriority(body.priority) ?? null,
-        })
+      const plan = readProjectPlan(project);
+      const target = planFileFor(project, plan, { track: body.track });
+      return writingTo(project, target, () => {
+      const { state, result } = mutateProjectDoc(target.project, body.revision ?? null, (doc) =>
+        addFeature(
+          doc,
+          {
+            title: body.title as string,
+            track: body.track,
+            priority: parsePriority(body.priority) ?? null,
+          },
+          allFeatureIds(plan)
+        )
       );
       return { feature: result, revision: state.revision };
+      });
     });
   });
 
@@ -244,7 +261,15 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
     return withErrors(reply, () => {
-      const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
+      const plan = readProjectPlan(project);
+      const target = planFileFor(project, plan, { featureId: body.id });
+      if (body.track !== undefined && planFileFor(project, plan, { track: body.track }).project.cwd !== target.project.cwd) {
+        return reply.status(400).send({
+          error: 'A feature can only move between tracks whose plans are in the same file — not into or out of a branched track',
+        });
+      }
+      return writingTo(project, target, () => {
+      const { state, result } = mutateProjectDoc(target.project, body.revision ?? null, (doc) =>
         updateFeature(doc, body.id as string, {
           ...(body.status !== undefined ? { status: body.status as FeatureStatus } : {}),
           ...(body.title !== undefined ? { title: body.title } : {}),
@@ -257,6 +282,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       );
       if (!result) return reply.status(404).send({ error: 'Unknown feature id' });
       return { feature: result, revision: state.revision };
+      });
     });
   });
 
@@ -271,11 +297,14 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
       return withErrors(reply, () => {
-        const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
+        const target = planFileFor(project, readProjectPlan(project), { featureId: body.id });
+        return writingTo(project, target, () => {
+        const { state, result } = mutateProjectDoc(target.project, body.revision ?? null, (doc) =>
           removeFeature(doc, body.id as string)
         );
         if (!result) return reply.status(404).send({ error: 'Unknown feature id' });
         return { removed: true, revision: state.revision };
+        });
       });
     }
   );
@@ -291,11 +320,14 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
       return withErrors(reply, () => {
-        const { state, result } = mutateProjectDoc(project, body.revision ?? null, (doc) =>
+        const target = planFileFor(project, readProjectPlan(project), { track: body.track });
+        return writingTo(project, target, () => {
+        const { state, result } = mutateProjectDoc(target.project, body.revision ?? null, (doc) =>
           reorderFeatures(doc, body.track as string, body.ids as string[])
         );
         if (!result) return reply.status(404).send({ error: 'Unknown track' });
         return { reordered: true, revision: state.revision };
+        });
       });
     }
   );
@@ -357,6 +389,35 @@ export function registerProjectRoutes(app: FastifyInstance): void {
           ...landed,
           build,
           detail: build.ran ? `${landed.detail} — ${build.detail}` : landed.detail,
+        };
+      });
+    }
+  );
+
+  // Lines main still has for a branched track ("both copies") go into its
+  // worktree, the worktree's lines winning by id (docs/track-branches.md).
+  app.post<{ Body?: { cwd?: string; track?: string } }>(
+    '/api/projects/track/move-into-branch',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track) {
+        return reply.status(400).send({ error: 'cwd and track required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      return withErrors(reply, async () => {
+        const moved = await withProjectLock(project.cwd, `moving "${body.track}" lines into its branch`, () =>
+          moveIntoBranch(project, body.track as string)
+        );
+        const kept = moved.specsKept.length
+          ? ` Kept on main, because the branch has its own version: ${moved.specsKept.join(', ')}.`
+          : '';
+        return {
+          ...moved,
+          detail:
+            (moved.mainCommit
+              ? `Moved main’s lines for "${body.track}" into its branch (${moved.mainCommit.slice(0, 8)} on main, not pushed).`
+              : `Moved main’s lines for "${body.track}" into its branch.`) + kept,
         };
       });
     }
@@ -468,6 +529,18 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   });
 
   logger.info('Project workspace routes registered');
+}
+
+/**
+ * Run a board write against the file `target` names. A worktree copy is
+ * written holding the project lock (try-only, so a busy project is a 409):
+ * Land reads that file and then resets it to its merge-base, and a tick
+ * written in between would be overwritten without a trace. Main's file needs
+ * no lock — Land leaves backlog edits on main alone.
+ */
+function writingTo<T>(project: RegistryProject, target: { copy: PlanCopy | null }, fn: () => T): T | Promise<T> {
+  if (!target.copy) return fn();
+  return withProjectLock(project.cwd, `editing "${target.copy.branch.trackName}"`, async () => fn());
 }
 
 /**

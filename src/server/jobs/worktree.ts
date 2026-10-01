@@ -1,11 +1,14 @@
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { execFile } from 'child_process';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { dirname, join } from 'path';
+import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { git, isGitRepo } from '../agent/claude-run.js';
 import { detectVcs } from '../projects/vcs.js';
 
 const logger = createLogger('worktree');
+const execFileAsync = promisify(execFile);
 
 /**
  * Isolated working copies for pipeline jobs.
@@ -151,17 +154,67 @@ export async function createWorktree(
   }
 
   mkdirSync(dirname(path), { recursive: true });
-  const out = await git(cwd, ['worktree', 'add', '-b', branch, path, base]);
-  if (out === null) {
-    // Most likely the branch already exists (a retried job); attach to it.
-    const retry = await git(cwd, ['worktree', 'add', path, branch]);
-    if (retry === null) {
-      throw new WorktreeError(`Could not create a worktree for job ${jobId}`, 500);
-    }
+  // An existing branch (a retried job, a re-attached track) is checked out as
+  // it is; only a missing one is created. Knowing which up front is what lets
+  // a failure delete exactly the branch this call made and nothing else.
+  const existed = await branchExists(cwd, branch);
+  // core.longpaths: a deep file in the checkout otherwise fails it half-way on
+  // Windows. It does not lift git's own limit on the worktree's path.
+  const added = await gitWithStderr(cwd, [
+    '-c',
+    'core.longpaths=true',
+    'worktree',
+    'add',
+    ...(existed ? [path, branch] : ['-b', branch, path, base]),
+  ]);
+  if (!added.ok) {
+    // Leave nothing behind: a failed add can still create the branch (and,
+    // past the admin-dir check, a partial checkout). Left there, every retry
+    // adds another branch, and a folder someone later installs into keeps
+    // its node_modules on disk with nothing recording it.
+    rmSync(path, { recursive: true, force: true });
+    await git(cwd, ['worktree', 'prune']);
+    const leaked = !existed && (await branchExists(cwd, branch));
+    if (leaked) await git(cwd, ['branch', '-D', branch]);
+    logger.warn({ jobId, cwd, path, branch, stderr: added.stderr, branchDeleted: leaked }, 'worktree: add failed');
+    throw new WorktreeError(describeAddFailure(path, added.stderr), 500);
   }
 
   logger.info({ jobId, path, branch, base }, 'worktree: created');
   return { path, branch, baseBranch: base, initialisedRepo: initialised };
+}
+
+async function branchExists(cwd: string, branch: string): Promise<boolean> {
+  return (await git(cwd, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) !== null;
+}
+
+/** git, keeping stderr: a failed `worktree add` is only explainable by what git said. */
+async function gitWithStderr(cwd: string, args: string[]): Promise<{ ok: boolean; stderr: string }> {
+  try {
+    await execFileAsync('git', args, { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    return { ok: true, stderr: '' };
+  } catch (error) {
+    const stderr = (error as { stderr?: string }).stderr;
+    return { ok: false, stderr: (stderr || (error as Error).message || '').trim() };
+  }
+}
+
+/**
+ * The message for a failed `worktree add`. Git on Windows (2.39) refuses a
+ * worktree whose own path passes about 210 characters ("'$GIT_DIR' too big"),
+ * whatever core.longpaths says; the project's depth doesn't matter. Worktrees
+ * live under `persistence.dataDir`, so that is the setting to point at, and
+ * saying so beats a bare "could not create".
+ */
+function describeAddFailure(path: string, stderr: string): string {
+  if (/GIT_DIR' too big|Filename too long|path too long/i.test(stderr)) {
+    return (
+      `Could not create a worktree: its path is ${path.length} characters, too long for git on Windows ` +
+      `(${stderr}). Keep it under about 210 — worktrees live under ${worktreeRoot()}, so set ` +
+      '`persistence.dataDir` in config.json to a shallower folder.'
+    );
+  }
+  return `Could not create a worktree at ${path}${stderr ? `: ${stderr}` : ''}`;
 }
 
 /**
@@ -179,31 +232,118 @@ export async function removeWorktree(
   let removed = false;
   let branchDeleted = false;
 
-  try {
-    if (existsSync(path)) {
-      // --force: the worktree may hold uncommitted scratch from a failed stage.
-      const out = await git(cwd, ['worktree', 'remove', '--force', path]);
-      removed = out !== null;
-      if (!removed) {
-        // git refused (corrupt registration); drop the directory and prune.
-        rmSync(path, { recursive: true, force: true });
-        await git(cwd, ['worktree', 'prune']);
-        removed = !existsSync(path);
-      }
-    } else {
-      await git(cwd, ['worktree', 'prune']);
-      removed = true;
-    }
+  // Each step runs whatever the one before it did. On Windows a process whose
+  // cwd is the folder — the session-log run that a closing session starts
+  // there, typically — makes its rmdir fail with EBUSY. That once threw past
+  // the branch deletion too, leaking a branch per Land on top of the folder.
+  if (existsSync(path)) {
+    // --force: the worktree may hold uncommitted scratch from a failed stage.
+    // git deregisters the worktree even when it cannot delete the folder.
+    removed = (await git(cwd, ['worktree', 'remove', '--force', path])) !== null;
+    if (!removed) removed = removeFolder(path);
+  } else {
+    removed = true;
+  }
+  await git(cwd, ['worktree', 'prune']);
 
-    if (options.deleteBranch) {
-      branchDeleted = (await git(cwd, ['branch', '-D', options.deleteBranch])) !== null;
-    }
-  } catch (error) {
-    logger.warn({ error, jobId, path }, 'worktree: teardown failed');
+  if (options.deleteBranch) {
+    // "Gone", not "deleted by this call": a Delete track re-run after a busy
+    // folder finds the branch already deleted, and must not keep its row.
+    branchDeleted =
+      (await git(cwd, ['branch', '-D', options.deleteBranch])) !== null ||
+      !(await branchExists(cwd, options.deleteBranch));
+  }
+  if (!removed) {
+    logger.warn({ jobId, path }, 'worktree: folder is busy — removal retried in the background');
+    retryFolderRemoval(path);
   }
 
   logger.info({ jobId, removed, branchDeleted }, 'worktree: torn down');
   return { removed, branchDeleted };
+}
+
+/** Delete a folder; false when it is still there (on Windows: held open). Never throws. */
+function removeFolder(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch (error) {
+    logger.debug({ path, code: (error as NodeJS.ErrnoException).code }, 'worktree: folder removal failed');
+  }
+  return !existsSync(path);
+}
+
+/**
+ * A former worktree folder git has already deregistered, so nothing else
+ * would ever delete it. Only ever such a folder: one whose `.git` link is
+ * gone, which git removes first. A worktree re-created at the same path in
+ * the meantime has one, and is left alone.
+ */
+function isDeregistered(path: string): boolean {
+  return existsSync(path) && !existsSync(join(path, '.git'));
+}
+
+// Every 15s for 10 minutes: past projectLog.timeoutMs (180s), the longest a
+// session-log run can hold the folder before it is killed.
+const RETRY_EVERY_MS = 15_000;
+const RETRY_ATTEMPTS = 40;
+const retrying = new Set<string>();
+
+function retryFolderRemoval(path: string, attempt = 1): void {
+  if (attempt === 1 && retrying.has(path)) return;
+  retrying.add(path);
+  const timer = setTimeout(() => {
+    if (!isDeregistered(path) || removeFolder(path)) {
+      retrying.delete(path);
+      logger.info({ path, attempt }, 'worktree: leftover folder removed');
+    } else if (attempt < RETRY_ATTEMPTS) {
+      retryFolderRemoval(path, attempt + 1);
+    } else {
+      retrying.delete(path);
+      logger.warn({ path }, 'worktree: leftover folder still busy — the boot sweep will take it');
+    }
+  }, RETRY_EVERY_MS);
+  timer.unref(); // never keeps the process (or a test run) alive
+}
+
+/**
+ * At server start, delete folders under the worktree root that a teardown
+ * left behind: no longer git worktrees (no `.git` link) and holding nothing
+ * but empty folders and session-log stubs — the file a session-log run
+ * writes into the folder it was holding. Anything else found there is
+ * logged and left alone: it could be someone's work.
+ */
+export function sweepLeftoverWorktrees(sessionLogName: string): string[] {
+  const swept: string[] = [];
+  const root = worktreeRoot();
+  const candidates = (dir: string): string[] => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !(dir === root && e.name === 'tracks'))
+        .map((e) => join(dir, e.name));
+    } catch {
+      return [];
+    }
+  };
+  for (const path of [...candidates(root), ...candidates(join(root, 'tracks'))]) {
+    if (!isDeregistered(path)) continue;
+    if (!onlyStubs(path, sessionLogName)) {
+      logger.warn({ path }, 'worktree sweep: unrecognised leftover folder, left in place');
+      continue;
+    }
+    if (removeFolder(path)) swept.push(path);
+  }
+  if (swept.length > 0) logger.info({ swept }, 'worktree sweep: removed leftover folders');
+  return swept;
+}
+
+function onlyStubs(dir: string, sessionLogName: string): boolean {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).every((e) =>
+      e.isDirectory() ? onlyStubs(join(dir, e.name), sessionLogName) : e.name === sessionLogName
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Paths git currently reports as registered worktrees, for reconciliation. */

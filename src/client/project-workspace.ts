@@ -44,6 +44,30 @@ export interface WorkspaceTrack {
   features: Feature[];
   /** The track's own branch while it is being implemented (docs/track-branches.md). */
   branch: { name: string; worktreePath: string; baseBranch: string } | null;
+  /**
+   * A branched track's lines live in its worktree's PROJECT.md: this is that
+   * file's revision, sent on writes to its features. Null: main's file.
+   */
+  revision?: string | null;
+  /** Lines main's PROJECT.md also has for this branched track ("both copies"). */
+  alsoOnMain?: number;
+  /** Branched, but the worktree has no section for it. */
+  planMissing?: boolean;
+  /** Branched, but the worktree folder is gone. */
+  worktreeMissing?: boolean;
+}
+
+/**
+ * The revision of the file a write lands in: a branched track's own (its
+ * worktree's PROJECT.md), main's otherwise. Pass the track a feature sits in,
+ * or the track a new feature goes to.
+ */
+export function revisionFor(project: WorkspaceProject, track: WorkspaceTrack | undefined): string {
+  return track?.revision ?? project.revision;
+}
+
+function trackOf(project: WorkspaceProject, featureId: string): WorkspaceTrack | undefined {
+  return project.tracks.find((t) => t.features.some((f) => f.id === featureId));
 }
 
 export interface VcsCapabilities {
@@ -537,8 +561,14 @@ export class ProjectWorkspace {
         body: JSON.stringify(body),
       });
       if (res.status === 409) {
+        // Two kinds: the file moved underneath (`conflict`), or the project is
+        // busy — a branched track's file is written under the project lock,
+        // so a Land in progress refuses the write with its own reason.
+        const data = (await res.json().catch(() => ({}))) as { error?: string; conflict?: boolean };
         await this.reload();
-        this.flash('PROJECT.md changed on disk — reloaded. Try again.');
+        this.flash(
+          data.conflict || !data.error ? 'PROJECT.md changed on disk — reloaded. Try again.' : data.error
+        );
         return false;
       }
       if (!res.ok) {
@@ -557,9 +587,11 @@ export class ProjectWorkspace {
   async addFeature(cwd: string, title: string, priority: string, track?: string): Promise<boolean> {
     const project = this.getProject(cwd);
     if (!project || !title.trim()) return false;
+    // No track: the server adds to main's first track, so main's revision.
+    const target = track ? project.tracks.find((t) => t.name === track) : undefined;
     return this.mutate('/api/projects/feature', 'POST', {
       cwd,
-      revision: project.revision,
+      revision: revisionFor(project, target),
       title: title.trim(),
       ...(priority ? { priority: Number(priority) } : {}),
       ...(track ? { track } : {}),
@@ -573,7 +605,7 @@ export class ProjectWorkspace {
     const next = STATUS_CYCLE[(STATUS_CYCLE.indexOf(feature.status) + 1) % STATUS_CYCLE.length];
     return this.mutate('/api/projects/feature', 'PATCH', {
       cwd,
-      revision: project.revision,
+      revision: revisionFor(project, trackOf(project, id)),
       id,
       status: next,
     });
@@ -584,7 +616,7 @@ export class ProjectWorkspace {
     if (!project || !title.trim()) return false;
     return this.mutate('/api/projects/feature', 'PATCH', {
       cwd,
-      revision: project.revision,
+      revision: revisionFor(project, trackOf(project, id)),
       id,
       title: title.trim(),
     });
@@ -647,6 +679,16 @@ export class ProjectWorkspace {
     this.flash(detail);
   }
 
+  /** Move the lines main still has for a branched track into its worktree. */
+  async moveIntoBranch(cwd: string, track: string): Promise<void> {
+    const data = await this.trackRequest<{ detail: string }>('/api/projects/track/move-into-branch', {
+      cwd,
+      track,
+    });
+    await this.reload();
+    if (data) this.flash(data.detail);
+  }
+
   async landTrack(cwd: string, track: string): Promise<void> {
     // The server builds the project after merging, so the reply can take a while.
     this.flash(`Landing "${track}" and rebuilding…`);
@@ -684,7 +726,11 @@ export class ProjectWorkspace {
   async deleteFeature(cwd: string, id: string): Promise<boolean> {
     const project = this.getProject(cwd);
     if (!project) return false;
-    return this.mutate('/api/projects/feature', 'DELETE', { cwd, revision: project.revision, id });
+    return this.mutate('/api/projects/feature', 'DELETE', {
+      cwd,
+      revision: revisionFor(project, trackOf(project, id)),
+      id,
+    });
   }
 
   /** Run the one-time conversion of a project's plan docs into PROJECT.md. */
@@ -770,6 +816,12 @@ export class ProjectWorkspace {
       const branchNowBtn = target.closest('.pw-track-branchnow') as HTMLElement | null;
       if (branchNowBtn) {
         void this.branchNow(branchNowBtn.dataset.cwd || '', branchNowBtn.dataset.track || '');
+        return;
+      }
+
+      const moveInto = target.closest('.pw-track-moveinto') as HTMLElement | null;
+      if (moveInto) {
+        void this.moveIntoBranch(moveInto.dataset.cwd || '', moveInto.dataset.track || '');
         return;
       }
 

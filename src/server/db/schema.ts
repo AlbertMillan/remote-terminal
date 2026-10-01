@@ -338,6 +338,19 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE job_stages DROP COLUMN run_count;
       `,
     },
+    {
+      // Whether a track's plan already lives in its branch
+      // (docs/track-branches.md). Rows from before plans moved default to 0:
+      // the boot migration moves those once, main's lines winning, and sets
+      // it. New rows are created with 1. Without it, the migration could not
+      // tell an old track from a branched one whose section a session wrote on
+      // main later — and moving that one with main winning reverts the
+      // worktree's own edits on every restart.
+      name: '016_track_plan_in_branch',
+      sql: `
+        ALTER TABLE track_branches ADD COLUMN plan_in_branch INTEGER NOT NULL DEFAULT 0;
+      `,
+    },
   ];
 
   const appliedMigrations = database

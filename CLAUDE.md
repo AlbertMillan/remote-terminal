@@ -133,6 +133,11 @@ before **merge**.
   cached: anything writing ledger tables outside `usage/` calls `invalidateUsageCache()`,
   or the board keeps serving the old figures.
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
+- Worktree teardown steps (`removeWorktree`) are **independent**: on Windows a process whose
+  cwd is the folder (a closing session's session-log run) makes rmdir fail `EBUSY`, and a
+  throw there once skipped `branch -D` — a leaked branch and folder per Land. A failed
+  `createWorktree` deletes only the branch **it** created. Git refuses worktree paths past
+  ~210 chars on Windows, so track folders use 8 id chars.
 - A job's diff base is its recorded `baseBranch`, never the project's current branch — a job
   parked across a branch switch would otherwise be measured against the wrong thing.
 
@@ -172,9 +177,22 @@ before **merge**.
 
 ### Track branches → `docs/track-branches.md`
 
-- PROJECT.md in the **main checkout** is the only authoritative copy. Land resets the
-  branch's copy to its merge-base before merging and applies its ticks through
-  `mutateProjectDoc` — merge the file instead and every land conflicts on it.
+- Main's PROJECT.md is authoritative for the **backlog** and **landed** tracks; an
+  in-progress track's **worktree** is authoritative for that track — its section and
+  specs move there at branch creation (`track-plan.ts`). Read plans through
+  `readProjectPlan()` and write through `planFileFor()` (`project-plan.ts`), or the board,
+  dispatch and ids miss every branched track. Never write `## Track:` on main for a
+  branched track. Writes to a worktree's file go under the project lock, or a tick made
+  during Land is overwritten by its merge-base reset.
+- A move removes a spec from main only when the worktree holds main's content; otherwise
+  main's copy — perhaps uncommitted or untracked — is deleted with no way back.
+- Land copies the section back to main **before** merging and resets the branch's copy
+  to its merge-base — merge the file instead and every land conflicts on it; copy after
+  the merge and a spec the move removed is deleted or conflicts.
+- Commits on main for the plan go through a **temporary index** (`commitOnHead`), never
+  `git add`/`commit` — or whatever the user staged rides along. Land refuses anything
+  staged (git won't merge then) and uncommitted code, naming the files; uncommitted
+  planning on main passes, and in the worktree is committed first.
 - A job whose `baseBranch` is a track branch merges **in the track worktree** (`mergeCwd`)
   and never pushes; that branch is checked out there, so merging in the project fails.
 - Record `merge_sha` on every job merge and land, and give every job merge the
