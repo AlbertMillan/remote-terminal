@@ -20,7 +20,8 @@ import {
   type FeatureStatus,
   type ProjectDoc,
 } from './project-doc-format.js';
-import { deleteTrackBranchRows, listTrackBranches, readProjectPlan, type TrackBranch } from './track-branches.js';
+import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './track-store.js';
+import { readProjectPlan } from './project-plan.js';
 import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
 
 const logger = createLogger('track-delete');

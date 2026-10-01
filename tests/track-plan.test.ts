@@ -33,6 +33,7 @@ const { registerProjectRoutes } = await import('../src/server/projects/routes.js
 const { runRebuildStage } = await import('../src/server/jobs/stages/rebuild.js');
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const { pathKey } = await import('../src/server/sessions/project-discovery.js');
+const { withProjectLock } = await import('../src/server/projects/project-lock.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -364,5 +365,123 @@ describe('migration', () => {
     expect(read(repo)).not.toContain('## Track: Alpha');
     expect(git(repo, 'status', '--porcelain')).toBe('');
     expect(read(t.worktreePath)).toContain('- [x] `f-aaaaaa` First step, renamed on main');
+  });
+});
+
+
+describe('review fixes', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    writeFileSync(getRegistryPath(), JSON.stringify({ projects: [{ cwd: repo }] }));
+    app = Fastify();
+    registerProjectRoutes(app);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    rmSync(getRegistryPath(), { force: true });
+  });
+
+  const boardProject = () => getWorkspaceBoard().find((p) => pathKey(p.cwd) === pathKey(repo));
+  const alphaOnMain = (lines: string) => write(repo, 'PROJECT.md', `${read(repo)}\n## Track: Alpha\n${lines}`);
+
+  it('Move into branch keeps a spec on main whose copy differs from the track’s', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(t.worktreePath, 'project/alpha.md', '# Alpha\n\nRevised in the track.\n', 'revise');
+    // Main's own version: untracked, since the move took the file off main.
+    write(repo, 'project/alpha.md', '# Alpha\n\nMain’s own notes.\n');
+    alphaOnMain('- [ ] `f-eeeeee` Added on main → project/alpha.md\n');
+
+    const moved = await tracks.moveIntoBranch(project(), 'Alpha');
+    expect(moved.specsKept).toEqual(['project/alpha.md']);
+    expect(moved.specsRemoved).toEqual([]);
+    expect(read(repo, 'project/alpha.md')).toContain('Main’s own notes');
+    expect(read(t.worktreePath, 'project/alpha.md')).toContain('Revised in the track');
+    expect(read(t.worktreePath)).toContain('`f-eeeeee` Added on main');
+  });
+
+  it('refuses a write to a branched track’s file while the project is locked, but not main’s', async () => {
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    const before = boardProject();
+    const alphaRev = before?.tracks.find((x) => x.name === 'Alpha')?.revision;
+    let release: () => void = () => {};
+    const held = withProjectLock(repo, 'landing "Alpha"', () => new Promise<void>((r) => (release = r)));
+    try {
+      const busy = await app.inject({
+        method: 'PATCH',
+        url: '/api/projects/feature',
+        payload: { cwd: repo, revision: alphaRev, id: 'f-aaaaaa', status: 'done' },
+      });
+      expect(busy.statusCode).toBe(409);
+      expect(busy.json()).toMatchObject({ error: expect.stringContaining('landing "Alpha"') });
+      // Not a stale revision, so the client shows the reason instead.
+      expect(busy.json().conflict).toBeUndefined();
+
+      const mainWrite = await app.inject({
+        method: 'PATCH',
+        url: '/api/projects/feature',
+        payload: { cwd: repo, revision: before?.revision, id: 'f-cccccc', status: 'done' },
+      });
+      expect(mainWrite.statusCode).toBe(200);
+    } finally {
+      release();
+      await held;
+    }
+  });
+
+  it('counts only the lines main has that the worktree lacks', async () => {
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    alphaOnMain('- [ ] `f-aaaaaa` First step → project/alpha.md\n- [ ] `f-eeeeee` Added on main\n');
+    expect(boardProject()?.tracks.find((x) => x.name === 'Alpha')?.alsoOnMain).toBe(1);
+  });
+
+  it('says the worktree folder is missing, rather than that its section is', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    rmSync(t.worktreePath, { recursive: true, force: true });
+    // Main has no heading either, so it is listed as an orphan branch.
+    expect(boardProject()?.tracks.find((x) => x.name === 'Alpha')).toBeUndefined();
+    alphaOnMain('- [ ] `f-eeeeee` Added on main\n');
+    expect(boardProject()?.tracks.find((x) => x.name === 'Alpha')).toMatchObject({
+      planMissing: true,
+      worktreeMissing: true,
+    });
+  });
+});
+
+describe('land rollback', () => {
+  it('leaves uncommitted backlog planning on main exactly as it was when the merge conflicts', async () => {
+    commitFile(repo, 'shared.ts', 'one\n', 'shared');
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(t.worktreePath, 'shared.ts', 'track side\n', 'track edit');
+    commitFile(repo, 'shared.ts', 'main side\n', 'main edit');
+    const head = git(repo, 'rev-parse', 'HEAD');
+    write(repo, 'PROJECT.md', read(repo).replace('`f-cccccc` Unrelated', '`f-cccccc` Unrelated, a backlog edit'));
+    write(repo, 'project/backlog.md', '# Backlog idea\n');
+    const docBefore = readFileSync(join(repo, 'PROJECT.md'));
+
+    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
+    expect(readFileSync(join(repo, 'PROJECT.md')).equals(docBefore)).toBe(true);
+    expect(read(repo, 'project/backlog.md')).toBe('# Backlog idea\n');
+    // The spec Land put back for the merge came back off again.
+    expect(existsSync(join(repo, 'project', 'alpha.md'))).toBe(false);
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe('');
+    const status = git(repo, 'status', '--porcelain', '--untracked-files=all');
+    expect(status.split('\n').map((l) => l.trim()).sort()).toEqual(['?? project/backlog.md', 'M PROJECT.md']);
+    expect(tracks.getActiveTrackBranch(repo, 'Alpha')).not.toBeNull();
+  });
+
+  it('refuses while anything is staged on main, naming it — the rollback relies on that', async () => {
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    write(repo, 'PROJECT.md', read(repo).replace('Unrelated', 'Unrelated, staged'));
+    git(repo, 'add', 'PROJECT.md');
+    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('staged on main: PROJECT.md'),
+    });
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe('PROJECT.md');
   });
 });

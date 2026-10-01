@@ -69,7 +69,13 @@ Worktree first: a failed step 2 leaves the plan in both places, which is handled
 ("Both copies"); main first would leave a window with the plan nowhere. A spec that
 another section (on main, or in another track's worktree) links to stays on main.
 
-**Reading and writing.** `readProjectPlan()` (`track-branches.ts`) is main's doc with
+A spec leaves main only once the worktree holds **main's** content: copied by this move,
+or the same text already. When the track has revised its own copy and main's differs
+(Move into branch, the migration), main's stays and is reported (`specsKept`). Removing
+it would delete main's version, uncommitted edits or an untracked file with no history,
+with nowhere to recover it from.
+
+**Reading and writing.** `readProjectPlan()` (`project-plan.ts`) is main's doc with
 each in-progress track's section taken from its worktree. The board, `trackOfFeature`
 (dispatch), attribution and Delete read through it. A branched track whose worktree has
 no section shows empty with a warning, never main's stale copy.
@@ -80,6 +86,11 @@ no section shows empty with a warning, never main's stale copy.
   refused. Worktree writes stay uncommitted; Land and the next job merge into the track
   commit them (`commitWorktreePlanning`), since that worktree belongs to the track and
   never pushes.
+- **Worktree writes take the project lock** (try-only, so a busy project answers 409
+  with the holder's name). Land reads the worktree's section and then resets the file to
+  its merge-base; a tick written in between would be overwritten without a trace. Main's
+  file needs no lock, since Land leaves backlog edits alone. The client tells this 409
+  from a stale revision by the response's `conflict` flag.
 - **Ids** are generated against main plus every unlanded worktree (`allFeatureIds`).
 
 **Specs.** The board's spec view reads the track worktree's copy when the track has one

@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'fs';
+import { existsSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
@@ -9,7 +9,7 @@ import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } fro
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
 import { featuresOf, type Feature, type FeatureStatus } from './project-doc-format.js';
-import { planCopies, type PlanCopy } from './track-branches.js';
+import { planCopies, type PlanCopy } from './project-plan.js';
 
 const logger = createLogger('project-workspace');
 
@@ -33,13 +33,17 @@ export interface WorkspaceTrack {
    */
   revision: string | null;
   /**
-   * Feature lines main's PROJECT.md also has for this branched track ("both
-   * copies": written on main after branching, or a move that failed). Move
+   * Feature lines main's PROJECT.md has for this branched track that its
+   * worktree lacks ("both copies": written on main after branching). A line
+   * both copies share is not counted: after a failed move main's lines are
+   * the worktree's, and the badge would claim lines that add nothing. Move
    * into branch takes them over; Land would merge them anyway.
    */
   alsoOnMain: number;
   /** Branched, but its worktree's PROJECT.md has no section for it (shown empty, never from main). */
   planMissing: boolean;
+  /** Branched, but the worktree folder itself is gone. Open session re-creates it from the branch. */
+  worktreeMissing: boolean;
 }
 
 export interface WorkspaceProject {
@@ -250,15 +254,28 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
     const active = activeCopiesOf(entry);
     const toTrack = (name: string, mainFeatures: Feature[] | null): WorkspaceTrack => {
       const c = active.get(name);
-      if (!c) return { name, features: mainFeatures ?? [], branch: null, revision: null, alsoOnMain: 0, planMissing: false };
+      if (!c) {
+        return {
+          name,
+          features: mainFeatures ?? [],
+          branch: null,
+          revision: null,
+          alsoOnMain: 0,
+          planMissing: false,
+          worktreeMissing: false,
+        };
+      }
       const b = c.branch;
+      const features = c.track ? featuresOf(c.track) : [];
+      const inWorktree = new Set(features.map((f) => f.id));
       return {
         name,
-        features: c.track ? featuresOf(c.track) : [],
+        features,
         branch: { name: b.branch, worktreePath: b.worktreePath, baseBranch: b.baseBranch },
         revision: c.state.revision,
-        alsoOnMain: mainFeatures?.length ?? 0,
+        alsoOnMain: (mainFeatures ?? []).filter((f) => !inWorktree.has(f.id)).length,
         planMissing: c.track === null,
+        worktreeMissing: !existsSync(b.worktreePath),
       };
     };
     const tracks: WorkspaceTrack[] = state ? state.doc.tracks.map((t) => toTrack(t.name, featuresOf(t))) : [];

@@ -256,6 +256,22 @@ export interface MoveResult {
   specsCopied: string[];
   /** Specs removed from main (only this track's lines referenced them). */
   specsRemoved: string[];
+  /**
+   * Specs left on main because the worktree's copy differs from main's: the
+   * track revised its own while main's changed too. Both versions are kept;
+   * reconciling them is the user's call.
+   */
+  specsKept: string[];
+}
+
+/** Same text, ignoring line endings (a checkout may write CRLF on Windows). */
+function sameText(a: string, b: string): boolean {
+  try {
+    const norm = (p: string) => readFileSync(p, 'utf-8').replace(/\r\n/g, '\n');
+    return norm(a) === norm(b);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -331,8 +347,16 @@ export async function moveSectionOffMain(opts: {
     ...specsCopied,
   ]);
 
-  // 2. Off main.
-  const removable = specs.filter((s) => !sharedSpecs.has(s) && existsSync(join(worktreePath, s)));
+  // 2. Off main. A spec leaves main only once the worktree holds main's
+  // content: copied just now, or the same text already. One the track
+  // revised while main's copy differs (Move into branch, the migration) stays
+  // on main, or main's version — uncommitted edits, or an untracked file with
+  // no history at all — would be deleted with nothing anywhere to recover it.
+  const holdsMains = (s: string): boolean =>
+    specsCopied.includes(s) || !existsSync(join(cwd, s)) || sameText(join(cwd, s), join(worktreePath, s));
+  const unshared = specs.filter((s) => !sharedSpecs.has(s) && existsSync(join(worktreePath, s)));
+  const removable = unshared.filter(holdsMains);
+  const specsKept = unshared.filter((s) => !holdsMains(s));
   const changes: PathChange[] = [];
   const headText = await headDocText(cwd, docRel);
   if (headText !== null) {
@@ -348,10 +372,10 @@ export async function moveSectionOffMain(opts: {
   for (const spec of removable) rmSync(join(cwd, spec), { force: true });
 
   logger.info(
-    { cwd, track: trackName, mainCommit: committed?.after ?? null, specsCopied, specsRemoved: removable },
+    { cwd, track: trackName, mainCommit: committed?.after ?? null, specsCopied, specsRemoved: removable, specsKept },
     'track plan moved into its branch'
   );
-  return { mainCommit: committed?.after ?? null, specsCopied, specsRemoved: removable };
+  return { mainCommit: committed?.after ?? null, specsCopied, specsRemoved: removable, specsKept };
 }
 
 export interface ReturnResult {

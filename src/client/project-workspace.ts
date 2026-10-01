@@ -53,6 +53,8 @@ export interface WorkspaceTrack {
   alsoOnMain?: number;
   /** Branched, but the worktree has no section for it. */
   planMissing?: boolean;
+  /** Branched, but the worktree folder is gone. */
+  worktreeMissing?: boolean;
 }
 
 /**
@@ -559,8 +561,14 @@ export class ProjectWorkspace {
         body: JSON.stringify(body),
       });
       if (res.status === 409) {
+        // Two kinds: the file moved underneath (`conflict`), or the project is
+        // busy — a branched track's file is written under the project lock,
+        // so a Land in progress refuses the write with its own reason.
+        const data = (await res.json().catch(() => ({}))) as { error?: string; conflict?: boolean };
         await this.reload();
-        this.flash('PROJECT.md changed on disk — reloaded. Try again.');
+        this.flash(
+          data.conflict || !data.error ? 'PROJECT.md changed on disk — reloaded. Try again.' : data.error
+        );
         return false;
       }
       if (!res.ok) {

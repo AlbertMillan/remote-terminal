@@ -177,6 +177,12 @@ export function renderTrack(
  * the branch was created.
  */
 function renderPlanMissing(track: WorkspaceTrack): string {
+  // A missing folder reads as a missing section too. Say which it is, since
+  // the fix differs: the branch still holds the plan, and Open session
+  // re-creates the folder from it.
+  if (track.worktreeMissing) {
+    return '<li class="phase-item pw-plan-missing">⚠ This track’s worktree folder is missing. Its plan is still on the branch — Open session re-creates the folder.</li>';
+  }
   const hint = track.alsoOnMain
     ? 'Main still has lines for it — Move into branch takes them over.'
     : 'Add features here, or write the section in the worktree’s PROJECT.md.';

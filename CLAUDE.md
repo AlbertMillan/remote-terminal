@@ -180,8 +180,12 @@ before **merge**.
 - Main's PROJECT.md is authoritative for the **backlog** and **landed** tracks; an
   in-progress track's **worktree** is authoritative for that track — its section and
   specs move there at branch creation (`track-plan.ts`). Read plans through
-  `readProjectPlan()` and write through `planFileFor()`, or the board, dispatch and ids
-  miss every branched track. Never write `## Track:` on main for a branched track.
+  `readProjectPlan()` and write through `planFileFor()` (`project-plan.ts`), or the board,
+  dispatch and ids miss every branched track. Never write `## Track:` on main for a
+  branched track. Writes to a worktree's file go under the project lock, or a tick made
+  during Land is overwritten by its merge-base reset.
+- A move removes a spec from main only when the worktree holds main's content; otherwise
+  main's copy — perhaps uncommitted or untracked — is deleted with no way back.
 - Land copies the section back to main **before** merging and resets the branch's copy
   to its merge-base — merge the file instead and every land conflicts on it; copy after
   the merge and a spec the move removed is deleted or conflicts.

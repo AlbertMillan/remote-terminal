@@ -7,7 +7,7 @@ import { createLogger } from '../utils/logger.js';
 import { git, gitStatusEntries, type GitStatusEntry } from '../agent/claude-run.js';
 import { parsePhasesBlock, type PhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
-import { readProjectPlan } from './track-branches.js';
+import { readProjectPlan } from './project-plan.js';
 import { featuresOf, type ProjectDoc } from './project-doc-format.js';
 
 const logger = createLogger('track-attribution');
