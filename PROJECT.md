@@ -74,7 +74,7 @@ status: active
 - [x] `f-kzucpb` P1 Track branches — branch on first implementation (session, picker, dispatch), Land track, `merge_sha` on every merge → project/track-branches-and-delete.md
 - [x] `f-nk734f` P1 Delete track — cancel/discard jobs, drop the branch, revert landed merges, spec rule, one commit → project/track-branches-and-delete.md
 - [x] `f-4blxce` P2 Work on main outside any branch — detect a track's edits on main from its sessions, Branch now, unticked guesses in Delete → project/track-branches-and-delete.md
-- [x] `f-rtcckq` P1 Track plans live in the track branch — move the section off main at branch creation, board reads/writes the worktree, Land copies the section back and names dirty files → project/track-plan-in-branch.md
+- [ ] `f-rtcckq` P1 Track plans live in the track branch — move the section off main at branch creation, board reads/writes the worktree, Land copies the section back and names dirty files → project/track-plan-in-branch.md
 ## Track: Plan usage limits
 - [x] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
 ## Track: UI Improvements
