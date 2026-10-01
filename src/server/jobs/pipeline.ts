@@ -582,6 +582,7 @@ async function executeMerge(job: Job): Promise<void> {
       jobId: job.id,
       featureId: job.featureId,
       mergeCwd,
+      docRel: findWorkspaceProject(job.projectCwd)?.doc,
     });
 
   // Into a track branch: that branch is checked out in the track's worktree,
@@ -642,6 +643,7 @@ async function executeRebuild(job: Job): Promise<void> {
     featureId: job.featureId,
     specPath: specPathOf(job.id),
     title: job.title,
+    baseBranch: job.baseBranch,
   });
 
   finishStage(job.id, 'rebuild', result.updated ? 'passed' : 'skipped', result.detail);

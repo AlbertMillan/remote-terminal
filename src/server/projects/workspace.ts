@@ -8,8 +8,8 @@ import { worktreeRoot } from '../jobs/worktree.js';
 import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } from './registry.js';
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
-import { allFeatures, featuresOf, type Feature, type FeatureStatus } from './project-doc-format.js';
-import { listTrackBranches, type TrackBranch } from './track-branches.js';
+import { featuresOf, type Feature, type FeatureStatus } from './project-doc-format.js';
+import { planCopies, type PlanCopy } from './track-branches.js';
 
 const logger = createLogger('project-workspace');
 
@@ -26,6 +26,20 @@ export interface WorkspaceTrack {
   features: Feature[];
   /** The track's branch while it is being implemented; null once landed or never branched. */
   branch: { name: string; worktreePath: string; baseBranch: string } | null;
+  /**
+   * Content fingerprint of the file this track's lines live in: the
+   * worktree's PROJECT.md for a branched track, null for main's (use the
+   * project's `revision`). Echo it back on writes to this track's features.
+   */
+  revision: string | null;
+  /**
+   * Feature lines main's PROJECT.md also has for this branched track ("both
+   * copies": written on main after branching, or a move that failed). Move
+   * into branch takes them over; Land would merge them anyway.
+   */
+  alsoOnMain: number;
+  /** Branched, but its worktree's PROJECT.md has no section for it (shown empty, never from main). */
+  planMissing: boolean;
 }
 
 export interface WorkspaceProject {
@@ -80,18 +94,14 @@ function isJobWorktree(path: string): boolean {
 }
 
 /**
- * A project's not-yet-landed track branches by track name. Never throws: the
- * board must still render when the database is unavailable.
+ * A project's in-progress track copies by track name. Never throws: the board
+ * must still render when the database is unavailable.
  */
-function activeBranchesOf(cwd: string): Map<string, TrackBranch> {
+function activeCopiesOf(entry: RegistryProject): Map<string, PlanCopy> {
   try {
-    return new Map(
-      listTrackBranches(cwd)
-        .filter((b) => b.landedAt === null)
-        .map((b) => [b.trackName, b])
-    );
+    return new Map(planCopies(entry).map((c) => [c.branch.trackName, c]));
   } catch (error) {
-    logger.warn({ error, cwd }, 'workspace: could not read track branches');
+    logger.warn({ error, cwd: entry.cwd }, 'workspace: could not read track branches');
     return new Map();
   }
 }
@@ -234,17 +244,27 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       state = null;
     }
 
-    const active = activeBranchesOf(cwd);
-    const tracks: WorkspaceTrack[] = state
-      ? state.doc.tracks.map((t) => {
-          const b = active.get(t.name);
-          return {
-            name: t.name,
-            features: featuresOf(t),
-            branch: b ? { name: b.branch, worktreePath: b.worktreePath, baseBranch: b.baseBranch } : null,
-          };
-        })
-      : [];
+    // A branched track's lines live in its worktree (docs/track-branches.md):
+    // the board shows that copy, in main's position when main still has the
+    // heading, after main's tracks otherwise.
+    const active = activeCopiesOf(entry);
+    const toTrack = (name: string, mainFeatures: Feature[] | null): WorkspaceTrack => {
+      const c = active.get(name);
+      if (!c) return { name, features: mainFeatures ?? [], branch: null, revision: null, alsoOnMain: 0, planMissing: false };
+      const b = c.branch;
+      return {
+        name,
+        features: c.track ? featuresOf(c.track) : [],
+        branch: { name: b.branch, worktreePath: b.worktreePath, baseBranch: b.baseBranch },
+        revision: c.state.revision,
+        alsoOnMain: mainFeatures?.length ?? 0,
+        planMissing: c.track === null,
+      };
+    };
+    const tracks: WorkspaceTrack[] = state ? state.doc.tracks.map((t) => toTrack(t.name, featuresOf(t))) : [];
+    for (const [name, c] of active) {
+      if (c.track && !tracks.some((t) => t.name === name)) tracks.push(toTrack(name, null));
+    }
 
     // Aggregate recency across the project and everything rolled into it, so a
     // Unity project worked on only in a nested Assets dir still reads as active.
@@ -276,9 +296,10 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
       verify: state?.doc.frontmatter.verify ?? [],
       tracks,
       orphanBranches: [...active.values()]
+        .map((c) => c.branch)
         .filter((b) => !tracks.some((t) => t.name === b.trackName))
         .map((b) => ({ trackName: b.trackName, branch: b.branch, worktreePath: b.worktreePath })),
-      counts: countFeatures(state ? allFeatures(state.doc) : []),
+      counts: countFeatures(tracks.flatMap((t) => t.features)),
       lastActivity,
       lastModified: dirModifiedAt(cwd),
       transcriptCount,

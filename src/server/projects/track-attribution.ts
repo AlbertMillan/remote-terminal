@@ -7,7 +7,7 @@ import { createLogger } from '../utils/logger.js';
 import { git, gitStatusEntries, type GitStatusEntry } from '../agent/claude-run.js';
 import { parsePhasesBlock, type PhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
-import { readProjectDoc } from './project-store.js';
+import { readProjectPlan } from './track-branches.js';
 import { featuresOf, type ProjectDoc } from './project-doc-format.js';
 
 const logger = createLogger('track-attribution');
@@ -278,7 +278,9 @@ export async function attributionContext(project: RegistryProject): Promise<Attr
   return {
     project,
     docRel: (project.doc || 'PROJECT.md').replace(/\\/g, '/'),
-    doc: readProjectDoc(project).doc,
+    // Main's plan plus each in-progress track's section from its worktree:
+    // a branched track's feature ids are no longer on main.
+    doc: readProjectPlan(project).doc,
     phaseGroups,
     transcripts: await projectTranscripts(project.cwd),
     status: (await gitStatusEntries(project.cwd, { allUntracked: true })) ?? [],

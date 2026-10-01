@@ -6,6 +6,7 @@ import { hasRemote } from '../worktree.js';
 import { mutateProjectDoc, readProjectDoc } from '../../projects/project-store.js';
 import { docPathFor, type RegistryProject } from '../../projects/registry.js';
 import { findFeature, updateFeature } from '../../projects/project-doc-format.js';
+import { findActiveTrackBranchByName, worktreeProject } from '../../projects/track-branches.js';
 import { invalidateProjectCache } from '../../sessions/project-discovery.js';
 
 const logger = createLogger('stage-rebuild');
@@ -44,14 +45,23 @@ export async function runRebuildStage(opts: {
   /** Spec path the design stage produced, to link from the feature. */
   specPath: string | null;
   title: string;
+  /** The branch the job merged into. A track branch means the tick goes to its worktree. */
+  baseBranch?: string | null;
 }): Promise<RebuildResult> {
-  const { project, featureId, specPath, title } = opts;
-  const docRel = project.doc || 'PROJECT.md';
+  const { featureId, specPath, title } = opts;
+  const docRel = opts.project.doc || 'PROJECT.md';
 
   if (!featureId) {
     // An ad-hoc job was never tied to a feature, so there is nothing to tick.
     return { updated: false, committed: false, pushed: false, detail: 'no linked feature' };
   }
+
+  // A job merged into a track branch belongs to an in-progress track, whose
+  // plan lives in the track's worktree, not on main (docs/track-branches.md).
+  // That copy is ticked and committed there; track branches never push.
+  const track = opts.baseBranch ? findActiveTrackBranchByName(opts.project.cwd, opts.baseBranch) : null;
+  const project = track ? worktreeProject(opts.project, track.worktreePath) : opts.project;
+  const where = track ? `${docRel} in the track worktree` : docRel;
 
   const state = readProjectDoc(project);
   if (!state.exists || !findFeature(state.doc, featureId)) {
@@ -59,7 +69,7 @@ export async function runRebuildStage(opts: {
       updated: false,
       committed: false,
       pushed: false,
-      detail: `feature ${featureId} is no longer in ${docRel}`,
+      detail: `feature ${featureId} is no longer in ${where}`,
     };
   }
 
@@ -86,7 +96,7 @@ export async function runRebuildStage(opts: {
       updated: true,
       committed: false,
       pushed: false,
-      detail: `marked done — ${docRel} had your own uncommitted edits, so the change was left for you to commit`,
+      detail: `marked done — ${where} had your own uncommitted edits, so the change was left for you to commit`,
     };
   }
 
@@ -105,16 +115,17 @@ export async function runRebuildStage(opts: {
     ])) !== null;
 
   let pushed = false;
-  if (committed && (await hasRemote(project.cwd))) {
+  if (committed && !track && (await hasRemote(project.cwd))) {
     pushed = (await git(project.cwd, ['push'])) !== null;
   }
 
   logger.info({ cwd: project.cwd, featureId, committed, pushed }, 'rebuild: feature marked done');
+  const done = track ? 'marked done in the track branch' : 'marked done';
   return {
     updated: true,
     committed,
     pushed,
-    detail: committed ? (pushed ? 'marked done, committed and pushed' : 'marked done and committed') : 'marked done',
+    detail: committed ? (pushed ? `${done}, committed and pushed` : `${done} and committed`) : done,
   };
 }
 

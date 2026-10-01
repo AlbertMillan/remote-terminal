@@ -13,6 +13,8 @@ export interface TrackDeletePlan {
   token: string;
   track: string;
   inDoc: boolean;
+  /** Feature lines in main's section; an in-progress track's own go with its branch. */
+  mainLines?: number;
   features: { id: string; title: string; status: string }[];
   cancel: { id: string; title: string; status: string }[];
   discard: { id: string; title: string; status: string }[];
@@ -52,7 +54,7 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
   const removed: string[] = [];
   if (plan.inDoc) {
     removed.push(
-      `${plural(plan.features.length, 'feature line')} and the <code>## Track:</code> heading from PROJECT.md`
+      `${plural(plan.mainLines ?? plan.features.length, 'feature line')} and the <code>## Track:</code> heading from PROJECT.md`
     );
   }
   if (plan.cancel.length > 0) {
@@ -72,7 +74,11 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
       plan.branch.sessionsToClose > 0
         ? `; closes ${plural(plan.branch.sessionsToClose, 'open session')}`
         : '';
-    removed.push(`Branch <code>${escapeHtml(plan.branch.name)}</code> and its worktree${lost}${closes}`);
+    const lines =
+      plan.features.length > (plan.mainLines ?? plan.features.length)
+        ? ', with the track’s plan (its feature lines and specs live on the branch)'
+        : '';
+    removed.push(`Branch <code>${escapeHtml(plan.branch.name)}</code> and its worktree${lines}${lost}${closes}`);
   }
   if (plan.sessionLogGroup) removed.push('Its phase group in SESSION-LOG.md');
 

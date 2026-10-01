@@ -11,9 +11,16 @@ import { removeWorktree } from '../jobs/worktree.js';
 import { MERGE_LOG_FORMAT, parseMergeLog, type MergeCommit } from '../jobs/merge-trailers.js';
 import { parsePhasesBlock, removePhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
-import { mutateProjectDoc, readProjectDoc, resolveSpecPath } from './project-store.js';
-import { featuresOf, findFeature, parseProjectDoc, removeTrack, type FeatureStatus } from './project-doc-format.js';
-import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './track-branches.js';
+import { mutateProjectDoc, resolveSpecPath } from './project-store.js';
+import {
+  featuresOf,
+  findFeature,
+  parseProjectDoc,
+  removeTrack,
+  type FeatureStatus,
+  type ProjectDoc,
+} from './project-doc-format.js';
+import { deleteTrackBranchRows, listTrackBranches, readProjectPlan, type TrackBranch } from './track-branches.js';
 import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
 
 const logger = createLogger('track-delete');
@@ -90,7 +97,10 @@ export interface TrackDeletePlan {
   /** Echoed back on execute; a mismatch means the plan is stale (409). */
   token: string;
   track: string;
+  /** Main's PROJECT.md has a section for the track (a backlog track, or "both copies"). */
   inDoc: boolean;
+  /** Feature lines in main's section; an in-progress track's own lines go with its branch. */
+  mainLines: number;
   features: { id: string; title: string; status: FeatureStatus }[];
   /** Live jobs, cancelled first. */
   cancel: PlannedJob[];
@@ -163,9 +173,18 @@ export async function planTrackDelete(
 ): Promise<TrackDeletePlan> {
   const cwd = project.cwd;
   const docRel = project.doc || 'PROJECT.md';
-  const state = readProjectDoc(project);
-  const track = state.doc.tracks.find((t) => t.name === trackName) ?? null;
-  const features = track ? featuresOf(track) : [];
+  // An in-progress track's lines live in its worktree; main may also hold
+  // some ("both copies"). Jobs and merges are found by either; only main's
+  // lines and specs are edited on main — the rest goes with the branch.
+  const plan = readProjectPlan(project);
+  const state = plan.main;
+  const mainTrack = state.doc.tracks.find((t) => t.name === trackName) ?? null;
+  const track = plan.doc.tracks.find((t) => t.name === trackName) ?? mainTrack;
+  const mainFeatures = mainTrack ? featuresOf(mainTrack) : [];
+  const features = [
+    ...(track ? featuresOf(track) : []),
+    ...mainFeatures.filter((f) => !(track ? featuresOf(track) : []).some((g) => g.id === f.id)),
+  ];
   const featureIds = new Set(features.map((f) => f.id));
 
   const rows = listTrackBranches(cwd).filter((r) => r.trackName === trackName);
@@ -199,7 +218,15 @@ export async function planTrackDelete(
       : { merges: [], unresolved: [] };
 
   const specs = repo
-    ? await planSpecs({ project, docRel, features, featureIds, trackName, otherJobs: allJobs.filter((j) => !jobIds.has(j.id)) })
+    ? await planSpecs({
+        project,
+        docRel,
+        features: mainFeatures,
+        featureIds,
+        trackName,
+        others: plan.doc,
+        otherJobs: allJobs.filter((j) => !jobIds.has(j.id)),
+      })
     : [];
 
   let branch: TrackDeletePlan['branch'] = null;
@@ -233,6 +260,7 @@ export async function planTrackDelete(
     .update(
       JSON.stringify({
         revision: state.revision,
+        copies: plan.copies.map((c) => c.state.revision),
         headSha,
         jobs: jobs.map((j) => [j.id, j.status, j.updatedAt]),
         rows: rows.map((r) => [r.id, r.landedAt]),
@@ -245,7 +273,8 @@ export async function planTrackDelete(
   return {
     token,
     track: trackName,
-    inDoc: track !== null,
+    inDoc: mainTrack !== null,
+    mainLines: mainFeatures.length,
     features: features.map((f) => ({ id: f.id, title: f.title, status: f.status })),
     cancel: jobs.filter((j) => isLive(j.status)).map(summary),
     discard: jobs.map(summary),
@@ -379,9 +408,11 @@ async function planSpecs(opts: {
   features: { id: string; spec: string | null }[];
   featureIds: Set<string>;
   trackName: string;
+  /** Every section to check for other references: main's and each in-progress worktree's. */
+  others: ProjectDoc;
   otherJobs: JobWithStages[];
 }): Promise<PlannedSpec[]> {
-  const { project, docRel, features, featureIds, trackName, otherJobs } = opts;
+  const { project, docRel, features, featureIds, trackName, others, otherJobs } = opts;
   const cwd = project.cwd;
   const paths = [...new Set(features.map((f) => f.spec).filter((s): s is string => !!s))];
   if (paths.length === 0) return [];
@@ -391,7 +422,6 @@ async function planSpecs(opts: {
   const linesInHead =
     headDoc !== null && [...featureIds].some((id) => findFeature(parseProjectDoc(headDoc), id));
 
-  const current = readProjectDoc(project).doc;
   const phaseSources = sessionLogGroups(cwd).filter((g) => g.group !== trackName);
 
   const out: PlannedSpec[] = [];
@@ -403,7 +433,7 @@ async function planSpecs(opts: {
     const dirty = ((await git(cwd, ['status', '--porcelain', '--', path])) ?? '').trim() !== '';
 
     const referencedBy: string[] = [];
-    for (const t of current.tracks) {
+    for (const t of others.tracks) {
       if (t.name === trackName) continue;
       for (const f of featuresOf(t)) {
         if (f.spec === path) referencedBy.push(`${f.id} in "${t.name}"`);

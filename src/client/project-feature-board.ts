@@ -167,8 +167,20 @@ export function renderTrack(
         <span class="phase-progress">${done}/${track.features.length}</span>
         ${renderTrackActions(project, track, planning, unbranched)}
       </div>
-      <ul class="phase-list">${rows}</ul>
+      <ul class="phase-list">${track.planMissing ? renderPlanMissing(track) : ''}${rows}</ul>
     </div>`;
+}
+
+/**
+ * A branched track whose worktree has no section. Shown empty with this note,
+ * never filled from main's copy, which stopped being this track's plan when
+ * the branch was created.
+ */
+function renderPlanMissing(track: WorkspaceTrack): string {
+  const hint = track.alsoOnMain
+    ? 'Main still has lines for it — Move into branch takes them over.'
+    : 'Add features here, or write the section in the worktree’s PROJECT.md.';
+  return `<li class="phase-item pw-plan-missing">⚠ This track’s worktree has no <code>## Track:</code> section. ${escapeHtml(hint)}</li>`;
 }
 
 /**
@@ -205,6 +217,13 @@ export function renderTrackActions(
                  work.files.length
                } file${work.files.length === 1 ? '' : 's'} on main</button>`
     : '';
+  // Lines written on main after the track branched: its plan lives in the
+  // worktree now, so offer to move them there (Land would merge them anyway).
+  const alsoOnMain =
+    track.branch && track.alsoOnMain
+      ? `<button class="pw-track-moveinto" data-cwd="${cwd}" data-track="${name}"
+               title="Main's PROJECT.md also has ${track.alsoOnMain} line${track.alsoOnMain === 1 ? '' : 's'} for this track. Move them into its branch, where its plan lives.">also has lines on main · Move into branch</button>`
+      : '';
   const land = track.branch
     ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
                title="Merge this track into ${escapeAttr(track.branch.baseBranch)} and retire its worktree">Land</button>`
@@ -212,6 +231,7 @@ export function renderTrackActions(
   return `
     <span class="pw-track-actions">
       ${badge}
+      ${alsoOnMain}
       ${onMain}
       <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
               title="${track.branch ? 'Open a session in this track’s worktree' : 'Create this track’s branch and open a session in it'}">Open session</button>

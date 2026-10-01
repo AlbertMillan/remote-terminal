@@ -20,11 +20,17 @@ The general version of this split, and the rules for new features that touch it,
 
 ## The model
 
-**Planning on main, implementation in the worktree.**
+**A track's plan lives where its work lives.**
 
-- **Planning.** PROJECT.md lines and `project/*.md` specs are written in the main
-  checkout, however they are written, hand edits included. Delete track can always
-  remove them.
+| Track state | Where its plan lives |
+|---|---|
+| Backlog (no branch) | Main's `PROJECT.md` and `project/` |
+| In progress (unlanded branch) | Only the track branch: its section and its specs |
+| Landed | Main again, put back by Land |
+
+- **Backlog planning on main.** Writing down an idea mustn't create a worktree or
+  leave anything to clean up, so a track with no branch is planned in the main
+  checkout, hand edits included.
 - **Implementation.** The track gets `track/<slug>-<id8>` and a worktree at
   `~/.claude-remote/worktrees/tracks/<row id>`. The branch is created the first time
   implementation starts:
@@ -38,16 +44,59 @@ The general version of this split, and the rules for new features that touch it,
     `runner.ts`). Ad-hoc jobs, and features no longer in PROJECT.md, still branch from
     the current branch.
 
-**PROJECT.md on main is the only authoritative copy.** The board, dispatch and rebuild
-read and write it there. The worktree's copy is never authoritative. At Land, ticks in
-the worktree copy that are further along (`pending`/`blocked` < `in_progress` < `done`)
-are applied to main with `mutateProjectDoc`. The branch's PROJECT.md is first reset to
-its merge-base version in its own commit, so the land merge never touches the file.
-Otherwise every land would conflict on the one file every track edits.
+**Why the plan moves.** Until 2026-10 main's PROJECT.md was the only authoritative copy
+and the worktree held only ticks, meeting at Land. That split caused two of four Land
+failures and both lost ticks reviewed on 2026-10-01: a heading `ensureTrackBranch` wrote
+on main and never committed made claude-remote block its own Land with a bare
+"uncommitted changes", and features added on main after branching had no worktree copy
+for the tick sync to read. The spec is `project/track-plan-in-branch.md`.
 
-**Specs can live on either side.** The board's spec view reads the track worktree's copy
-when the track has one and the file exists there (`readSpecForTrack`), and falls back to
-main's otherwise.
+**Moving a section off main** (`moveSectionOffMain` in `src/server/projects/track-plan.ts`)
+happens when `ensureTrackBranch` creates the branch — Open session, the picker, dispatch
+and Branch now all go through it. Two steps, in this order:
+
+1. **Into the worktree.** Main's *working* copy of the section (so uncommitted lines come
+   along) is written into the worktree's PROJECT.md, with the track's specs that are
+   uncommitted on main, and committed on the track branch. A track with no heading yet
+   gets its heading there, never on main.
+2. **Off main.** One commit removes the section, and the specs that only this track's
+   lines link to. It is built from HEAD's PROJECT.md through a temporary index
+   (`GIT_INDEX_FILE`), so anything staged stays staged and out of it; the real index is
+   then updated only for paths where it still matched HEAD. The working copy drops the
+   section separately, keeping its other edits. Never pushed.
+
+Worktree first: a failed step 2 leaves the plan in both places, which is handled
+("Both copies"); main first would leave a window with the plan nowhere. A spec that
+another section (on main, or in another track's worktree) links to stays on main.
+
+**Reading and writing.** `readProjectPlan()` (`track-branches.ts`) is main's doc with
+each in-progress track's section taken from its worktree. The board, `trackOfFeature`
+(dispatch), attribution and Delete read through it. A branched track whose worktree has
+no section shows empty with a warning, never main's stale copy.
+
+- **Board writes** go to the file that holds the feature or track (`planFileFor`). The
+  `revision` is per file: each branched track carries its own on the board, and the
+  routes check it against the file they write. Moving a feature between files is
+  refused. Worktree writes stay uncommitted; Land and the next job merge into the track
+  commit them (`commitWorktreePlanning`), since that worktree belongs to the track and
+  never pushes.
+- **Ids** are generated against main plus every unlanded worktree (`allFeatureIds`).
+
+**Specs.** The board's spec view reads the track worktree's copy when the track has one
+and the file exists there (`readSpecForTrack`), and falls back to main's otherwise.
+
+### Both copies
+
+A session on main can still write `## Track: X` for an in-progress track, and a failed
+move or the migration leaves one. The board shows the worktree's section with an "also
+has lines on main · Move into branch" button (`POST /api/projects/track/move-into-branch`),
+which re-runs the move for those lines, the worktree's line winning by id. Land merges
+both copies anyway, so a line written on main is never lost.
+
+**Migration.** At server start `migrateBranchedPlans()` moves, once, any unlanded track
+whose section is still on main (tracks branched before this model). Main's lines win
+there, since main was authoritative then, but the worktree's further-along ticks are
+kept. A failure is logged and leaves a "both copies" track.
 
 ## Jobs inside a track
 
@@ -57,12 +106,14 @@ work against `baseBranch`, so they needed no change. The merge stage changed:
 - **Where it merges.** A worktree can't check out a branch another worktree holds, so
   the merge runs where the base is checked out: the project for main, the track's
   worktree for a track (`mergeCwd`).
-- **Clean tree.** The clean-tree rule applies there too. A session with uncommitted
-  edits in the track worktree blocks the job's merge, with the worktree named in the
+- **Clean tree.** The clean-tree rule applies there too, except that uncommitted
+  planning files (board ticks, a session's spec edits) are committed in the worktree
+  first. Uncommitted code still blocks the job's merge, with the worktree named in the
   error.
 - **No push.** Track branches are local. Merges into them are never pushed; only Land
   pushes.
-- **Rebuild is unchanged.** It still ticks the feature on main.
+- **Rebuild ticks the worktree.** For a job whose base is a track branch, the feature
+  is ticked in the worktree's PROJECT.md and committed there.
 
 **Every merge records its sha**: `jobs.merge_sha` from the merge stage, and
 `track_branches.merge_sha` from Land. The message `Merge job: <title>` is shared by any
@@ -90,12 +141,26 @@ Land is refused (409) unless:
 - no job for the track is queued, running or parked;
 - no live session has its cwd inside the worktree. On Windows an open shell holds the
   directory, and `git worktree remove` would fail half-way;
-- both checkouts are clean;
-- the project is on the track's base branch.
+- the project is on the track's base branch;
+- the worktree holds no uncommitted code. Uncommitted planning files there
+  (PROJECT.md, `project/*.md` outside `project/reviews/`) are committed on the track
+  branch first;
+- main holds no uncommitted code: code edited on main may be this track's work.
+  Uncommitted backlog planning is let through and left uncommitted and unpushed;
+- nothing is staged on main, since `git merge` refuses then.
 
-It then syncs ticks, runs `git merge --no-ff` (`Merge track: <name>`), records
-`merge_sha`, commits the carried-over ticks (PROJECT.md only), pushes when there is a
-remote, and removes the worktree and the branch label.
+Every dirty refusal names the files (`statusEntries`, every untracked file listed).
+
+It then puts the section back on main (`returnSectionToMain`): one commit through the
+temporary index of HEAD's PROJECT.md plus the worktree's section — merged by id with any
+section main also has, the worktree's line winning and nothing dropped, or appended
+after main's last section — plus the specs it links to that HEAD lacks. The working copy
+gets the same section and keeps the backlog edits. This runs **before** the merge: the
+move took those specs off main, so a spec the track revised would otherwise be a
+modify/delete conflict, and one it didn't would be deleted by the merge. Then the
+branch's PROJECT.md is reset to its merge-base, `git merge --no-ff`
+(`Merge track: <name>`) runs, `merge_sha` is recorded, it pushes when there is a remote,
+and removes the worktree and the branch label.
 
 After a successful land the route rebuilds the main checkout (`project-build.ts`):
 `npm run build` when `package.json` declares a `build` script, nothing otherwise. It
@@ -105,9 +170,10 @@ the land; its output tail is appended to the Land message. Nothing is restarted 
 claude-remote itself the new `dist/` takes effect on the next server restart.
 
 A merge conflict aborts the merge and leaves both checkouts as they were. That includes
-taking back the commit that reset the branch's PROJECT.md: by then the worktree's ticks
-exist only in memory, and without the rollback the next Land would read the reset copy,
-so the progress would be lost for good. The fix for a conflict is to merge the base into
+taking back the plan commit on main (`git reset` to before it, which is safe because
+nothing was staged, and the working files written back), and the commit that reset the
+branch's PROJECT.md: without that rollback the next Land would read the reset copy, so
+the track's section would be lost for good. The fix for a conflict is to merge the base into
 the track in its worktree, resolve there, and land again.
 
 A worktree folder that has gone missing is re-attached to its branch before Land, as
@@ -187,6 +253,11 @@ ticked by default.
 7. Commit only if something was reverted: one commit, `Delete track: <name>`. It is
    never pushed. Each path is staged separately, because `git add` rejects a whole call
    when any pathspec matches nothing, which a deleted spec that was never committed does.
+
+**In-progress tracks.** Their plan is on the branch, so tearing down the worktree and
+branch removes it; main is untouched. Only a "both copies" section on main is removed,
+as a backlog track's would be (`inDoc`, `mainLines`). The plan's features, used to find
+jobs and merges, come from both copies.
 
 **The spec rule** applies only to specs on main; a spec on the track branch goes with the
 branch.
@@ -269,15 +340,17 @@ If a revert conflicts, the snapshots are written back after the `reset --hard`.
 
 The picker and Open session only help when they're used. A session started in the main
 checkout can still edit a track's code there. The global `~/.claude/CLAUDE.md` carries
-this rule, in its "Project workspace" section (added 2026-09-24). It lives outside this
-repo, so a change here has to be copied there by hand:
+this rule, in its "Project workspace" section (added 2026-09-24, flipped 2026-10-01 when
+plans moved into track branches). It lives outside this repo, so a change here has to
+be copied there by hand:
 
-> **Track work happens in the track's worktree (claude-remote).** Planning — writing
-> `PROJECT.md` lines and `project/*.md` specs — belongs in the main checkout. But before
-> editing *code* for a track's feature, check that the cwd is that track's worktree
-> (`~/.claude-remote/worktrees/tracks/…`). If you are in the main checkout, stop and ask:
-> code written there can't be attributed to the track, so deleting the track later can't
-> remove it. `PROJECT.md` and `project/*.md` are exempt. Inside a track worktree, ticking
-> features in its `PROJECT.md` copy is fine — landing the track carries the ticks to main.
+> **Track work happens in the track's worktree (claude-remote).** Plan a *backlog* track
+> (one with no branch) in the main checkout. Once a track has a branch, its plan lives
+> in its worktree (`~/.claude-remote/worktrees/tracks/…`): write its `PROJECT.md` lines,
+> ticks and `project/*.md` specs there, and never add `## Track:` on main for it. Before
+> editing *code* for a track's feature, check that the cwd is that track's worktree. If
+> you are in the main checkout, stop and ask: code written there can't be attributed to
+> the track, so deleting the track later can't remove it. Landing the track puts its
+> plan back on main.
 
 The rule is advisory. Detecting work that lands on main anyway is `f-4blxce`.
