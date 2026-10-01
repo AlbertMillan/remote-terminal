@@ -104,10 +104,18 @@ has lines on main · Move into branch" button (`POST /api/projects/track/move-in
 which re-runs the move for those lines, the worktree's line winning by id. Land merges
 both copies anyway, so a line written on main is never lost.
 
-**Migration.** At server start `migrateBranchedPlans()` moves, once, any unlanded track
-whose section is still on main (tracks branched before this model). Main's lines win
-there, since main was authoritative then, but the worktree's further-along ticks are
-kept. A failure is logged and leaves a "both copies" track.
+**Migration.** At server start `migrateBranchedPlans()` moves the section of each track
+branched before this model (`track_branches.plan_in_branch = 0`, migration
+`016_track_plan_in_branch`). Main's lines win there, since main was authoritative then,
+but the worktree's further-along ticks are kept. The row is then flagged, after any
+attempt: a retry would let main win again over whatever was edited in the worktree since.
+A failure is logged and leaves a "both copies" track.
+
+Rows created by `ensureTrackBranch` are flagged from the start. A flagged track whose
+section shows up on main again had it written there after branching; the worktree is
+authoritative for it, so the migration leaves it to Move into branch and Land, which
+merge with the worktree winning. Without the flag, every restart moved such a track with
+main winning and reverted the worktree's own edits.
 
 ## Jobs inside a track
 

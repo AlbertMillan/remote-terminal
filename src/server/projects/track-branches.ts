@@ -22,10 +22,10 @@ import { readProjectDoc } from './project-store.js';
 import { featuresOf, findFeature } from './project-doc-format.js';
 import {
   getActiveTrackBranch,
+  listUnmigratedTrackBranches,
   markLanded,
-  toTrackBranch,
+  markPlanInBranch,
   type TrackBranch,
-  type TrackBranchRow,
 } from './track-store.js';
 import { readProjectPlan, type ProjectPlan } from './project-plan.js';
 import { guessTrackWork, type GuessedFile } from './track-attribution.js';
@@ -172,9 +172,11 @@ export async function ensureTrackBranch(
   try {
     getDatabase()
       .prepare(
+        // plan_in_branch = 1: this row's plan moves into the branch below, so
+        // the boot migration (old rows only) must never move it again.
         `INSERT INTO track_branches
-           (id, project_cwd, project_key, track_name, branch, worktree_path, base_branch, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           (id, project_cwd, project_key, track_name, branch, worktree_path, base_branch, created_at, plan_in_branch)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
       )
       .run(id, project.cwd, pathKey(project.cwd), name, created.branch, created.path, baseBranch, now);
   } catch (error) {
@@ -240,31 +242,43 @@ export async function moveIntoBranch(project: RegistryProject, trackName: string
 }
 
 /**
- * One-time migration at server start: a track branched before plans moved
- * into branches still has its section on main. Move it, keeping main's lines
- * and the worktree's further-along ticks. A failure is logged and the track
- * stays a "both copies" one, which the board and Land already handle.
+ * One-time migration at server start, for tracks branched before plans moved
+ * into branches: their section is still on main. Move each once, keeping
+ * main's lines (main was authoritative then) and the worktree's
+ * further-along ticks, and flag the row so it is never moved this way again.
+ *
+ * Only unflagged rows (`plan_in_branch = 0`). A flagged track whose section
+ * is on main again had it written there after branching: there the worktree
+ * is authoritative, and Move into branch and Land merge it worktree-first.
+ * Moving it main-first on every restart would revert the worktree's own edits.
+ *
+ * Flagged after any attempt, failed ones included: step 1 may already have
+ * put main's lines in the worktree, and a retry would let main win again
+ * over whatever was edited there since. A failed move is logged and left as
+ * a "both copies" track, which the board (Move into branch) and Land handle.
  */
 export async function migrateBranchedPlans(): Promise<void> {
-  let rows: TrackBranchRow[];
+  let rows: TrackBranch[];
   try {
-    rows = getDatabase()
-      .prepare('SELECT * FROM track_branches WHERE landed_at IS NULL ORDER BY created_at')
-      .all() as TrackBranchRow[];
+    rows = listUnmigratedTrackBranches();
   } catch (error) {
     logger.warn({ error }, 'track plan migration: could not read track branches');
     return;
   }
   const registry = loadRegistry();
-  for (const row of rows.map(toTrackBranch)) {
+  for (const row of rows) {
     const project: RegistryProject = registry.projects.find((p) => pathKey(p.cwd) === pathKey(row.projectCwd)) ?? {
       cwd: row.projectCwd,
     };
     try {
-      if (!existsSync(project.cwd)) continue;
-      if (!readProjectDoc(project).doc.tracks.some((t) => t.name === row.trackName)) continue;
+      if (!existsSync(project.cwd)) continue; // the project may come back; retry then
+      if (!readProjectDoc(project).doc.tracks.some((t) => t.name === row.trackName)) {
+        markPlanInBranch(row.id); // nothing on main to move
+        continue;
+      }
       await reattachIfMissing(project, row);
       const moved = await movePlan(project, row.trackName, row.worktreePath, 'main-wins');
+      markPlanInBranch(row.id);
       if (moved) logger.info({ cwd: project.cwd, track: row.trackName }, 'track plan migration: moved');
     } catch (error) {
       logger.warn(

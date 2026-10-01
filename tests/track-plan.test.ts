@@ -348,10 +348,21 @@ describe('delete', () => {
 });
 
 describe('migration', () => {
-  it('moves the section of a track branched before plans moved, keeping the worktree’s ticks', async () => {
+  /** A row as it was before plans moved into branches: the section still on main. */
+  const asOldRow = async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    // The old model: the section back on main, ticks made only in the worktree.
-    git(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    getDatabase().prepare('UPDATE track_branches SET plan_in_branch = 0 WHERE id = ?').run(t.id);
+    git(repo, 'reset', '-q', '--hard', 'HEAD~1'); // undo the move: the section is back on main
+    return t;
+  };
+  const flag = (id: string) =>
+    (getDatabase().prepare('SELECT plan_in_branch FROM track_branches WHERE id = ?').get(id) as {
+      plan_in_branch: number;
+    }).plan_in_branch;
+
+  it('moves the section of a track branched before plans moved, keeping the worktree’s ticks', async () => {
+    const t = await asOldRow();
+    // The old model: ticks made only in the worktree, titles edited on main.
     commitFile(
       t.worktreePath,
       'PROJECT.md',
@@ -365,9 +376,35 @@ describe('migration', () => {
     expect(read(repo)).not.toContain('## Track: Alpha');
     expect(git(repo, 'status', '--porcelain')).toBe('');
     expect(read(t.worktreePath)).toContain('- [x] `f-aaaaaa` First step, renamed on main');
+    expect(flag(t.id)).toBe(1);
+  });
+
+  it('moves a track only once, so a later line on main never wins over the worktree', async () => {
+    const t = await asOldRow();
+    await tracks.migrateBranchedPlans();
+    // In the worktree, where the plan now lives: a title edit.
+    write(t.worktreePath, 'PROJECT.md', read(t.worktreePath).replace('First step', 'First step, edited in the track'));
+    // A session on main writes a stale copy of the section again.
+    write(repo, 'PROJECT.md', `${read(repo)}\n## Track: Alpha\n- [ ] \`f-aaaaaa\` First step → project/alpha.md\n`);
+
+    await tracks.migrateBranchedPlans(); // the next restart
+
+    expect(read(t.worktreePath)).toContain('First step, edited in the track');
+    expect(read(repo)).toContain('## Track: Alpha'); // left for Move into branch / Land
+  });
+
+  it('leaves a track branched under the current model alone', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    expect(flag(t.id)).toBe(1);
+    write(repo, 'PROJECT.md', `${read(repo)}\n## Track: Alpha\n- [ ] \`f-eeeeee\` Added on main\n`);
+    const worktreeDoc = read(t.worktreePath);
+
+    await tracks.migrateBranchedPlans();
+
+    expect(read(t.worktreePath)).toBe(worktreeDoc);
+    expect(read(repo)).toContain('`f-eeeeee` Added on main');
   });
 });
-
 
 describe('review fixes', () => {
   let app: FastifyInstance;

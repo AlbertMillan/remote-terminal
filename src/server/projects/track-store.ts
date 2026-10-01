@@ -20,6 +20,11 @@ export interface TrackBranch {
   createdAt: string;
   landedAt: string | null;
   mergeSha: string | null;
+  /**
+   * The track's plan lives in this branch. False only for rows from before
+   * plans moved into branches, until the boot migration has moved theirs.
+   */
+  planInBranch: boolean;
 }
 
 export interface TrackBranchRow {
@@ -33,6 +38,7 @@ export interface TrackBranchRow {
   created_at: string;
   landed_at: string | null;
   merge_sha: string | null;
+  plan_in_branch: number;
 }
 
 export function toTrackBranch(row: TrackBranchRow): TrackBranch {
@@ -46,6 +52,7 @@ export function toTrackBranch(row: TrackBranchRow): TrackBranch {
     createdAt: row.created_at,
     landedAt: row.landed_at,
     mergeSha: row.merge_sha,
+    planInBranch: row.plan_in_branch === 1,
   };
 }
 
@@ -105,6 +112,18 @@ export function deleteTrackBranchRows(
       }`
     )
     .run(pathKey(cwd), trackName);
+}
+
+/** Unlanded rows from before plans moved into branches: the boot migration's work list. */
+export function listUnmigratedTrackBranches(): TrackBranch[] {
+  const rows = getDatabase()
+    .prepare('SELECT * FROM track_branches WHERE landed_at IS NULL AND plan_in_branch = 0 ORDER BY created_at')
+    .all() as TrackBranchRow[];
+  return rows.map(toTrackBranch);
+}
+
+export function markPlanInBranch(id: string): void {
+  getDatabase().prepare('UPDATE track_branches SET plan_in_branch = 1 WHERE id = ?').run(id);
 }
 
 export function markLanded(id: string, mergeSha: string): void {
