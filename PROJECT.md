@@ -78,3 +78,7 @@ status: active
 ## Track: Plan usage limits
 - [x] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
 ## Track: UI Improvements
+## Track: Track workflow polish
+- [ ] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible
+- [ ] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's
+- [ ] `f-88ovq2` P3 Explain the track flow — a one-time hint on what opening a track does: new worktree path, Claude Code's trust prompt, commit then Land
