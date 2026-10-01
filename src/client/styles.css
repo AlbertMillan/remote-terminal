@@ -4016,3 +4016,36 @@ body {
   box-shadow: 0 0 0 2px var(--accent-glow);
   transition: box-shadow var(--transition-slow);
 }
+
+/* Server restart controls in the Settings modal (server-restart.ts). */
+.server-restart-note {
+  margin-bottom: 10px;
+}
+.server-restart-actions,
+.server-restart-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.server-restart-confirm {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.server-restart-confirm span {
+  flex-basis: 100%;
+}
+.server-restart-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.server-restart-status:empty {
+  display: none;
+}
+.server-restart-status.error {
+  color: var(--danger);
+}

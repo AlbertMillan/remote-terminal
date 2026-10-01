@@ -415,6 +415,24 @@
           </div>
         </div>
 
+        <!-- Restart / build & restart; see src/client/server-restart.ts and src/server/server-restart.ts. -->
+        <div class="settings-section" id="server-restart-section">
+          <div class="settings-section-title">Server</div>
+          <div class="setting-description server-restart-note">
+            Picks up a new build. Every open terminal closes, this one included; sessions revive from the sidebar.
+          </div>
+          <div class="server-restart-actions">
+            <button type="button" id="server-restart-btn" class="btn-secondary" data-build="false">Restart</button>
+            <button type="button" id="server-build-restart-btn" class="btn-secondary" data-build="true">Build &amp; restart</button>
+          </div>
+          <div id="server-restart-confirm" class="server-restart-confirm hidden">
+            <span id="server-restart-confirm-text"></span>
+            <button type="button" id="server-restart-go" class="btn-danger">Restart now</button>
+            <button type="button" id="server-restart-cancel" class="btn-secondary">Cancel</button>
+          </div>
+          <div id="server-restart-status" class="server-restart-status" role="status" aria-live="polite"></div>
+        </div>
+
       </div>
       <div class="modal-actions">
         <button id="settings-cancel" class="btn-secondary">Cancel</button>

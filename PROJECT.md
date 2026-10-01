@@ -19,6 +19,7 @@ status: active
 - [x] `f-vaq9ns` Session fork — ephemeral branched Claude conversations with Keep
 - [x] `f-shu9vw` Windows auto-start via start-server.bat and the hidden VBS launcher
 - [x] `f-2wq7bd` P1 Revive stale sessions from the sidebar — respawn the PTY in place and resume the conversation → project/revive-stale-sessions.md
+- [x] `f-t188v6` P2 Restart and Build & restart from Settings — detached restart-server.vbs, build gate, same-origin + Tailscale check, reload on a new boot id
 
 ## Track: Project Session Log
 - [x] `f-j6jxm9` Step 1 — Plan / design doc

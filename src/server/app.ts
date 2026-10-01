@@ -22,6 +22,7 @@ import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
+import { registerServerRestartRoutes } from './server-restart.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
 import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
@@ -139,6 +140,7 @@ export async function createApp(): Promise<FastifyInstance> {
   // Pipeline jobs: worktree-isolated stages with approval gates.
   registerJobRoutes(app);
   registerPlanUsageRoutes(app);
+  registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {

@@ -8,6 +8,7 @@ import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
+import { ServerRestartControl } from './server-restart.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { SessionListView } from './session-list-view.js';
@@ -94,6 +95,9 @@ class SessionManager {
 
   /** The keyboard shortcuts modal and the welcome-screen hints. */
   private shortcutsModal = new ShortcutsModal();
+
+  /** Restart / Build & restart in the Settings modal. */
+  private serverRestart = new ServerRestartControl();
 
   /**
    * The canonical PROJECT.md board. Owns the sidebar list and the feature
@@ -1373,6 +1377,7 @@ class SessionManager {
 
     this.updateSettingsUI();
     modal.classList.remove('hidden');
+    void this.serverRestart.refresh();
   }
 
   private hideSettingsModal(): void {

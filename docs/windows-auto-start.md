@@ -24,3 +24,14 @@ which breaks Fork, resume history, job take-over and SESSION-LOG all at once, wi
 only symptom a one-line warning inside the terminal. `src/server/utils/claude-env.ts`
 strips the markers at boot and again at the PTY chokepoint; it is a denylist of
 session-scoped vars, never a `CLAUDE_*` wildcard, so the user's own settings survive.
+
+**Restart from the UI:** Settings → Server has *Restart* and *Build & restart*
+(`src/server/server-restart.ts`, `src/client/server-restart.ts`). Both spawn
+`restart-server.vbs` detached, the same launcher used by hand, so the restart outlives the
+server's own process tree. *Build & restart* runs `npm run build` first and leaves the server
+up if it fails. The route refuses (409) unless the server runs from `dist/` on port 4220 —
+`restart-server.ps1` stops every `dist/server/index.js` and starts 4220, so a second instance
+(an isolated QA boot, `npm run dev`) would otherwise kill or duplicate the live one. It also
+requires a same-origin request and a Tailscale identity. The client waits for a *different*
+`bootId` from `GET /api/server/status` before reloading, since the old server keeps answering
+for a moment after the 202. Sessions come back stale and revive from the sidebar.
