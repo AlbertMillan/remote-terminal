@@ -32,6 +32,7 @@ status: active
 - [x] `f-5zopl1` Collapsible phase groups and Re-sync action to refresh phases from plan docs
 - [x] `f-xpd148` Edit-scope enforcement (post-run revert), hard-fail, per-project backfill
 - [x] `f-leww3w` One entry per conversation — scoped gate, amend in place instead of appending
+- [ ] `f-wycv03` P2 Session logs of worktree sessions are written to the main checkout — keep entries past Land, stop the run holding the worktree open → project/session-log-main-checkout.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
