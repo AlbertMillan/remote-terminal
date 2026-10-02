@@ -98,6 +98,10 @@ class SessionManager {
 
   /** Restart / Build & restart in the Settings modal. */
   private serverRestart = new ServerRestartControl();
+  /** A notice for the session being created, until the server names its id. */
+  private createNotice: { cwd: string; text: string } | null = null;
+  /** Notices to write into a session's terminal on its first attach. */
+  private attachNotices = new Map<string, string>();
 
   /**
    * The canonical PROJECT.md board. Owns the sidebar list and the feature
@@ -108,7 +112,7 @@ class SessionManager {
     (cwd) => this.projectLogView.showProjectLog(cwd),
     (cwd) => this.showNewSessionModal(cwd),
     (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title),
-    (worktreePath, trackName) => this.createSession(trackName, worktreePath)
+    (worktreePath, trackName, notice) => this.createSession(trackName, worktreePath, notice)
   );
   /**
    * The pipeline board. "Take over" resumes a background run's own conversation
@@ -676,6 +680,10 @@ class SessionManager {
     // re-attaches to the previously attached session, which after a server restart is stale
     // and answers "Session not found", and reviving it afterwards then showed nothing.
     this.attachingSessionId = null;
+    // A rejected session.create (too many sessions, say) never produces the
+    // session its notice was for; held on, it would land on the next session
+    // opened in that folder.
+    this.createNotice = null;
     // Show error to user - for now use alert, could be improved with toast notification
     alert('Session error: ' + payload.message);
   }
@@ -702,6 +710,11 @@ class SessionManager {
   }
 
   private handleSessionCreated(payload: { session: SessionInfo }): void {
+    const notice = this.createNotice;
+    if (notice && samePath(notice.cwd, payload.session.cwd)) {
+      this.attachNotices.set(payload.session.id, notice.text);
+      this.createNotice = null;
+    }
     this.sessions.set(payload.session.id, payload.session);
     this.renderSessionList();
     this.syncPip();
@@ -759,6 +772,12 @@ class SessionManager {
 
         this.terminalMgr.write(payload.scrollback);
         this.terminalMgr.fit();
+      }
+
+      const notice = this.attachNotices.get(payload.session.id);
+      if (notice) {
+        this.attachNotices.delete(payload.session.id);
+        this.terminalMgr.writeln(`\x1b[33m${notice.replace(/\r?\n/g, '\r\n')}\x1b[0m`);
       }
 
       // Send initial resize
@@ -1148,7 +1167,13 @@ class SessionManager {
     this.send('session.list');
   }
 
-  createSession(name?: string, cwd?: string): void {
+  /**
+   * `notice` is shown at the top of the new session's terminal, written
+   * locally and never sent to the PTY: a track session whose dependency
+   * install failed opens anyway and says so where the user is looking.
+   */
+  createSession(name?: string, cwd?: string, notice?: string): void {
+    this.createNotice = notice && cwd ? { cwd, text: notice } : null;
     this.send('session.create', { name, cwd });
   }
 
@@ -1421,6 +1446,12 @@ class SessionManager {
 
     this.hideSettingsModal();
   }
+}
+
+/** Same folder however the server spelled it (case, slashes, a trailing slash). */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return norm(a) === norm(b);
 }
 
 // Initialize when DOM is ready

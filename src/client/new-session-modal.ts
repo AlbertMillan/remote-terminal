@@ -2,7 +2,7 @@ import { escapeHtml, escapeAttr } from './html-utils.js';
 import { TrackPicker } from './track-picker.js';
 
 export interface NewSessionModalHost {
-  createSession(name?: string, cwd?: string): void;
+  createSession(name?: string, cwd?: string, notice?: string): void;
 }
 
 /**
@@ -13,6 +13,8 @@ export class NewSessionModal {
   // New-session "recent paths" dropdown state
   private recentPaths: string[] = [];
   private cwdSuggestionIndex = -1;
+  /** A Create is resolving its track (possibly installing); further ones are ignored. */
+  private creating = false;
   /** The New Session dialog's Track picker (track-picker.ts). */
   readonly trackPicker = new TrackPicker();
 
@@ -155,20 +157,33 @@ export class NewSessionModal {
   }
 
   async createSessionFromModal(): Promise<void> {
+    // Resolving a track can wait on a dependency install for tens of seconds;
+    // a second Create meanwhile would open a second session.
+    if (this.creating) return;
     const nameInput = document.getElementById('session-name-input') as HTMLInputElement;
     const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement;
 
     let name = nameInput.value.trim() || undefined;
     let cwd = cwdInput.value.trim() || undefined;
 
-    const picked = await this.trackPicker.resolve();
+    // Disabled as well as guarded, so the wait doesn't look like a dead button.
+    const confirm = document.getElementById('new-session-confirm') as HTMLButtonElement | null;
+    this.creating = true;
+    if (confirm) confirm.disabled = true;
+    let picked;
+    try {
+      picked = await this.trackPicker.resolve();
+    } finally {
+      this.creating = false;
+      if (confirm) confirm.disabled = false;
+    }
     if (picked === false) return; // the picker is showing why
     if (picked) {
       cwd = picked.worktreePath;
       name = name ?? picked.track;
     }
 
-    this.host.createSession(name, cwd);
+    this.host.createSession(name, cwd, picked?.notice);
     this.hide();
   }
 }

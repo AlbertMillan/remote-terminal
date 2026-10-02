@@ -47,7 +47,9 @@ vi.mock('../src/server/jobs/worktree.js', () => ({
     baseBranch: 'trunk',
     initialisedRepo: false,
   })),
-  removeWorktree: vi.fn(async () => ({ removed: true, branchDeleted: true })),
+  removeWorktree: vi.fn(async () => ({ removed: true, branchDeleted: true, linksLeft: [] as string[] })),
+  describeLinksLeft: (path: string, links: string[]) => `links left in ${path}: ${links.join(', ')}`,
+  worktreePathFor: (id: string) => `C:/wt/${id}`,
   commitAll: vi.fn(async () => true),
   currentBranch: vi.fn(async () => 'SHOULD-NOT-BE-USED'),
   diffStat: vi.fn(async () => ({ files: 0, insertions: 0, deletions: 0 })),
@@ -444,6 +446,16 @@ describe('cancellation (finding 1)', () => {
     expect(store.getJob(job.id)!.detail).toBeNull();
   });
 
+  it('keeps the worktree path when a link in it could not be removed, so Discard can retry', async () => {
+    const { removeWorktree } = await import('../src/server/jobs/worktree.js');
+    vi.mocked(removeWorktree).mockResolvedValueOnce({ removed: false, branchDeleted: false, linksLeft: ['C:/wt/job/src/linked'] });
+    const id = await startJob();
+    const job = await runner.cancelJob(id);
+    expect(job.status).toBe('cancelled');
+    expect(job.worktreePath).toBe('C:/wt/job');
+    expect(job.detail).toContain('C:/wt/job/src/linked');
+  });
+
   it('refuses to cancel a job that already finished, pointing at discard', async () => {
     const id = await startJob();
     await runner.cancelJob(id);
@@ -464,6 +476,19 @@ describe('discard', () => {
     const result = await runner.discardJob(id);
     expect(result.worktreeRemoved).toBe(true);
     expect(result.branchDeleted).toBe(true);
+    expect(store.getJob(id)).toBeNull();
+  });
+
+  it('keeps the row when a link in the worktree could not be removed', async () => {
+    const { removeWorktree } = await import('../src/server/jobs/worktree.js');
+    const id = await startJob();
+    await runner.cancelJob(id);
+    vi.mocked(removeWorktree).mockResolvedValueOnce({ removed: false, branchDeleted: false, linksLeft: ['C:/wt/job/linked'] });
+
+    await expect(runner.discardJob(id)).rejects.toThrow('C:/wt/job/linked');
+    expect(store.getJob(id)).not.toBeNull();
+    // Once the link is gone, Discard finishes.
+    await runner.discardJob(id);
     expect(store.getJob(id)).toBeNull();
   });
 

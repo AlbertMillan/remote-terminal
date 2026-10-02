@@ -16,6 +16,7 @@ import {
   commitAll,
   createWorktree,
   currentBranch,
+  describeLinksLeft,
   removeWorktree,
   WorktreeError,
 } from './worktree.js';
@@ -35,6 +36,7 @@ import {
   TrackBranchError,
 } from '../projects/track-branches.js';
 import { withProjectLock } from '../projects/project-lock.js';
+import { installDependencies, needsInstall } from '../projects/project-deps.js';
 import { isProcessRunning } from '../utils/platform.js';
 import type { RunTag } from '../agent/claude-run.js';
 import { readFindings, selectedFindings } from './findings.js';
@@ -260,6 +262,16 @@ async function executeDesign(job: Job, signal?: AbortSignal): Promise<void> {
       }
       throw error;
     }
+  }
+
+  // The worktree's own dependencies, so QA can run the tests. Checked on every
+  // design pass rather than only at creation: a retried job whose install
+  // failed reaches here with its worktree already recorded. A failure fails
+  // the stage, never an automatic retry — a missing native toolchain fails the
+  // same way every time.
+  if (needsInstall(worktreePath)) {
+    const install = await installDependencies(worktreePath, signal);
+    if (!install.ok) throw new JobError(install.detail, 500);
   }
 
   // Consume any answer the user gave to a previous pass's question.
@@ -611,13 +623,16 @@ async function executeMerge(job: Job): Promise<void> {
   );
 
   // The work has landed, so the worktree and branch have served their purpose.
-  await removeWorktree(job.projectCwd, job.id, { deleteBranch: job.branch });
+  // A link the teardown could not remove keeps the worktree on disk and
+  // registered: keep its path, so Discard runs the teardown again.
+  const torn = await removeWorktree(job.projectCwd, job.id, { deleteBranch: job.branch });
+  const linked = torn.linksLeft.length > 0 && job.worktreePath;
   updateJob(job.id, {
     status: 'queued',
     stage: 'merge',
-    worktreePath: null,
+    worktreePath: linked ? job.worktreePath : null,
     gate: null,
-    detail: result.detail,
+    detail: linked ? `${result.detail} ${describeLinksLeft(job.worktreePath as string, torn.linksLeft)}` : result.detail,
     mergeSha: result.mergeSha,
   });
   void pump();

@@ -22,6 +22,7 @@ import {
 } from './project-doc-format.js';
 import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './track-store.js';
 import { readProjectPlan } from './project-plan.js';
+import { isInstalling } from './project-deps.js';
 import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
 
 const logger = createLogger('track-delete');
@@ -542,6 +543,14 @@ export async function executeTrackDelete(
   const plan = await planTrackDelete(project, trackName, sessions.map((s) => s.cwd)); // 1.
   if (plan.token !== choices.token) {
     throw new TrackDeleteError('The track changed since this was opened — review it again', 409);
+  }
+  // Before anything is cancelled or reverted: the teardown would delete
+  // node_modules under a running npm that keeps writing into the folder.
+  if (plan.branch && isInstalling(plan.branch.worktreePath)) {
+    throw new TrackDeleteError(
+      'Dependencies are still installing in this track’s worktree — delete it once that has finished',
+      409
+    );
   }
   const chosen = await choose(project.cwd, plan, choices);
   const pre = await preflight(project.cwd, plan, chosen); // 2.

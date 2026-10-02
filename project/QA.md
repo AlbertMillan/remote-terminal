@@ -15,8 +15,9 @@ commands:
   `~/.claude-remote/sessions.db`, and a second instance would bind the same port and open
   the same live database. A job that needs a running server must use the isolated boot in
   Flow 3.
-- `npm ci` / `npm install` only if `node_modules` is missing — the worktree normally
-  inherits it.
+- The pipeline installs dependencies when it creates the worktree. If `node_modules` is
+  still missing, run `npm ci` there. Never link another checkout's `node_modules` in:
+  removing the worktree would empty it.
 - No browser is available to this stage. Anything that can only be seen in the UI is out
   of scope here; say so rather than guessing (see "Not covered" below).
 

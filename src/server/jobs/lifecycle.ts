@@ -7,7 +7,7 @@ import {
   updateJob,
   updateStage,
 } from './store.js';
-import { removeWorktree } from './worktree.js';
+import { describeLinksLeft, removeWorktree, worktreePathFor } from './worktree.js';
 import { JobError } from './errors.js';
 import { inFlight } from './in-flight.js';
 import { pump } from './pipeline.js';
@@ -127,8 +127,15 @@ export async function cancelJob(jobId: string): Promise<JobWithStages> {
   }
 
   if (job.worktreePath) {
-    await removeWorktree(job.projectCwd, jobId, { deleteBranch: job.branch });
-    updateJob(jobId, { worktreePath: null });
+    const torn = await removeWorktree(job.projectCwd, jobId, { deleteBranch: job.branch });
+    // A link left in the worktree means git never ran and the worktree is
+    // still on disk. Keep the path, so Discard runs the teardown again.
+    updateJob(
+      jobId,
+      torn.linksLeft.length > 0
+        ? { detail: describeLinksLeft(job.worktreePath, torn.linksLeft) }
+        : { worktreePath: null }
+    );
   }
   logger.info({ jobId, aborted: Boolean(running) }, 'job: cancelled');
   void pump();
@@ -168,6 +175,14 @@ export async function discardJob(jobId: string): Promise<DiscardResult> {
     // Deleting the branch is safe either way: if the merge landed, its commits
     // already live in the base branch and only the label goes.
     const torn = await removeWorktree(job.projectCwd, jobId, { deleteBranch: job.branch });
+    if (torn.linksLeft.length > 0) {
+      // The worktree is still registered and on disk. Dropping the row would
+      // leave nothing recording it, so keep it and let Discard run again.
+      throw new JobError(
+        describeLinksLeft(job.worktreePath || worktreePathFor(jobId), torn.linksLeft),
+        409
+      );
+    }
     worktreeRemoved = torn.removed;
     branchDeleted = torn.branchDeleted;
   }

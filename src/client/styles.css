@@ -937,6 +937,14 @@ body {
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 
+/* Waiting on something (a track's dependency install): no hover lift. */
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn-secondary {
   background-color: var(--bg-tertiary);
   color: var(--text-secondary);
