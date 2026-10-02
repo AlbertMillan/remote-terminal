@@ -29,6 +29,7 @@ import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
 import { buildProject } from './project-build.js';
 import { installDependencies, needsInstall } from './project-deps.js';
+import { isServerRoot, recheckBuildState, restartHint } from '../server-restart.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
@@ -408,10 +409,14 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         // for minutes would refuse every Land/Delete/merge meanwhile. A failed
         // build does not undo the land — it is reported alongside it.
         const build = await buildProject(project.cwd);
+        // Landing this server's own project changes nothing it runs until a
+        // restart, and "build passed" alone reads as though nothing more is
+        // needed. Re-check (the cache predates the merge) and say which.
+        const hint = isServerRoot(project.cwd) ? restartHint((await recheckBuildState())?.state) : '';
         return {
           ...landed,
           build,
-          detail: build.ran ? `${landed.detail} — ${build.detail}` : landed.detail,
+          detail: (build.ran ? `${landed.detail} — ${build.detail}` : landed.detail) + hint,
         };
       });
     }

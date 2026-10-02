@@ -2,6 +2,7 @@ import { escapeHtml, escapeAttr } from './html-utils.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog } from './track-branch-now-dialog.js';
 import { installTrackDependencies } from './track-picker.js';
+import { BUILD_CHANGED_EVENT } from './server-restart.js';
 import { formatUsageCost, hasSpend, projectUsageTooltip, type ProjectUsage } from './job-board.js';
 import {
   renderAddRow,
@@ -720,7 +721,11 @@ export class ProjectWorkspace {
       track,
     });
     await this.reload();
-    if (data) this.flash(data.detail);
+    if (data) {
+      this.flash(data.detail);
+      // A Land of this server's own project leaves it behind its build.
+      window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
+    }
   }
 
   /**

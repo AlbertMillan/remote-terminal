@@ -35,3 +35,14 @@ up if it fails. The route refuses (409) unless the server runs from `dist/` on p
 requires a same-origin request and a Tailscale identity. The client waits for a *different*
 `bootId` from `GET /api/server/status` before reloading, since the old server keeps answering
 for a moment after the 202. Sessions come back stale and revive from the sidebar.
+
+**When a restart is needed:** `npm run build` ends with `scripts/write-build-info.mjs`, which
+stamps `dist/build-info.json` with the commit built (`sha`) and `builtAt`. The server reads
+it once at boot (the build it runs) and again for each `GET /api/server/status` (the build
+on disk), whose `build.state` is `restart` when the two differ and `rebuild` when a build input
+(`src/`, `package.json`, `package-lock.json`, `tsconfig*.json`,
+`scripts/copy-client-assets.mjs`) changed in a commit after the on-disk `sha`. Rebuild wins;
+docs-only and uncommitted changes never count. Either shows a chip beside "Connected" that
+opens Settings → Server — never a one-click restart, since that ends every terminal. A Land of
+this project re-checks and says which is needed. A `dist/` from before stamps, dev mode, or no
+git shows nothing (`unknown`). Spec: `project/server-behind-build.md`.

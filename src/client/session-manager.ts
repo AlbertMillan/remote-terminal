@@ -8,7 +8,7 @@ import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
-import { ServerRestartControl } from './server-restart.js';
+import { BuildChip, ServerRestartControl } from './server-restart.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { SessionListView } from './session-list-view.js';
@@ -98,6 +98,8 @@ class SessionManager {
 
   /** Restart / Build & restart in the Settings modal. */
   private serverRestart = new ServerRestartControl();
+  /** Says when the running server is behind its build; opens Settings → Server. */
+  private buildChip = new BuildChip(() => void this.showServerSettings());
   /** A notice for the session being created, until the server names its id. */
   private createNotice: { cwd: string; text: string } | null = null;
   /** Notices to write into a session's terminal on its first attach. */
@@ -148,6 +150,7 @@ class SessionManager {
     this.setupPipButton();
     this.jobOverlay.attach();
     this.planUsage.attach();
+    this.buildChip.start();
     this.initBrowserNotifications();
     this.connect();
   }
@@ -1403,6 +1406,12 @@ class SessionManager {
     this.updateSettingsUI();
     modal.classList.remove('hidden');
     void this.serverRestart.refresh();
+  }
+
+  /** Settings, scrolled to its Server section: where the build chip's restart is confirmed. */
+  private async showServerSettings(): Promise<void> {
+    await this.showSettingsModal();
+    document.getElementById('server-restart-section')?.scrollIntoView({ block: 'nearest' });
   }
 
   private hideSettingsModal(): void {

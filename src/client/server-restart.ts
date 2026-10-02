@@ -10,11 +10,24 @@ import { jsonPost } from './job-board-types.js';
  * server responds" is not proof it restarted. Each boot has its own bootId.
  */
 
-interface ServerStatus {
+/** Mirrors BuildStatus in src/server/server-restart.ts. */
+export interface BuildStatus {
+  state: 'current' | 'restart' | 'rebuild' | 'unknown';
+  running: { sha: string; builtAt: string } | null;
+  onDisk: { sha: string; builtAt: string } | null;
+  reason: string | null;
+}
+
+export interface ServerStatus {
   bootId: string;
   canRestart: boolean;
   reason: string | null;
+  /** Absent from a server older than the build-state check. */
+  build?: BuildStatus;
 }
+
+/** Fired after something that can change the build state (a Land), so the chip re-checks now. */
+export const BUILD_CHANGED_EVENT = 'claude-remote:build-changed';
 
 const POLL_MS = 1000;
 const WAIT_LIMIT_MS = 60_000;
@@ -142,5 +155,87 @@ export class ServerRestartControl {
     this.running = false;
     this.setButtonsDisabled(false);
     this.setStatus(message, true);
+  }
+}
+
+const CHIP_POLL_MS = 60_000;
+
+export interface ChipView {
+  text: string;
+  title: string;
+}
+
+/**
+ * What the chip says, or null to hide it. Only `restart` and `rebuild` show:
+ * `unknown` (dev mode, an unstamped dist/) would otherwise sit lit forever.
+ * When this server can't restart itself the chip still shows, and its tooltip
+ * gives why and the step to take by hand.
+ */
+export function chipView(status: ServerStatus | null): ChipView | null {
+  const build = status?.build;
+  if (!status || !build || (build.state !== 'restart' && build.state !== 'rebuild')) return null;
+  const rebuild = build.state === 'rebuild';
+  const lines = [build.reason || ''];
+  if (status.canRestart) {
+    lines.push(rebuild ? 'Open Settings → Server → Build & restart.' : 'Open Settings → Server → Restart.');
+  } else {
+    lines.push(
+      status.reason || 'Restart from the UI is unavailable here.',
+      rebuild
+        ? 'By hand: run npm run build, then restart the server where it was started.'
+        : 'By hand: restart the server where it was started.'
+    );
+  }
+  return {
+    text: rebuild ? 'Build & restart to load new commits' : 'Restart to load the new build',
+    title: lines.filter(Boolean).join('\n'),
+  };
+}
+
+/**
+ * The chip beside "Connected" that says the running server is behind its build.
+ * It only ever opens Settings → Server: a restart ends every terminal, so the
+ * confirm stays there, in ServerRestartControl, never on one click here.
+ */
+export class BuildChip {
+  private checking = false;
+
+  constructor(
+    private readonly openServerSettings: () => void,
+    private readonly poll: () => Promise<ServerStatus | null> = fetchStatus
+  ) {
+    this.el()?.addEventListener('click', () => this.openServerSettings());
+  }
+
+  /** Check now, then every minute, on window focus, and after a Land. */
+  start(): void {
+    void this.refresh();
+    window.setInterval(() => void this.refresh(), CHIP_POLL_MS);
+    window.addEventListener('focus', () => void this.refresh());
+    window.addEventListener(BUILD_CHANGED_EVENT, () => void this.refresh());
+  }
+
+  async refresh(): Promise<void> {
+    if (this.checking) return;
+    this.checking = true;
+    try {
+      this.render(chipView(await this.poll()));
+    } finally {
+      this.checking = false;
+    }
+  }
+
+  private el(): HTMLButtonElement | null {
+    return document.getElementById('build-chip') as HTMLButtonElement | null;
+  }
+
+  private render(view: ChipView | null): void {
+    const chip = this.el();
+    if (!chip) return;
+    chip.hidden = !view;
+    if (!view) return;
+    chip.textContent = view.text;
+    chip.title = view.title;
+    chip.setAttribute('aria-label', `${view.text}. ${view.title}`);
   }
 }
