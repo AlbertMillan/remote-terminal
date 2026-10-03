@@ -1,4 +1,10 @@
-# Scripts with a shebang check out LF everywhere, core.autocrlf or not: a CRLF
-# shebang fails on Linux (env: 'node\r') and vitest cannot import it.
+# Every text file checks out LF, core.autocrlf or not. The index is already LF;
+# without this, autocrlf=true warns "LF will be replaced by CRLF" for each file
+# an editor or agent writes with LF, and the working tree drifts into a mix.
+* text=auto eol=lf
+
+# Scripts with a shebang must stay LF everywhere: a CRLF shebang fails on Linux
+# (env: 'node\r') and vitest cannot import it. Covered by the rule above; kept
+# explicit so narrowing that rule can't silently drop them.
 scripts/*.mjs text eol=lf
 scripts/*.sh text eol=lf
