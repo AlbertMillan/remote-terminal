@@ -25,6 +25,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+/** Land with no running sessions anywhere. */
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
 const { runMergeStage } = await import('../src/server/jobs/stages/merge.js');
 
 const DOC = `## Track: Alpha
@@ -206,7 +208,7 @@ describe('landTrack', () => {
     );
     commitFile(repo, 'PROJECT.md', mainDoc, 'rename on main');
 
-    const result = await tracks.landTrack(project(), 'Alpha', []);
+    const result = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
 
     expect(existsSync(join(repo, 'src', 'a.ts'))).toBe(true);
     expect(git(repo, 'log', '-1', '--format=%s', result.mergeSha)).toBe('Merge track: Alpha');
@@ -229,7 +231,7 @@ describe('landTrack', () => {
 
   it('keeps the landed row and starts a new one when the track is reopened', async () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     const reopened = await tracks.ensureTrackBranch(project(), 'Alpha');
 
     const rows = tracks.listTrackBranches(repo);
@@ -253,7 +255,7 @@ describe('landTrack', () => {
     commitFile(repo, 'shared.ts', 'main side\n', 'main edit');
     const mainHead = git(repo, 'rev-parse', 'HEAD');
 
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({ status: 409 });
 
     // The reset commit is taken back off: the tick is still on the track branch.
     expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(worktreeHead);
@@ -268,7 +270,7 @@ describe('landTrack', () => {
     commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'work');
     rmSync(t.worktreePath, { recursive: true, force: true });
 
-    const result = await tracks.landTrack(project(), 'Alpha', []);
+    const result = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     expect(existsSync(join(repo, 'src', 'a.ts'))).toBe(true);
     expect(result.mergeSha).toBe(git(repo, 'rev-parse', 'HEAD~0'));
   });
@@ -276,18 +278,74 @@ describe('landTrack', () => {
   it('refuses while the worktree has uncommitted code, naming the file', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('scratch.ts'),
     });
     expect(existsSync(t.worktreePath)).toBe(true);
   });
 
-  it('refuses while a session is open inside the worktree', async () => {
+  /**
+   * A fake session manager that records each close and the HEAD of main at
+   * that moment, so a test can prove every close finished before the merge.
+   */
+  function recordingSessions(sessions: { id: string; cwd: string }[]) {
+    const calls: { id: string; mainHead: string }[] = [];
+    return {
+      calls,
+      deps: {
+        sessions,
+        terminateSession: async (id: string) => {
+          // Yield first, as the real one does while it waits for the PTY.
+          await new Promise((r) => setTimeout(r, 20));
+          calls.push({ id, mainHead: git(repo, 'rev-parse', 'HEAD') });
+          return true;
+        },
+      },
+    };
+  }
+
+  it('closes the sessions running in the worktree before merging, and leaves the rest alone', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    await expect(
-      tracks.landTrack(project(), 'Alpha', [join(t.worktreePath, 'src')])
-    ).rejects.toMatchObject({ status: 409 });
+    const beta = await tracks.ensureTrackBranch(project(), 'Beta');
+    commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'work');
+    const before = git(repo, 'rev-parse', 'HEAD');
+    const fake = recordingSessions([
+      { id: 'in-root', cwd: t.worktreePath },
+      { id: 'in-sub', cwd: join(t.worktreePath, 'src') },
+      { id: 'on-main', cwd: repo },
+      { id: 'other-track', cwd: beta.worktreePath },
+    ]);
+
+    const result = await tracks.landTrack(project(), 'Alpha', fake.deps);
+
+    expect(fake.calls.map((c) => c.id)).toEqual(['in-root', 'in-sub']);
+    // Both closes ran while main was still at its pre-land HEAD: before the
+    // plan commit and the merge, so before the teardown too.
+    expect(fake.calls.every((c) => c.mainHead === before)).toBe(true);
+    expect(result.closedSessions).toBe(2);
+    expect(result.detail).toMatch(/closed 2 open sessions/);
+    expect(existsSync(t.worktreePath)).toBe(false);
+    expect(existsSync(beta.worktreePath)).toBe(true);
+  });
+
+  it('closes nothing, and keeps the session, when the worktree has uncommitted code', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
+    const fake = recordingSessions([{ id: 's1', cwd: t.worktreePath }]);
+    await expect(tracks.landTrack(project(), 'Alpha', fake.deps)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('scratch.ts'),
+    });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('closes nothing when an earlier check refuses', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    git(repo, 'checkout', '-q', '-b', 'elsewhere');
+    const fake = recordingSessions([{ id: 's1', cwd: t.worktreePath }]);
+    await expect(tracks.landTrack(project(), 'Alpha', fake.deps)).rejects.toMatchObject({ status: 409 });
+    expect(fake.calls).toEqual([]);
   });
 
   it('refuses while dependencies are installing in the worktree', async () => {
@@ -299,7 +357,7 @@ describe('landTrack', () => {
     writeFileSync(join(t.worktreePath, 'package-lock.json'), '{ not json');
     const installing = installDependencies(t.worktreePath);
     try {
-      await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+      await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
         status: 409,
         message: expect.stringMatching(/still installing/),
       });
@@ -311,14 +369,14 @@ describe('landTrack', () => {
   it('refuses when the project is not on the branch the track came from', async () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     git(repo, 'checkout', '-q', '-b', 'elsewhere');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({ status: 409 });
   });
 });
 
 describe('deleteTrackBranchRows', () => {
   it('keeps the unlanded row when asked, and drops the landed ones', async () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     const reopened = await tracks.ensureTrackBranch(project(), 'Alpha');
 
     tracks.deleteTrackBranchRows(repo, 'Alpha', { keepUnlanded: true });

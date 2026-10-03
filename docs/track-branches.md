@@ -158,8 +158,7 @@ path (`pathKey`) and track name. Tracks have no id in the PROJECT.md format.
 Land is refused (409) unless:
 
 - no job for the track is queued, running or parked;
-- no live session has its cwd inside the worktree. On Windows an open shell holds the
-  directory, and `git worktree remove` would fail half-way;
+- no dependency install is running in the worktree;
 - the project is on the track's base branch;
 - the worktree holds no uncommitted code. Uncommitted planning files there
   (PROJECT.md, `project/*.md` outside `project/reviews/`) are committed on the track
@@ -171,6 +170,29 @@ Land is refused (409) unless:
 - nothing is staged on main, since `git merge` refuses then.
 
 Every dirty refusal names the files (`statusEntries`, every untracked file listed).
+
+**Then Land closes the sessions running in the worktree itself**, as Delete track does,
+awaiting each one: on Windows an open shell holds the directory, and `git worktree
+remove` would fail half-way. It used to refuse instead, which made landing "commit,
+find and close the session, wait for its log run, Land" (spec:
+`project/land-closes-sessions.md`).
+
+- **After every refusal**, so a Land that is going to refuse never kills a session for
+  nothing. The dirty-code check comes first, so a session with uncommitted code in the
+  worktree is never closed. A merge conflict, which no check can foresee, still fails
+  after the close.
+- **Running sessions only** (`sessionManager.getRunningSessions()`). A shell that exited
+  stays in the session list as `terminated` but holds nothing open; it once blocked
+  Land with `[Process exited with code 1]` on screen. Land, Delete's `sessionsToClose`
+  and the board's `openSessions` all read this one list.
+- **`terminateSession` resolves once the PTY has exited** (bounded at 5 s). `pty.kill()`
+  only signals it.
+- **No wait for the session-log run.** Closing starts one, but it runs in the main
+  checkout (`session-log-feature.md` §5a), so it holds nothing in the worktree. Its
+  first git reads do touch the worktree, briefly.
+- The board's Land confirm says "N open session(s) in its worktree will be closed",
+  from the branched track's `openSessions` as of the last board load. The result's
+  detail says how many were actually closed.
 
 It then puts the section back on main (`returnSectionToMain`): one commit through the
 temporary index of HEAD's PROJECT.md plus the worktree's section — merged by id with any
@@ -272,8 +294,8 @@ caller keeps what would let the teardown run again:
   says to remove them, since nothing else records them.
 
 **Land and Delete track refuse while an install is running** in the track's worktree
-(`isInstalling`). During Open session's wait no session exists yet, so the
-live-session check can't see it, and the teardown would delete `node_modules` under a
+(`isInstalling`). During Open session's wait no session exists yet, so closing the
+worktree's sessions can't stop it, and the teardown would delete `node_modules` under a
 running npm.
 
 The boot sweep also removes a deregistered folder holding only `node_modules` (and

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { unlinkSync } from 'fs';
-import { createPty, resizePty, writeToPty, killPty, ScrollbackBuffer } from './pty-handler.js';
+import { createPty, resizePty, writeToPty, killPty, ptyExit, ScrollbackBuffer } from './pty-handler.js';
 import { generateSessionLog } from './project-log.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
@@ -37,6 +37,7 @@ const logger = createLogger('session-manager');
 // Configuration constants
 const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
 const DB_UPDATE_DEBOUNCE_MS = 5000; // Debounce database updates for session activity
+const PTY_EXIT_WAIT_MS = 5000; // Longest terminateSession waits for a killed PTY to exit
 
 class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
@@ -219,6 +220,16 @@ class SessionManager {
     return Array.from(this.activeSessions.values());
   }
 
+  /**
+   * Sessions whose PTY is still running. A shell that exited stays in
+   * activeSessions as `terminated` (its scrollback is still attachable) but
+   * holds no folder open, so Land and Delete track must neither wait on it
+   * nor "close" it. Both read this one list, or they drift apart again.
+   */
+  getRunningSessions(): ActiveSession[] {
+    return this.getAllSessions().filter((s) => s.status !== 'terminated');
+  }
+
   getSessionList(): (SessionMetadata & { attachable: boolean })[] {
     const dbSessions = getAllSessionsFromDb();
     // Mark sessions as attachable only if they have an active PTY in memory
@@ -251,7 +262,10 @@ class SessionManager {
       await killTmuxSession(session.tmuxSession);
     }
 
-    // Kill PTY
+    // Kill PTY. kill() only signals it; Land and Delete track tear the
+    // session's folder down once this resolves, and on Windows a shell still
+    // exiting holds its cwd, so wait for the exit (bounded) before returning.
+    const exited = session.status === 'terminated' ? Promise.resolve() : ptyExit(session.pty, PTY_EXIT_WAIT_MS);
     killPty(session.pty);
 
     // Clean up listeners and buffers
@@ -285,6 +299,10 @@ class SessionManager {
 
     // Remove from active sessions
     this.activeSessions.delete(id);
+
+    // Only after the delete: the exit handler finds no session then, so it
+    // cannot mark it terminated and log it a second time.
+    await exited;
 
     return true;
   }

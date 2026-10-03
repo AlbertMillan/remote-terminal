@@ -27,6 +27,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+/** Land with no running sessions anywhere. */
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
 const { getRegistryPath } = await import('../src/server/projects/registry.js');
 const { getWorkspaceBoard } = await import('../src/server/projects/workspace.js');
 const { registerProjectRoutes } = await import('../src/server/projects/routes.js');
@@ -208,6 +210,14 @@ describe('board', () => {
     expect(beta.statusCode).toBe(200);
   });
 
+  it('counts the running sessions inside a branched track’s worktree, for the Land confirm', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const board = getWorkspaceBoard(undefined, [t.worktreePath, join(t.worktreePath, 'src'), repo]);
+    const p = board.find((x) => pathKey(x.cwd) === pathKey(repo));
+    expect(p?.tracks.find((x) => x.name === 'Alpha')?.openSessions).toBe(2);
+    expect(p?.tracks.find((x) => x.name === 'Beta')?.openSessions).toBe(0);
+  });
+
   it('shows one copy with a badge when main also has lines, and Move into branch takes them over', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     // A session on main writes a line for the in-progress track.
@@ -236,7 +246,7 @@ describe('land', () => {
     write(t.worktreePath, 'PROJECT.md', read(t.worktreePath).replace('- [ ] `f-aaaaaa`', '- [x] `f-aaaaaa`'));
     write(t.worktreePath, 'project/alpha.md', '# Alpha\n\nRevised in the track.\n');
 
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     expect(read(repo)).toContain('- [x] `f-aaaaaa`');
     expect(read(repo, 'project/alpha.md')).toContain('Revised in the track');
     expect(git(repo, 'status', '--porcelain')).toBe('');
@@ -245,7 +255,7 @@ describe('land', () => {
   it('refuses uncommitted code on main, naming it', async () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     write(repo, 'src/stray.ts', 'export {};\n');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('src/stray.ts'),
     });
@@ -262,7 +272,7 @@ describe('land', () => {
     write(repo, 'PROJECT.md', read(repo).replace('`f-cccccc` Unrelated', '`f-cccccc` Unrelated, a backlog edit'));
     write(repo, 'project/backlog.md', '# Backlog idea\n');
 
-    const result = await tracks.landTrack(project(), 'Alpha', []);
+    const result = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     expect(result.pushed).toBe(true);
 
     expect(read(repo)).toContain('a backlog edit');
@@ -284,7 +294,7 @@ describe('land', () => {
     write(t.worktreePath, 'PROJECT.md', read(t.worktreePath).replace('- [ ] `f-bbbbbb`', '- [x] `f-bbbbbb`'));
     commitFile(repo, 'PROJECT.md', `${read(repo)}\n## Track: Alpha\n- [ ] \`f-eeeeee\` Added on main\n`, 'main line');
 
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     const landed = read(repo);
     expect(landed.match(/## Track: Alpha/g)).toHaveLength(1);
     expect(landed).toContain('- [x] `f-bbbbbb`');
@@ -498,7 +508,7 @@ describe('land rollback', () => {
     write(repo, 'project/backlog.md', '# Backlog idea\n');
     const docBefore = readFileSync(join(repo, 'PROJECT.md'));
 
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({ status: 409 });
 
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
     expect(readFileSync(join(repo, 'PROJECT.md')).equals(docBefore)).toBe(true);
@@ -515,7 +525,7 @@ describe('land rollback', () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     write(repo, 'PROJECT.md', read(repo).replace('Unrelated', 'Unrelated, staged'));
     git(repo, 'add', 'PROJECT.md');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('staged on main: PROJECT.md'),
     });

@@ -343,17 +343,26 @@ export interface LandResult {
   pushed: boolean;
   /** Feature ids in the section Land put back on main. */
   synced: string[];
+  /** Running sessions in the worktree that Land closed before merging. */
+  closedSessions: number;
   detail: string;
+}
+
+/** What Land needs from the session manager — injected, as Delete track's deps are. */
+export interface LandDeps {
+  /** Running sessions only (`getRunningSessions`): an exited shell holds nothing open. */
+  sessions: { id: string; cwd: string }[];
+  /** Must resolve only once the PTY is gone. */
+  terminateSession: (id: string) => Promise<unknown>;
 }
 
 /**
  * Land a track: put its plan back on main, merge its branch into the base
  * once, then retire the worktree.
  *
- * Refused unless every job for the track has finished, no live session is
- * running inside the worktree (on Windows an open shell holds the directory
- * and `git worktree remove` fails half-way), the project is on the base
- * branch, and the checkouts hold nothing Land can't account for:
+ * Refused unless every job for the track has finished, no install is running
+ * in the worktree, the project is on the base branch, and the checkouts hold
+ * nothing Land can't account for:
  *  - the worktree: uncommitted planning files are committed there first
  *    (it belongs to this track and never pushes); anything else refuses;
  *  - main: uncommitted planning files (backlog edits) and the session log
@@ -361,6 +370,10 @@ export interface LandResult {
  *    left uncommitted; anything else refuses, since code edited on main may
  *    be this track's work. Nothing may be STAGED: git refuses to merge then.
  * Every refusal names the files.
+ *
+ * Once nothing refuses, Land closes the sessions running inside the worktree
+ * itself, awaiting each (on Windows an open shell holds the directory and
+ * `git worktree remove` fails half-way).
  *
  * PROJECT.md never goes through the merge. The branch's copy is reset to its
  * merge-base first, and the section is copied onto main by its own commit
@@ -370,7 +383,7 @@ export interface LandResult {
 export async function landTrack(
   project: RegistryProject,
   trackName: string,
-  liveSessionCwds: string[]
+  deps: LandDeps
 ): Promise<LandResult> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
@@ -394,15 +407,9 @@ export async function landTrack(
     );
   }
 
-  const inside = liveSessionCwds.filter((c) => isInside(track.worktreePath, c));
-  if (inside.length > 0) {
-    throw new TrackBranchError(
-      'A session is still open in this track’s worktree — close it before landing',
-      409
-    );
-  }
   // No session exists yet while Open session waits on the install, so the
-  // check above can't see it; the teardown would delete under a running npm.
+  // sessions Land closes can't include it; the teardown would delete under a
+  // running npm.
   if (isInstalling(track.worktreePath)) {
     throw new TrackBranchError(
       'Dependencies are still installing in this track’s worktree — land once the session has opened',
@@ -453,6 +460,15 @@ export async function landTrack(
       409
     );
   }
+
+  // Every refusal is behind us, so closing now never kills a session for a
+  // Land that then refuses — and the dirty-code check above means a session
+  // with uncommitted code is never closed. Awaited one by one: on Windows an
+  // open shell's cwd makes `git worktree remove` fail half-way, so each PTY
+  // must be gone before the merge and teardown start. Their session-log runs
+  // go to the main checkout (worktreeOwner), so nothing waits on those.
+  const toClose = deps.sessions.filter((s) => isInside(track.worktreePath, s.cwd));
+  for (const s of toClose) await deps.terminateSession(s.id);
 
   // 1. The plan back onto main, then PROJECT.md out of the merge.
   const returned = await returnSectionToMain({ project, worktreePath: track.worktreePath, trackName });
@@ -515,13 +531,17 @@ export async function landTrack(
       : '';
 
   const synced = returned.featureIds;
-  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced }, 'track landed');
+  const closed = toClose.length;
+  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced, closed }, 'track landed');
   return {
     mergeSha,
     pushed,
     synced,
+    closedSessions: closed,
     detail:
-      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) + leftover,
+      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) +
+      (closed > 0 ? ` — closed ${closed} open session${closed === 1 ? '' : 's'} in its worktree` : '') +
+      leftover,
   };
 }
 

@@ -55,6 +55,8 @@ vi.mock('../src/server/agent/claude-run.js', async (importActual) => ({
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+/** Land with no running sessions anywhere. */
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
 const { generateSessionLogForced } = await import('../src/server/sessions/project-log.js');
 const { worktreeOwner } = await import('../src/server/projects/worktree-owner.js');
 const { createJob, updateJob } = await import('../src/server/jobs/store.js');
@@ -146,7 +148,7 @@ describe('generateSessionLog for a worktree session', () => {
 
   it('still logs to main once the worktree is gone, from the transcript alone', async () => {
     const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
-    await tracks.landTrack({ cwd: repo }, 'Alpha', []);
+    await tracks.landTrack({ cwd: repo }, 'Alpha', NO_SESSIONS);
     expect(existsSync(t.worktreePath)).toBe(false);
 
     expect(await generateSessionLogForced(ctx(t.worktreePath))).toBe('generated');
@@ -190,7 +192,7 @@ describe('landTrack with a tracked SESSION-LOG.md', () => {
     const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
     writeFileSync(join(repo, 'SESSION-LOG.md'), '# Session Log\n\nan entry for the worktree session\n');
 
-    const landed = await tracks.landTrack({ cwd: repo }, 'Alpha', []);
+    const landed = await tracks.landTrack({ cwd: repo }, 'Alpha', NO_SESSIONS);
     expect(landed.mergeSha).toBeTruthy();
     expect(existsSync(t.worktreePath)).toBe(false);
     expect(git(repo, 'status', '--porcelain')).toBe('M SESSION-LOG.md');

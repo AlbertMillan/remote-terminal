@@ -25,6 +25,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+/** Land with no running sessions anywhere. */
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const store = await import('../src/server/jobs/store.js');
 const { jobMergeMessageArgs } = await import('../src/server/jobs/merge-trailers.js');
@@ -145,7 +147,7 @@ describe('a landed track', () => {
   it('reverts the land in one commit and keeps later unrelated work', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'work');
-    const landed = await tracks.landTrack(project(), 'Alpha', []);
+    const landed = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     commitFile(repo, 'later.ts', 'unrelated\n', 'later work');
     const beforeDelete = git(repo, 'rev-parse', 'HEAD');
 
@@ -165,7 +167,7 @@ describe('a landed track', () => {
   it('reverts only the land, not a job merged into the track branch before it', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     mergeLikeAJob('First step', 'src/first.ts', { jobId: 'job-in-track', featureId: 'f-aaaaaa' }, t.worktreePath);
-    const landed = await tracks.landTrack(project(), 'Alpha', []);
+    const landed = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
 
     const { plan, result } = await planAndRun();
 
@@ -177,7 +179,7 @@ describe('a landed track', () => {
   it('changes nothing when the revert conflicts, and names the file', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     commitFile(t.worktreePath, 'shared.ts', 'line 1\nline 2 by the track\nline 3\n', 'work');
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     commitFile(repo, 'shared.ts', 'line 1\nline 2 rewritten later\nline 3\n', 'later edit');
     const head = git(repo, 'rev-parse', 'HEAD');
     const docBefore = readFileSync(join(repo, 'PROJECT.md'), 'utf-8');

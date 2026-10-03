@@ -2,6 +2,7 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
+import { isInside } from '../utils/paths.js';
 import { discoverProjects, pathKey } from '../sessions/project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
 import { worktreeRoot } from '../jobs/worktree.js';
@@ -44,6 +45,11 @@ export interface WorkspaceTrack {
   planMissing: boolean;
   /** Branched, but the worktree folder itself is gone. Open session re-creates it from the branch. */
   worktreeMissing: boolean;
+  /**
+   * Running sessions whose cwd is inside the track's worktree: what Land will
+   * close, counted as Delete's `sessionsToClose` is. 0 when not branched.
+   */
+  openSessions: number;
 }
 
 export interface WorkspaceProject {
@@ -210,7 +216,10 @@ export function listBoardCwds(registry: Registry = loadRegistry()): string[] {
  * human-owned file that agents and editors also write, so a cached parse goes
  * stale.
  */
-export function getWorkspaceBoard(registry: Registry = loadRegistry()): WorkspaceProject[] {
+export function getWorkspaceBoard(
+  registry: Registry = loadRegistry(),
+  runningSessionCwds: string[] = []
+): WorkspaceProject[] {
   const discovered = discoverProjects();
   const byKey = new Map(discovered.map((p) => [pathKey(p.cwd), p]));
 
@@ -263,6 +272,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
           alsoOnMain: 0,
           planMissing: false,
           worktreeMissing: false,
+          openSessions: 0,
         };
       }
       const b = c.branch;
@@ -276,6 +286,7 @@ export function getWorkspaceBoard(registry: Registry = loadRegistry()): Workspac
         alsoOnMain: (mainFeatures ?? []).filter((f) => !inWorktree.has(f.id)).length,
         planMissing: c.track === null,
         worktreeMissing: !existsSync(b.worktreePath),
+        openSessions: runningSessionCwds.filter((c) => isInside(b.worktreePath, c)).length,
       };
     };
     const tracks: WorkspaceTrack[] = state ? state.doc.tracks.map((t) => toTrack(t.name, featuresOf(t))) : [];
