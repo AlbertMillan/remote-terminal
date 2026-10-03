@@ -23,6 +23,7 @@ import { pathKey } from '../sessions/project-discovery.js';
 import { listAllTrackBranches, trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
 import { isTrackError } from '../projects/routes.js';
 import { installDependencies, needsInstall, type InstallResult } from '../projects/project-deps.js';
+import { ensureLocalClaudeSettings } from '../projects/local-claude-settings.js';
 
 const logger = createLogger('agent-sessions');
 
@@ -39,9 +40,30 @@ const logger = createLogger('agent-sessions');
  * loopback.
  */
 
-/** `bypassPermissions` is deliberately absent: the user would have to read the flags to notice it. */
-export const PERMISSION_MODES = ['default', 'acceptEdits', 'plan'] as const;
+/**
+ * `bypassPermissions` is deliberately absent: the user would have to read the
+ * flags to notice it. So is `dontAsk`: it denies whatever isn't pre-allowed, so
+ * a session would fail quietly instead of asking. `auto` is the default — a
+ * started session exists to run unattended, and auto still asks before risky
+ * actions (project/unattended-started-sessions.md).
+ */
+export const PERMISSION_MODES = ['auto', 'manual', 'acceptEdits', 'plan'] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
+
+/** Older names still sent by a skill copy installed before `manual` existed. */
+const MODE_ALIASES: Record<string, PermissionMode> = { default: 'manual' };
+
+/**
+ * The typed command. `manual` passes no `--permission-mode`: Claude Code has
+ * renamed its default (it lists `manual`, no longer `default`), and leaving the
+ * flag out gets the default under either name. `--add-dir` is the session's own
+ * prompt folder only, so it reads its prompt without asking and no other's.
+ */
+export function startCommand(mode: PermissionMode, promptDir: string, promptPath: string): string {
+  const flag = mode === 'manual' ? '' : `--permission-mode ${mode} `;
+  return `claude ${flag}--add-dir "${promptDir}" "Read ${promptPath} and follow it."`;
+}
 
 export const MAX_PROMPT_BYTES = 100 * 1024;
 const MAX_NAME_LENGTH = 100;
@@ -69,6 +91,7 @@ export interface AgentSessionDeps {
   ensureTrackBranch(project: RegistryProject, track: string): Promise<{ worktreePath: string }>;
   needsInstall(path: string): boolean;
   installDependencies(path: string): Promise<InstallResult>;
+  ensureLocalClaudeSettings(projectCwd: string, worktreePath: string): Promise<unknown>;
   createSession(options: SessionCreateOptions): Promise<ActiveSession>;
   deleteSession(id: string): Promise<unknown>;
   writePromptFile(sessionId: string, prompt: string): string;
@@ -130,6 +153,7 @@ export const defaultDeps: AgentSessionDeps = {
   ensureTrackBranch,
   needsInstall,
   installDependencies: (path) => installDependencies(path),
+  ensureLocalClaudeSettings,
   createSession: (options) => sessionManager.createSession(options),
   deleteSession: (id) => sessionManager.deleteSession(id),
   writePromptFile,
@@ -206,10 +230,12 @@ export async function startAgentSession(
   if (Buffer.byteLength(prompt, 'utf-8') > MAX_PROMPT_BYTES) {
     throw new AgentSessionError(413, `prompt is over ${MAX_PROMPT_BYTES / 1024} KB`);
   }
-  const mode = body.permissionMode === undefined ? 'default' : body.permissionMode;
+  const asked = body.permissionMode === undefined ? DEFAULT_PERMISSION_MODE : body.permissionMode;
+  const mode = typeof asked === 'string' ? (MODE_ALIASES[asked] ?? asked) : asked;
   if (typeof mode !== 'string' || !(PERMISSION_MODES as readonly string[]).includes(mode)) {
     throw new AgentSessionError(400, `permissionMode must be one of: ${PERMISSION_MODES.join(', ')}`);
   }
+  const permissionMode = mode as PermissionMode;
   let name = track;
   if (body.name !== undefined) {
     if (typeof body.name !== 'string' || !body.name.trim()) throw new AgentSessionError(400, 'name must be a non-empty string');
@@ -249,6 +275,9 @@ export async function startAgentSession(
       // user opens; the response carries the failure for the agent to pass on.
       install = await deps.installDependencies(worktreePath);
     }
+    // Before the session exists: Claude reads it at startup, and without it
+    // the session asks again for every MCP server the user already approved.
+    await deps.ensureLocalClaudeSettings(project.cwd, worktreePath);
 
     let session: ActiveSession;
     try {
@@ -257,7 +286,7 @@ export async function startAgentSession(
         cwd: worktreePath,
         ownerId: caller.ownerId ?? undefined,
         spawnedBy: callerId,
-        permissionMode: mode,
+        permissionMode,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -266,8 +295,11 @@ export async function startAgentSession(
     }
 
     let promptPath: string;
+    let promptDir: string;
     try {
+      // Forward slashes, so neither PowerShell nor bash reads a backslash as an escape.
       promptPath = deps.writePromptFile(session.id, prompt).replace(/\\/g, '/');
+      promptDir = promptPath.slice(0, promptPath.lastIndexOf('/'));
       if (UNSAFE_IN_QUOTES.test(promptPath)) {
         // A typed command that read the wrong file would fail silently.
         throw new AgentSessionError(500, `The prompt path ${promptPath} has a character no shell quotes safely`);
@@ -277,8 +309,7 @@ export async function startAgentSession(
       throw error;
     }
 
-    // Forward slashes, so neither PowerShell nor bash reads a backslash as an escape.
-    deps.injectCommand(session, `claude --permission-mode ${mode} "Read ${promptPath} and follow it."`);
+    deps.injectCommand(session, startCommand(permissionMode, promptDir, promptPath));
 
     const metadata = deps.getSession(session.id);
     deps.broadcastAdded(
@@ -287,11 +318,11 @@ export async function startAgentSession(
         ...(metadata ?? {}),
         attachable: true,
         spawnedBy: callerId,
-        permissionMode: mode,
+        permissionMode,
       })
     );
 
-    logger.info({ callerId, sessionId: session.id, track, mode }, 'agent-sessions: started a session');
+    logger.info({ callerId, sessionId: session.id, track, mode: permissionMode }, 'agent-sessions: started a session');
     return { sessionId: session.id, name, worktreePath, install };
   } finally {
     const left = (pendingStarts.get(callerId) ?? 1) - 1;
@@ -327,7 +358,8 @@ export function listAgentSessions(deps: AgentSessionDeps, callerId: string): Sta
         // Live, not merely "has a PTY object": a shell that exited keeps its PTY
         // entry until the user deletes it, and that child is done.
         attachable: isLive(s),
-        permissionMode: s.permissionMode ?? null,
+        // Rows started before `manual` existed are stored as `default`.
+        permissionMode: s.permissionMode ? (MODE_ALIASES[s.permissionMode] ?? s.permissionMode) : null,
         notification: n ? { type: n.type, at: n.timestamp.toISOString() } : null,
       };
     });

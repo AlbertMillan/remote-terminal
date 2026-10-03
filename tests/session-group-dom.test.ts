@@ -108,11 +108,19 @@ describe('nesting', () => {
     expect(rowIds()).toEqual(['main', 'a', 'b', 'other']);
   });
 
-  it('shows a permission-mode chip only on a child whose mode is not default', () => {
-    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'default' });
+  it('shows a permission-mode chip only on a child whose mode is not auto', () => {
+    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'auto' });
     view();
     expect(rowOf('a').querySelector('.session-mode-chip')?.textContent).toBe('acceptEdits');
     expect(rowOf('b').querySelector('.session-mode-chip')).toBeNull();
+  });
+
+  it('shows manual, and reads a row stored as default as manual', () => {
+    sessions.set('a', { ...sessions.get('a')!, permissionMode: 'manual' });
+    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'default' });
+    view();
+    expect(rowOf('a').querySelector('.session-mode-chip')?.textContent).toBe('manual');
+    expect(rowOf('b').querySelector('.session-mode-chip')?.textContent).toBe('manual');
   });
 });
 

@@ -112,8 +112,12 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
   so dropping either check lets the tailnet run commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
   scrollback — and die with their PTY.
 - Started sessions (`spawned_by` set) can't start sessions: one level of nesting, no
-  runaway chains. Prompt files live under `<dataDir>/prompts/`, never in the worktree, or
-  `commitAll` sweeps them into the branch.
+  runaway chains. Prompt files live under `<dataDir>/prompts/<id>/`, never in the worktree,
+  or `commitAll` sweeps them into the branch; `--add-dir` names that folder only.
+- Track worktrees get a **copy** of the main checkout's `.claude/settings.local.json`
+  (`ensureLocalClaudeSettings`), never a link — `git worktree remove` deletes through one —
+  never over an existing copy, and only once git ignores the path (else `info/exclude`
+  first), or `commitAll` puts it on the branch.
 - A session's Land (`POST /api/agent/land`) takes the track from the caller's worktree,
   never the request, or a session could land another's track. Its Land runs from the
   route's `onResponse` hook, after the `202`: it closes the session that asked, whose

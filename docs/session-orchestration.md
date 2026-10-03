@@ -13,7 +13,8 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 | Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land` |
 | Land's outcome | `notification` with `kind: 'land'` (`broadcastLandResult`), shown by `src/client/land-result.ts` |
 | PTY env + token map | `src/server/sessions/session-env.ts` — `sessionEnv(id)` |
-| Prompt files | `src/server/sessions/prompt-file.ts` — `<dataDir>/prompts/<sessionId>.md` |
+| Prompt files | `src/server/sessions/prompt-file.ts` — `<dataDir>/prompts/<sessionId>/prompt.md` |
+| Worktree's local settings | `src/server/projects/local-claude-settings.ts` — `ensureLocalClaudeSettings()` |
 | Typing the command | `injectCommand()` in `session-open.ts` (shared with resume/fork/revive) |
 | Who started whom | `sessions.spawned_by`, `sessions.permission_mode` (migration 017) |
 | Browsers learn of it | `session.added` broadcast (`broadcastSessionAdded`) — never attaches |
@@ -57,7 +58,7 @@ session is calling, which is how `spawned_by` and the limit work.
 Status codes: 403 not loopback · 401 missing/unknown/revoked token · 403 a started session
 calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts still
 installing) or the global `sessions.maxSessions` · 409 the caller already has a live
-session on that track, or a start on it still running · 400 bad body, `bypassPermissions`, or a
+session on that track, or a start on it still running · 400 bad body, `bypassPermissions` or `dontAsk`, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
 `land`: 202 accepted · 400 the caller is in no track's worktree · 409 any Land refusal
 (uncommitted code, a live job, a conflicting merge, the project busy) or a Land of the
@@ -77,19 +78,55 @@ track already under way.
    call timed out leaves the start running here, and a retry would start a duplicate.
 4. `ensureTrackBranch()`, then `installDependencies()` when `needsInstall()`. A failed
    install still starts the session; the response's `install` says so.
-5. `createSession()` in the worktree with `spawnedBy` and `permissionMode`.
-6. Write the prompt to `<dataDir>/prompts/<id>.md`. **Never inside the worktree**, or the
-   next stage's `commitAll` sweeps it into the branch. It is deleted with the session row.
-7. `injectCommand()` types `claude --permission-mode <mode> "Read <path> and follow it."`
-   once the shell is ready. The path uses forward slashes so no shell reads an escape, and a
-   path holding `"`, `%`, `$` or a backtick is refused (the session is removed) rather than
-   typed into a command that would silently read another file.
+5. `ensureLocalClaudeSettings()` (below), then `createSession()` in the worktree with
+   `spawnedBy` and `permissionMode`.
+6. Write the prompt to `<dataDir>/prompts/<id>/prompt.md`. **Never inside the worktree**, or
+   the next stage's `commitAll` sweeps it into the branch. The folder is the session's own
+   and is deleted with the session row.
+7. `injectCommand()` types
+   `claude [--permission-mode <mode>] --add-dir "<dir>" "Read <dir>/prompt.md and follow it."`
+   once the shell is ready. `--add-dir` names that session's prompt folder only, so it reads
+   its prompt without asking and can't read another session's. The paths use forward slashes
+   so no shell reads an escape, and a path holding `"`, `%`, `$` or a backtick is refused (the
+   session is removed) rather than typed into a command that would silently read another file.
 8. Broadcast `session.added`; return `{ sessionId, name, worktreePath, install }`.
 
 Why a file and a short command rather than the prompt itself: a newline in a typed command
 sends it early, PowerShell/bash/cmd quote differently, and the terminal would echo the whole
 prompt. Pasting into `claude` after it starts would need the server to detect Claude's input
 box, and a guess made too early types the prompt into the shell, which runs it as commands.
+
+## Permission modes
+
+Allowed: `auto` (the default), `manual`, `acceptEdits`, `plan`. A started session exists to
+run unattended, and `auto` still asks before risky actions; `manual` asks for every edit and
+command. `bypassPermissions` is refused because the user would have to read the flags to
+notice it, and `dontAsk` because it denies whatever isn't pre-allowed, so the session would
+fail quietly instead of asking.
+
+`default` is accepted as an alias and stored as `manual`: a skill copy installed before the
+rename still sends it. For `manual` the typed command has **no** `--permission-mode` — Claude
+Code lists `manual` and no longer `default`, and passing nothing gets the default under
+either name. Rows stored as `default` read as `manual` in `list` and the sidebar.
+
+## Worktrees get the main checkout's local settings
+
+The main checkout's `.claude/settings.local.json` is gitignored, so a track worktree never
+has it, and every session there would ask again for each MCP server (`~/.mcp.json` is found
+above `~/.claude-remote/worktrees/`) and each allowlisted command.
+`ensureLocalClaudeSettings(projectCwd, worktreePath)` copies it in from `ensureTrackBranch()`:
+when it creates a worktree, and on every later call, which every track session (Track
+picker, the board's Open session, Branch now, agent start) goes through first. Agent start
+calls it again before creating the session.
+
+- A **copy**, never a link: `git worktree remove` on Windows deletes through a link.
+- Never overwrites a worktree's own copy; its sessions may have added approvals. Those are
+  not carried back at Land and die with the worktree.
+- Never committed: if `git check-ignore` says the path isn't ignored,
+  `/.claude/settings.local.json` goes into the shared `info/exclude`
+  (`git rev-parse --git-common-dir`) first, which ignores it in the main checkout too. If it
+  still isn't ignored, there is no copy.
+- No main-checkout file, no copy.
 
 ## A session lands its own track
 
@@ -139,13 +176,14 @@ box, and a guess made too early types the prompt into the shell, which runs it a
   visible collapsed; it wraps only between parts. The arrow takes the drag handle's slot (the
   whole row stays draggable), so the parent lines up with other rows and its children read as
   indented under it.
-- A child whose `permissionMode` is not `default` shows a chip.
+- A child whose `permissionMode` is not `auto` shows a chip (`default` reads as `manual`).
 - Children are not draggable; a drop on one falls through to its category's list.
 
 ## Installing the skill
 
 The skill is what makes an agent in **any** project's session know the CLI exists. Install
-it into your user skills folder (`~/.claude/skills/`) once, and again whenever it changes:
+it into your user skills folder (`~/.claude/skills/`) once, and again whenever it changes —
+including now that `auto` is the default and `manual` replaced `default`:
 
 ```
 npm run install-skill

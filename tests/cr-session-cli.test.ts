@@ -66,11 +66,25 @@ describe('start', () => {
   });
 
   it('refuses a missing --track, an unknown mode or a --prompt flag', async () => {
-    for (const argv of [['start'], ['start', '--track', 'X', '--mode', 'bypassPermissions'], ['start', '--track', 'X', '--prompt', 'hi']]) {
+    for (const argv of [
+      ['start'],
+      ['start', '--track', 'X', '--mode', 'bypassPermissions'],
+      ['start', '--track', 'X', '--mode', 'dontAsk'],
+      ['start', '--track', 'X', '--prompt', 'hi'],
+    ]) {
       const fetchImpl = okFetch();
       const res = await run({ argv, fetchImpl });
       expect(res.code).toBe(2);
       expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sends auto and manual, and passes the old name default on for the server to map', async () => {
+    for (const mode of ['auto', 'manual', 'default']) {
+      const fetchImpl = okFetch();
+      const res = await run({ argv: ['start', '--track', 'X', '--mode', mode], fetchImpl });
+      expect(res.code).toBe(0);
+      expect(JSON.parse(fetchImpl.mock.calls[0][1].body as string).permissionMode).toBe(mode);
     }
   });
 

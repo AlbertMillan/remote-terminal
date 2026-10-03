@@ -15,33 +15,26 @@ const { dataDir } = await vi.hoisted(async () => {
   return { dataDir: makeTmpDataDir('session-env') };
 });
 
-type ExitCallback = (result: { exitCode: number }) => void;
-type FakePty = {
-  pid: number;
-  write: ReturnType<typeof vi.fn>;
-  kill: ReturnType<typeof vi.fn>;
-  exitCallbacks: Set<ExitCallback>;
-};
+type FakePty = { pid: number; write: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>; exit: () => void };
 const ptys: FakePty[] = [];
 const createPty = vi.fn(() => {
-  const exitCallbacks = new Set<ExitCallback>();
+  const onExit: ((e: { exitCode: number }) => void)[] = [];
   const pty = {
     pid: 1000 + ptys.length,
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
-    exitCallbacks,
     // One prompt's worth of output, so injectCommand's readiness debounce fires.
     onData: vi.fn((cb: (data: string) => void) => {
       setTimeout(() => cb('$ '), 0);
       return { dispose: vi.fn() };
     }),
-    // Like node-pty: a killed shell reports its exit, which terminateSession
-    // awaits (bounded at 5 s, the same as the test timeout).
-    onExit: vi.fn((cb: ExitCallback) => {
-      exitCallbacks.add(cb);
-      return { dispose: () => exitCallbacks.delete(cb) };
+    onExit: vi.fn((cb: (e: { exitCode: number }) => void) => {
+      onExit.push(cb);
+      return { dispose: vi.fn() };
     }),
+    // A killed shell reports its exit, as node-pty's does: terminateSession waits for it.
+    exit: () => setTimeout(() => onExit.forEach((cb) => cb({ exitCode: 0 })), 0),
   };
   ptys.push(pty);
   return pty;
@@ -56,9 +49,7 @@ vi.mock('../src/server/sessions/pty-handler.js', async () => {
     ...actual,
     createPty: (...args: unknown[]) => createPty(...(args as [])),
     writeToPty: (...args: unknown[]) => writeToPty(...(args as [])),
-    killPty: vi.fn((pty: FakePty) => {
-      setImmediate(() => [...pty.exitCallbacks].forEach((cb) => cb({ exitCode: 0 })));
-    }),
+    killPty: vi.fn((pty: FakePty) => pty.exit()),
     resizePty: vi.fn(),
   };
 });
