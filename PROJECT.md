@@ -85,3 +85,6 @@ status: active
 - [x] `f-leww3w` One entry per conversation — scoped gate, amend in place instead of appending
 - [x] `f-wycv03` P2 Session logs of worktree sessions are written to the main checkout — keep entries past Land, stop the run holding the worktree open → project/session-log-main-checkout.md
 - [x] `f-p1zm60` P2 Land closes the track worktree's sessions itself — and a session whose shell exited no longer blocks Land → project/land-closes-sessions.md
+
+## Track: Session orchestration
+- [x] `f-s3w8qd` P1 Sessions that start sessions — a main session starts prompted sessions on its planned tracks and lists their state; the sidebar nests them under it → project/session-orchestration.md
