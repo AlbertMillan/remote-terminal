@@ -21,20 +21,6 @@ status: active
 - [x] `f-2wq7bd` P1 Revive stale sessions from the sidebar — respawn the PTY in place and resume the conversation → project/revive-stale-sessions.md
 - [x] `f-t188v6` P2 Restart and Build & restart from Settings — detached restart-server.vbs, build gate, same-origin + Tailscale check, reload on a new boot id
 
-## Track: Project Session Log
-- [x] `f-j6jxm9` Step 1 — Plan / design doc
-- [x] `f-49wrv4` Step 2 — Backend: config block, logged_at migration, maybeLogSession triggers, skip-gate, generator, startup sweep
-- [x] `f-0wweo3` Step 3 — Global ~/.claude/CLAUDE.md convention block
-- [x] `f-zyt99p` Step 4 — Backfill endpoint and cross-source project discovery
-- [x] `f-8011o9` Step 5 — Dashboard UI: Projects sidebar tab, detail view, getProjectBoard()
-- [x] `f-yvnzyl` Step 6 — Reliability hardening: verify the run wrote, skip huge transcripts, retry-on-no-write
-- [x] `f-xn3jn8` Step 7 — Plan-phases progress board: normalized manifest and per-track tables
-- [x] `f-5zopl1` Collapsible phase groups and Re-sync action to refresh phases from plan docs
-- [x] `f-xpd148` Edit-scope enforcement (post-run revert), hard-fail, per-project backfill
-- [x] `f-leww3w` One entry per conversation — scoped gate, amend in place instead of appending
-- [ ] `f-wycv03` P2 Session logs of worktree sessions are written to the main checkout — keep entries past Land, stop the run holding the worktree open → project/session-log-main-checkout.md
-- [ ] `f-p1zm60` P2 Land closes the track worktree's sessions itself — and a session whose shell exited no longer blocks Land → project/land-closes-sessions.md
-
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
 - [x] `f-fjf44n` Delete button — remove the entry and unlink the backing transcript
