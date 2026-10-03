@@ -71,3 +71,17 @@ status: active
 ## Track: Track workflow polish
 - [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
 - [x] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's → project/worktree-dependencies.md
+
+## Track: Project Session Log
+- [x] `f-j6jxm9` Step 1 — Plan / design doc
+- [x] `f-49wrv4` Step 2 — Backend: config block, logged_at migration, maybeLogSession triggers, skip-gate, generator, startup sweep
+- [x] `f-0wweo3` Step 3 — Global ~/.claude/CLAUDE.md convention block
+- [x] `f-zyt99p` Step 4 — Backfill endpoint and cross-source project discovery
+- [x] `f-8011o9` Step 5 — Dashboard UI: Projects sidebar tab, detail view, getProjectBoard()
+- [x] `f-yvnzyl` Step 6 — Reliability hardening: verify the run wrote, skip huge transcripts, retry-on-no-write
+- [x] `f-xn3jn8` Step 7 — Plan-phases progress board: normalized manifest and per-track tables
+- [x] `f-5zopl1` Collapsible phase groups and Re-sync action to refresh phases from plan docs
+- [x] `f-xpd148` Edit-scope enforcement (post-run revert), hard-fail, per-project backfill
+- [x] `f-leww3w` One entry per conversation — scoped gate, amend in place instead of appending
+- [x] `f-wycv03` P2 Session logs of worktree sessions are written to the main checkout — keep entries past Land, stop the run holding the worktree open → project/session-log-main-checkout.md
+- [x] `f-p1zm60` P2 Land closes the track worktree's sessions itself — and a session whose shell exited no longer blocks Land → project/land-closes-sessions.md
