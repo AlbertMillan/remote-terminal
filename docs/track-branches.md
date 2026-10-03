@@ -165,7 +165,9 @@ Land is refused (409) unless:
   (PROJECT.md, `project/*.md` outside `project/reviews/`) are committed on the track
   branch first;
 - main holds no uncommitted code: code edited on main may be this track's work.
-  Uncommitted backlog planning is let through and left uncommitted and unpushed;
+  Uncommitted backlog planning, and a tracked session log (worktree sessions are
+  logged into main's copy, `session-log-feature.md` §5a), are let through and left
+  uncommitted and unpushed;
 - nothing is staged on main, since `git merge` refuses then.
 
 Every dirty refusal names the files (`statusEntries`, every untracked file listed).

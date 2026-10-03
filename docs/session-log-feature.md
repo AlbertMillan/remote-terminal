@@ -73,6 +73,7 @@ identical regardless of how a session ended.
 | Closed browser, reconnect later | `handleDisconnect()` only (`handler.ts:585`) | ❌ session still alive (correct) |
 | Graceful server shutdown | marked `idle`, not terminated (`manager.ts:628`) | ❌ resumes on restart |
 | **OS shutdown / crash while session open** | server killed before any handler runs | ✅ **startup reconciliation sweep** |
+| Session in a track or job worktree (any of the above) | same paths | ✅ into the **project's main checkout** (§5a) |
 
 ### Startup reconciliation sweep (covers shutdown/crash)
 
@@ -143,26 +144,69 @@ Notes:
 
 New module `src/server/sessions/project-log.ts`.
 
-1. Locate the transcript with the existing `findClaudeProjectDir()`
-   (`manager.ts:34`) → `<projectDir>/<claudeSessionId>.jsonl`.
-2. Pre-compute `git diff` + `git log --since=<session start>` (size-bounded) for
-   ground truth.
-3. Spawn detached:
+1. Resolve where the entry goes: `worktreeOwner(session cwd)` (§5a). A worktree
+   session's log target is its project's main checkout; anything else is logged
+   in place.
+2. Locate the transcript with the existing `findClaudeProjectDir()`
+   (`manager.ts:34`) → `<projectDir>/<claudeSessionId>.jsonl`, from the
+   **session's** cwd (Claude Code files transcripts under it).
+3. Pre-compute `git diff` + `git log --since=<session start>` (size-bounded) for
+   ground truth, also from the session's cwd.
+4. Spawn detached:
    ```
    claude -p "<prompt>" --output-format json
    ```
    with:
-   - `cwd` = the project directory,
+   - `cwd` = the log target (the project directory, or main for a worktree session),
    - `--permission-mode acceptEdits`,
    - `allowedTools` limited to `Read`, `Edit`, `Write`, with edits **scoped to the
      log file + plan globs only** (no other files mutated).
-4. The prompt instructs Claude to: read its own transcript + the provided diff +
+5. The prompt instructs Claude to: read its own transcript + the provided diff +
    `CLAUDE.md` + plan files, then (a) prepend an entry to `SESSION-LOG.md`, and
-   (b) tick completed checkboxes in the plan files.
-5. A queue enforces `maxConcurrent`; a `timeoutMs` kills runaway runs. Fully
+   (b) tick completed checkboxes in the plan files (not for worktree sessions).
+6. A queue enforces `maxConcurrent`; a `timeoutMs` kills runaway runs. Fully
    detached — session teardown never blocks on generation.
-6. Success/failure logged to `~/.claude-remote/logs/server.log`. Failure is
+7. Success/failure logged to `~/.claude-remote/logs/server.log`. Failure is
    non-fatal.
+
+### 5a. Sessions in a track or job worktree
+
+A session whose cwd is inside a worktree that a `track_branches` row or a job's
+`worktree_path` records is logged into that record's `project_cwd`, the main
+checkout. The project comes from the record, never from the path; a worktree
+nothing records is logged in place.
+
+**Why.** Written in place, two things broke. The worktree's `SESSION-LOG.md` (in
+this repo gitignored, so it never travels with the branch) was deleted with the
+folder at Land or Delete, taking the entry and the track's phase group — whose
+`sessionIds` attribution and Delete track read from main — with it. And the
+run's `claude -p` kept the worktree as its cwd for up to minutes after the
+session closed, so Land's `rmdir` failed `EBUSY` on Windows (server.log:
+2026-09-20, 09-25, 09-29). Running in main holds nothing in the worktree, so
+Land never waits for a log run.
+
+- **Evidence is read from the worktree**: transcript lookup, `git status`,
+  `log --since`, diff and branch. The marker's `branch` (`track/…`, `job/…`)
+  is what says where the work happened; there is no separate `worktree` field.
+- **No plan ticking.** Ticking from main would tick main's copy, which a
+  branched track no longer uses. The run's `allowedGlobs` is the log file only.
+  The prompt points the model at the worktree's plan docs by absolute path **to
+  read**, so the phases manifest in main's file still gets the track's group with
+  this session's id. Ticks come from the session, the board and rebuild.
+- **The post-run revert** now diffs main's status around the run, so a file the
+  user changes on main in that window is reverted. Sessions on main already had
+  that exposure; kept as is (decided 2026-10-03).
+- **Tracked `SESSION-LOG.md`** leaves main dirty in that file. Land lets it
+  through on main (`isSessionLogPath`) and leaves it uncommitted. Not in the
+  worktree: committing a worktree copy onto the track branch would make Land's
+  merge conflict with main's. A job merging into main still needs a clean tree,
+  as it already did after any session on main.
+- **Worktree already gone** (the startup sweep after a Land): a landed row still
+  resolves — its folder is named by its own row id, so nothing reuses it — the
+  git reads fail, and the gate falls back to the non-git path (transcript edits
+  plus `minTurnsToLog`). The entry still lands in main. A gone folder that no
+  record owns (a deleted track's rows are deleted) is skipped and stamped:
+  there is nowhere to write it, and a retry at every boot would never succeed.
 
 ---
 

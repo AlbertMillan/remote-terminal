@@ -211,6 +211,9 @@ before **merge**.
   survive both.
 - `track_branches` is unique only among **unlanded** rows (partial index). A landed row
   keeps its `merge_sha` for Delete; making it plainly unique blocks reopening a track.
+- A session in a track or job worktree is session-logged into the project's main checkout
+  (`worktreeOwner()`), with the run's cwd there too. Run it in the worktree and the entry dies
+  with the folder at Land, and its process holds the folder so teardown fails `EBUSY`.
 - Land refuses while a live session's cwd is inside the worktree — on Windows the open
   shell makes `git worktree remove` fail half-way.
 - Delete track reverts only merges tied to the track by a recorded sha, a trailer, or a

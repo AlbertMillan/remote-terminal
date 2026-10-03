@@ -34,6 +34,7 @@ import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 import {
   commitWorktreePlanning,
   isPlanningPath,
+  isSessionLogPath,
   moveSectionOffMain,
   nameFiles,
   returnSectionToMain,
@@ -355,7 +356,8 @@ export interface LandResult {
  * branch, and the checkouts hold nothing Land can't account for:
  *  - the worktree: uncommitted planning files are committed there first
  *    (it belongs to this track and never pushes); anything else refuses;
- *  - main: uncommitted planning files (backlog edits) are let through and
+ *  - main: uncommitted planning files (backlog edits) and the session log
+ *    (worktree sessions are logged into main's copy) are let through and
  *    left uncommitted; anything else refuses, since code edited on main may
  *    be this track's work. Nothing may be STAGED: git refuses to merge then.
  * Every refusal names the files.
@@ -421,7 +423,9 @@ export async function landTrack(
   if (mainEntries === null) {
     throw new TrackBranchError(`Could not read the repository state at ${project.cwd}`, 500);
   }
-  const mainCode = mainEntries.filter((e) => !isPlanningPath(e.path, docRel)).map((e) => e.path);
+  const mainCode = mainEntries
+    .filter((e) => !isPlanningPath(e.path, docRel) && !isSessionLogPath(e.path))
+    .map((e) => e.path);
   if (mainCode.length > 0) {
     throw new TrackBranchError(
       `The project has uncommitted changes outside the plan: ${nameFiles(mainCode)}. ` +
