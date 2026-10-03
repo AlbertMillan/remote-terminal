@@ -4,7 +4,7 @@ import { dirname, join, isAbsolute } from 'path';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
-import { isInside } from '../utils/paths.js';
+import { sessionsInWorktree } from '../utils/paths.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import {
@@ -116,15 +116,15 @@ export function trackBranchNameFor(id: string, trackName: string): string {
  * `persistence.dataDir` may be. The full id is
  * the fallback for the rare prefix already taken — createWorktree reuses an
  * existing folder, which would hand this track another one's checkout — and
- * so is a prefix an unlanded row records, whose missing folder reattachIfMissing
- * would otherwise re-create inside this track's. The path is stored on the
- * row, so existing tracks keep their full-id folders.
+ * so is a prefix any row records. An unlanded row's missing folder would be
+ * re-created inside this track's by reattachIfMissing; a landed row's path
+ * must stay its own too, because worktreeOwner traces a session in it back to
+ * that row (trackBranchForPath). The path is stored on the row, so existing
+ * tracks keep their full-id folders.
  */
 export function trackWorktreePathFor(id: string): string {
   const short = join(worktreeRoot(), 'tracks', id.slice(0, 8));
-  const recorded = getDatabase()
-    .prepare('SELECT 1 FROM track_branches WHERE worktree_path = ? AND landed_at IS NULL')
-    .get(short);
+  const recorded = getDatabase().prepare('SELECT 1 FROM track_branches WHERE worktree_path = ?').get(short);
   return existsSync(short) || recorded ? join(worktreeRoot(), 'tracks', id) : short;
 }
 
@@ -464,10 +464,12 @@ export async function landTrack(
   // Every refusal is behind us, so closing now never kills a session for a
   // Land that then refuses — and the dirty-code check above means a session
   // with uncommitted code is never closed. Awaited one by one: on Windows an
-  // open shell's cwd makes `git worktree remove` fail half-way, so each PTY
+  // open shell's cwd makes `git worktree remove` fail half-way, so each shell
   // must be gone before the merge and teardown start. Their session-log runs
-  // go to the main checkout (worktreeOwner), so nothing waits on those.
-  const toClose = deps.sessions.filter((s) => isInside(track.worktreePath, s.cwd));
+  // go to the main checkout (worktreeOwner), so nothing waits on those; their
+  // first git reads in the worktree take no index lock, so they cannot make
+  // resetDocToMergeBase below fail.
+  const toClose = sessionsInWorktree(deps.sessions, track.worktreePath);
   for (const s of toClose) await deps.terminateSession(s.id);
 
   // 1. The plan back onto main, then PROJECT.md out of the merge.
@@ -549,31 +551,52 @@ export async function landTrack(
  * Commit the branch's PROJECT.md back to its merge-base version, if it moved.
  * Returns the HEAD from before that commit, so a failed land can take it back
  * off — or null when nothing was committed.
+ *
+ * Throws when a step fails rather than carrying on: a reset that silently
+ * didn't happen sends the branch's PROJECT.md into the merge, which is the
+ * conflict this function exists to prevent (a held `index.lock` is enough).
  */
 async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<string | null> {
   const wt = track.worktreePath;
   const base = (await git(wt, ['merge-base', 'HEAD', track.baseBranch]))?.trim();
   if (!base) return null;
-  const changed = (await git(wt, ['diff', '--name-only', base, 'HEAD', '--', docRel]))?.trim();
-  if (!changed) return null;
+  const changedOut = await git(wt, ['diff', '--name-only', base, 'HEAD', '--', docRel]);
+  if (changedOut === null) throw resetFailed(track, docRel);
+  if (!changedOut.trim()) return null;
   const before = (await git(wt, ['rev-parse', 'HEAD']))?.trim() ?? null;
 
   const existedAtBase = (await git(wt, ['cat-file', '-e', `${base}:${docRel}`])) !== null;
-  if (existedAtBase) {
-    await git(wt, ['checkout', base, '--', docRel]);
-  } else {
-    await git(wt, ['rm', '-q', '--', docRel]);
+  const staged = existedAtBase
+    ? await git(wt, ['checkout', base, '--', docRel])
+    : await git(wt, ['rm', '-q', '--', docRel]);
+  const committed =
+    staged === null
+      ? null
+      : await git(wt, [
+          ...COMMIT_IDENTITY,
+          'commit',
+          '-m',
+          `Leave ${docRel} to the main checkout`,
+          '--no-verify',
+          '--',
+          docRel,
+        ]);
+  if (committed === null) {
+    // Put the file back as HEAD has it, so the worktree is as Land found it
+    // (it was committed clean above) and the next Land starts from there.
+    await git(wt, ['reset', '-q', '--', docRel]);
+    await git(wt, ['checkout', 'HEAD', '--', docRel]);
+    throw resetFailed(track, docRel);
   }
-  await git(wt, [
-    ...COMMIT_IDENTITY,
-    'commit',
-    '-m',
-    `Leave ${docRel} to the main checkout`,
-    '--no-verify',
-    '--',
-    docRel,
-  ]);
   return before;
+}
+
+function resetFailed(track: TrackBranch, docRel: string): TrackBranchError {
+  return new TrackBranchError(
+    `Could not take ${docRel} out of the merge in the track worktree (${track.worktreePath}) — ` +
+      'another git process may have held its index. Nothing was merged; land again.',
+    409
+  );
 }
 
 // --- Branch now ----------------------------------------------------------

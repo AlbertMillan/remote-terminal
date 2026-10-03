@@ -87,7 +87,8 @@ export function isPlanningPath(rel: string, docRel: string): boolean {
  * branch and make every Land conflict with main's.
  */
 export function isSessionLogPath(rel: string): boolean {
-  return rel.replace(/\\/g, '/').toLowerCase() === getConfig().projectLog.fileName.toLowerCase();
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  return norm(rel) === norm(getConfig().projectLog.fileName);
 }
 
 /** A list of paths for an error message, capped so a huge tree can't flood it. */

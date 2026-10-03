@@ -459,6 +459,34 @@ describe('SessionManager', () => {
     await manager.shutdown();
   });
 
+  it('keeps an exited session out of the running list when it is typed into, left or attached', async () => {
+    vi.useFakeTimers();
+    try {
+      exitCallbacks.clear();
+      const manager = createSessionManager();
+      const session = await manager.createSession({ name: 'Typed exit' });
+      const handler = mockPty.onExit.mock.calls.at(-1)?.[0] as (r: { exitCode: number }) => void;
+      mockStmt.run.mockClear(); // drop the insert, which carries 'active' too
+
+      manager.addClient(session.id, 'viewer');
+      manager.writeToSession(session.id, 'exit\r'); // schedules the debounced DB write
+      handler({ exitCode: 0 });
+      manager.writeToSession(session.id, 'x');
+      // Switching away and back, as the sidebar does.
+      manager.removeClient(session.id, 'viewer');
+      expect(manager.getRunningSessions()).toEqual([]);
+      manager.addClient(session.id, 'viewer');
+      vi.advanceTimersByTime(6000);
+
+      expect(manager.getRunningSessions()).toEqual([]);
+      const statusWrites = mockStmt.run.mock.calls.filter((c) => c.includes('active'));
+      expect(statusWrites).toEqual([]);
+      await manager.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('should return false when terminating non-existent session', async () => {
     const manager = createSessionManager();
 

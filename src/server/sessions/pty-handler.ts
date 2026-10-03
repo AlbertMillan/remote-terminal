@@ -76,8 +76,9 @@ export function writeToPty(ptyProcess: IPty, data: string): void {
 }
 
 /**
- * Resolves when the PTY's process exits, or after `timeoutMs`, whichever is
- * first. Never rejects: a PTY that ignores its kill must not hang the caller.
+ * Resolves when the PTY's own process (the shell) exits, or after `timeoutMs`,
+ * whichever is first. Says nothing about the shell's children. Never rejects:
+ * a PTY that ignores its kill must not hang the caller.
  */
 export function ptyExit(ptyProcess: IPty, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {

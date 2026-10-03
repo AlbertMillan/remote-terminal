@@ -188,11 +188,16 @@ Land never waits for a log run.
 - **Evidence is read from the worktree**: transcript lookup, `git status`,
   `log --since`, diff and branch. The marker's `branch` (`track/…`, `job/…`)
   is what says where the work happened; there is no separate `worktree` field.
+  The git reads pass `--no-optional-locks`: Land closes a worktree's sessions
+  and commits in that worktree within a second, and a `status` refreshing the
+  index under `index.lock` would fail that commit.
 - **No plan ticking.** Ticking from main would tick main's copy, which a
   branched track no longer uses. The run's `allowedGlobs` is the log file only.
-  The prompt points the model at the worktree's plan docs by absolute path **to
-  read**, so the phases manifest in main's file still gets the track's group with
-  this session's id. Ticks come from the session, the board and rebuild.
+  The prompt points the model at the worktree's plan file and `project/*.md` by
+  absolute path **to read**, so the phases manifest in main's file still gets the
+  track's group with this session's id. Only those: the rest of `planGlobs`
+  (`docs/**`) is the same in both checkouts, and reading it twice doubled the run
+  against its timeout. Ticks come from the session, the board and rebuild.
 - **The post-run revert** now diffs main's status around the run, so a file the
   user changes on main in that window is reverted. Sessions on main already had
   that exposure; kept as is (decided 2026-10-03).
@@ -202,11 +207,13 @@ Land never waits for a log run.
   merge conflict with main's. A job merging into main still needs a clean tree,
   as it already did after any session on main.
 - **Worktree already gone** (the startup sweep after a Land): a landed row still
-  resolves — its folder is named by its own row id, so nothing reuses it — the
-  git reads fail, and the gate falls back to the non-git path (transcript edits
-  plus `minTurnsToLog`). The entry still lands in main. A gone folder that no
-  record owns (a deleted track's rows are deleted) is skipped and stamped:
-  there is nowhere to write it, and a retry at every boot would never succeed.
+  resolves — no new row is given a path any row records (`trackWorktreePathFor`) —
+  the git reads fail, and the gate falls back to the non-git path (transcript
+  edits plus `minTurnsToLog`). The entry still lands in main. A gone folder
+  **under the worktree root** that no record owns (a deleted track, a discarded
+  job) is skipped and stamped: there is nowhere to write it, and it never comes
+  back. Any other missing folder is left unstamped so a later boot retries it —
+  it may be a drive that isn't mounted yet.
 
 ---
 

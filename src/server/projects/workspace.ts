@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
-import { isInside } from '../utils/paths.js';
+import { sessionsInWorktree } from '../utils/paths.js';
 import { discoverProjects, pathKey } from '../sessions/project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
 import { worktreeRoot } from '../jobs/worktree.js';
@@ -216,10 +216,15 @@ export function listBoardCwds(registry: Registry = loadRegistry()): string[] {
  * human-owned file that agents and editors also write, so a cached parse goes
  * stale.
  */
-export function getWorkspaceBoard(
-  registry: Registry = loadRegistry(),
-  runningSessionCwds: string[] = []
-): WorkspaceProject[] {
+export interface BoardOptions {
+  registry?: Registry;
+  /** Running sessions (`getRunningSessions`), for each branched track's `openSessions`. */
+  runningSessions?: { cwd: string }[];
+}
+
+export function getWorkspaceBoard(options: BoardOptions = {}): WorkspaceProject[] {
+  const registry = options.registry ?? loadRegistry();
+  const runningSessions = options.runningSessions ?? [];
   const discovered = discoverProjects();
   const byKey = new Map(discovered.map((p) => [pathKey(p.cwd), p]));
 
@@ -286,7 +291,7 @@ export function getWorkspaceBoard(
         alsoOnMain: (mainFeatures ?? []).filter((f) => !inWorktree.has(f.id)).length,
         planMissing: c.track === null,
         worktreeMissing: !existsSync(b.worktreePath),
-        openSessions: runningSessionCwds.filter((c) => isInside(b.worktreePath, c)).length,
+        openSessions: sessionsInWorktree(runningSessions, b.worktreePath).length,
       };
     };
     const tracks: WorkspaceTrack[] = state ? state.doc.tracks.map((t) => toTrack(t.name, featuresOf(t))) : [];

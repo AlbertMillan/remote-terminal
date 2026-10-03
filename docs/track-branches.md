@@ -184,12 +184,24 @@ find and close the session, wait for its log run, Land" (spec:
 - **Running sessions only** (`sessionManager.getRunningSessions()`). A shell that exited
   stays in the session list as `terminated` but holds nothing open; it once blocked
   Land with `[Process exited with code 1]` on screen. Land, Delete's `sessionsToClose`
-  and the board's `openSessions` all read this one list.
-- **`terminateSession` resolves once the PTY has exited** (bounded at 5 s). `pty.kill()`
-  only signals it.
+  and the board's `openSessions` all read this one list (and `sessionsInWorktree`).
+  `terminated` must stay put once set: `removeClient` used to turn it into `idle` when
+  you switched away from the exited session, and `touchSession` (attach, keystrokes)
+  into `active`, with a debounced write putting `active` back in the row. Either made a
+  dead shell count as running again, and Land then waited 5 s for an exit that had
+  already happened (found by the QA Flow 3 run, 2026-10-03).
+- **`terminateSession` resolves once the shell has exited** (bounded at 5 s; measured
+  about 0.1 s on Windows). `pty.kill()` only signals it. Only the shell: node-pty kills
+  the console's other processes through a helper that failed with `AttachConsole failed`
+  when run without a console (2026-10-03, from Git Bash), so a child such as `claude`
+  can outlive it. `removeWorktree`'s busy-folder retry covers that case.
 - **No wait for the session-log run.** Closing starts one, but it runs in the main
   checkout (`session-log-feature.md` §5a), so it holds nothing in the worktree. Its
-  first git reads do touch the worktree, briefly.
+  first git reads do touch the worktree, briefly, with `--no-optional-locks`: Land
+  commits in the worktree within a second of the close (`resetDocToMergeBase`), and a
+  `git status` refreshing the index would hold `index.lock` and fail that commit.
+  `resetDocToMergeBase` now refuses (409, nothing merged) when a step fails instead
+  of carrying on into a merge that conflicts on PROJECT.md.
 - The board's Land confirm says "N open session(s) in its worktree will be closed",
   from the branched track's `openSessions` as of the last board load. The result's
   detail says how many were actually closed.

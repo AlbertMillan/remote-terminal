@@ -4,7 +4,7 @@ import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, gitStatusEntries, isGitRepo } from '../agent/claude-run.js';
-import { isInside } from '../utils/paths.js';
+import { sessionsInWorktree } from '../utils/paths.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive, type JobWithStages } from '../jobs/types.js';
 import { removeWorktree } from '../jobs/worktree.js';
@@ -171,7 +171,8 @@ export interface TrackDeleteResult {
 export async function planTrackDelete(
   project: RegistryProject,
   trackName: string,
-  liveSessionCwds: string[]
+  /** Running sessions only (`getRunningSessions`). */
+  liveSessions: { cwd: string }[]
 ): Promise<TrackDeletePlan> {
   const cwd = project.cwd;
   const docRel = project.doc || 'PROJECT.md';
@@ -238,7 +239,7 @@ export async function planTrackDelete(
       name: active.branch,
       worktreePath: active.worktreePath,
       uncommittedFiles: entries?.length ?? 0,
-      sessionsToClose: liveSessionCwds.filter((c) => isInside(active.worktreePath, c)).length,
+      sessionsToClose: sessionsInWorktree(liveSessions, active.worktreePath).length,
     };
   }
 
@@ -540,7 +541,7 @@ export async function executeTrackDelete(
 ): Promise<TrackDeleteResult> {
   const sessions = deps.liveSessions();
 
-  const plan = await planTrackDelete(project, trackName, sessions.map((s) => s.cwd)); // 1.
+  const plan = await planTrackDelete(project, trackName, sessions); // 1.
   if (plan.token !== choices.token) {
     throw new TrackDeleteError('The track changed since this was opened — review it again', 409);
   }
@@ -709,9 +710,7 @@ async function tearDown(
   deps: TrackDeleteDeps
 ): Promise<{ discarded: number; branchRemoved: boolean; leftover: string | null }> {
   if (plan.branch) {
-    for (const s of sessions) {
-      if (isInside(plan.branch.worktreePath, s.cwd)) await deps.terminateSession(s.id);
-    }
+    for (const s of sessionsInWorktree(sessions, plan.branch.worktreePath)) await deps.terminateSession(s.id);
   }
   let discarded = 0;
   for (const job of plan.discard) {

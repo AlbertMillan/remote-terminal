@@ -37,7 +37,7 @@ const logger = createLogger('session-manager');
 // Configuration constants
 const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
 const DB_UPDATE_DEBOUNCE_MS = 5000; // Debounce database updates for session activity
-const PTY_EXIT_WAIT_MS = 5000; // Longest terminateSession waits for a killed PTY to exit
+const PTY_EXIT_WAIT_MS = 5000; // Longest terminateSession waits for a killed shell to exit (~0.1s measured)
 
 class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
@@ -264,7 +264,11 @@ class SessionManager {
 
     // Kill PTY. kill() only signals it; Land and Delete track tear the
     // session's folder down once this resolves, and on Windows a shell still
-    // exiting holds its cwd, so wait for the exit (bounded) before returning.
+    // exiting holds its cwd, so wait (bounded) for the shell's exit before
+    // returning. That is the SHELL only: node-pty kills the rest of the
+    // console's processes through a helper that can fail (`AttachConsole
+    // failed` with no console attached), so a child such as `claude` may
+    // outlive it. removeWorktree's busy-folder retry is the backstop.
     const exited = session.status === 'terminated' ? Promise.resolve() : ptyExit(session.pty, PTY_EXIT_WAIT_MS);
     killPty(session.pty);
 
@@ -409,8 +413,11 @@ class SessionManager {
       session.connectedClients.delete(clientId);
       logSessionEvent(id, 'client_disconnected', clientId);
 
-      // Update status to idle if no clients connected
-      if (session.connectedClients.size === 0) {
+      // Update status to idle if no clients connected — never for a shell that
+      // exited: switching away from it would make it "idle", which
+      // getRunningSessions counts, so Land would try to close a dead shell
+      // and wait out PTY_EXIT_WAIT_MS for an exit that already happened.
+      if (session.connectedClients.size === 0 && session.status !== 'terminated') {
         session.status = 'idle';
         updateSession(id, { status: 'idle' });
       }
@@ -429,7 +436,11 @@ class SessionManager {
 
   private touchSession(id: string): void {
     const session = this.activeSessions.get(id);
-    if (!session) return;
+    // A session whose shell exited stays here (its scrollback is attachable),
+    // and attaching or typing into it must not bring it back to 'active':
+    // getRunningSessions would count it again, and Land and Delete track would
+    // "close" a shell that is already gone.
+    if (!session || session.status === 'terminated') return;
 
     session.lastAccessedAt = new Date();
     session.status = 'active';
@@ -439,7 +450,10 @@ class SessionManager {
       this.touchDebounceTimers.set(id, setTimeout(() => {
         this.touchDebounceTimers.delete(id);
         const currentSession = this.activeSessions.get(id);
-        if (currentSession) {
+        // Re-checked: the shell may have exited within the debounce window
+        // (typing `exit` does exactly that), and this write would otherwise
+        // overwrite the row's 'terminated' with 'active'.
+        if (currentSession && currentSession.status !== 'terminated') {
           updateSession(id, {
             lastAccessedAt: currentSession.lastAccessedAt.toISOString(),
             status: 'active',

@@ -340,6 +340,38 @@ describe('landTrack', () => {
     expect(fake.calls).toEqual([]);
   });
 
+  it('refuses, merging nothing, when the worktree index is locked while PROJECT.md is reset', async () => {
+    // What a closed session's log run could do: hold index.lock in the
+    // worktree just as Land commits PROJECT.md back to its merge-base. Land
+    // used to ignore the failed commit and merge the branch's PROJECT.md.
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'work');
+    // A tick on the branch, so PROJECT.md differs from the merge-base and the
+    // reset has something to commit.
+    const doc = readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8');
+    commitFile(t.worktreePath, 'PROJECT.md', doc.replace('- [ ] `f-aaaaaa`', '- [x] `f-aaaaaa`'), 'tick');
+    const mainBefore = git(repo, 'rev-parse', 'HEAD');
+    const worktreeBefore = git(t.worktreePath, 'rev-parse', 'HEAD');
+    const lock = join(git(t.worktreePath, 'rev-parse', '--absolute-git-dir'), 'index.lock');
+    writeFileSync(lock, '');
+    try {
+      await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
+        status: 409,
+        message: expect.stringContaining('Nothing was merged'),
+      });
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(mainBefore);
+    expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(worktreeBefore);
+    expect(git(t.worktreePath, 'status', '--porcelain')).toBe('');
+    expect(tracks.getActiveTrackBranch(repo, 'Alpha')).not.toBeNull();
+
+    // With the lock gone the same Land goes through.
+    const landed = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
+    expect(git(repo, 'log', '-1', '--format=%s', landed.mergeSha)).toBe('Merge track: Alpha');
+  });
+
   it('closes nothing when an earlier check refuses', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     git(repo, 'checkout', '-q', '-b', 'elsewhere');

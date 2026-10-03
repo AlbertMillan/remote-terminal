@@ -61,6 +61,15 @@ export interface WorkspaceTrack {
   openSessions?: number;
 }
 
+/** The Land confirmation, naming the worktree sessions Land will close. */
+export function landConfirmText(track: string, openSessions: number): string {
+  const closing =
+    openSessions > 0
+      ? ` ${openSessions} open session${openSessions === 1 ? '' : 's'} in its worktree will be closed.`
+      : '';
+  return `Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.${closing}`;
+}
+
 /**
  * The revision of the file a write lands in: a branched track's own (its
  * worktree's PROJECT.md), main's otherwise. Pass the track a feature sits in,
@@ -872,9 +881,7 @@ export class ProjectWorkspace {
         // From the last board load: a session opened since is closed too, and
         // the Land result says how many were.
         const open = this.getProject(cwd)?.tracks.find((t) => t.name === track)?.openSessions ?? 0;
-        const closing =
-          open > 0 ? ` ${open} open session${open === 1 ? '' : 's'} in its worktree will be closed.` : '';
-        if (confirm(`Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.${closing}`)) {
+        if (confirm(landConfirmText(track, open))) {
           void this.landTrack(cwd, track);
         }
         return;

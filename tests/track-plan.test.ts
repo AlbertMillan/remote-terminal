@@ -36,6 +36,7 @@ const { runRebuildStage } = await import('../src/server/jobs/stages/rebuild.js')
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const { pathKey } = await import('../src/server/sessions/project-discovery.js');
 const { withProjectLock } = await import('../src/server/projects/project-lock.js');
+const { sessionManager } = await import('../src/server/sessions/manager.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -210,9 +211,56 @@ describe('board', () => {
     expect(beta.statusCode).toBe(200);
   });
 
+  /**
+   * The session manager as the routes see it: one session in the worktree
+   * whose shell exited, one still running there, one on main. Only the
+   * running one in the worktree counts, and only it is closed.
+   */
+  function fakeSessions(worktreePath: string) {
+    const all = [
+      { id: 'exited', cwd: worktreePath, status: 'terminated' },
+      { id: 'running', cwd: join(worktreePath, 'src'), status: 'active' },
+      { id: 'main', cwd: repo, status: 'active' },
+    ];
+    vi.spyOn(sessionManager, 'getAllSessions').mockReturnValue(all as never);
+    return vi.spyOn(sessionManager, 'terminateSession').mockResolvedValue(true);
+  }
+
+  it('routes count and close only running sessions in the worktree (an exited shell does not block)', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const terminate = fakeSessions(t.worktreePath);
+    try {
+      const planRes = await app.inject({
+        method: 'GET',
+        url: `/api/projects/track/delete-plan?cwd=${encodeURIComponent(repo)}&track=Alpha`,
+      });
+      expect(planRes.statusCode).toBe(200);
+      expect(planRes.json().plan.branch.sessionsToClose).toBe(1);
+
+      const boardRes = await app.inject({ method: 'GET', url: '/api/projects' });
+      const p = (boardRes.json().projects as { cwd: string; tracks: { name: string; openSessions: number }[] }[]).find(
+        (x) => pathKey(x.cwd) === pathKey(repo)
+      );
+      expect(p?.tracks.find((x) => x.name === 'Alpha')?.openSessions).toBe(1);
+
+      const land = await app.inject({
+        method: 'POST',
+        url: '/api/projects/track/land',
+        payload: { cwd: repo, track: 'Alpha' },
+      });
+      expect(land.statusCode).toBe(200);
+      expect(terminate.mock.calls.map((c) => c[0])).toEqual(['running']);
+      expect(existsSync(t.worktreePath)).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('counts the running sessions inside a branched track’s worktree, for the Land confirm', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    const board = getWorkspaceBoard(undefined, [t.worktreePath, join(t.worktreePath, 'src'), repo]);
+    const board = getWorkspaceBoard({
+      runningSessions: [{ cwd: t.worktreePath }, { cwd: join(t.worktreePath, 'src') }, { cwd: repo }],
+    });
     const p = board.find((x) => pathKey(x.cwd) === pathKey(repo));
     expect(p?.tracks.find((x) => x.name === 'Alpha')?.openSessions).toBe(2);
     expect(p?.tracks.find((x) => x.name === 'Beta')?.openSessions).toBe(0);

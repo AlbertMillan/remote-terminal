@@ -89,8 +89,8 @@ export function findActiveTrackBranchByName(cwd: string, branch: string): TrackB
 
 /**
  * The track row whose worktree holds `path`, across every project. An unlanded
- * row wins; a landed one still matches, because its folder name is the row's
- * own id, so no later track reuses it — that is how a session in a worktree
+ * row wins; a landed one still matches, because no later row is given a path
+ * any row records (trackWorktreePathFor) — that is how a session in a worktree
  * since landed is still traced back to its project (the startup sweep).
  */
 export function trackBranchForPath(path: string): TrackBranch | null {

@@ -140,7 +140,10 @@ describe('generateSessionLog for a worktree session', () => {
     expect(runs[0].prompt).toContain(`the track worktree ${t.worktreePath}`);
     // The evidence is the worktree's, and the plan docs are read from there too.
     expect(runs[0].prompt).toContain('worktree-only commit');
-    expect(runs[0].prompt).toContain(`with the path\n${t.worktreePath}`);
+    // Only the worktree's plan file and specs, not every plan glob a second time.
+    expect(runs[0].prompt).toContain(join(t.worktreePath, 'PROJECT.md'));
+    expect(runs[0].prompt).toContain('Glob "project/*.md" with that');
+    expect(runs[0].prompt).not.toContain('Glob the same patterns');
 
     expect(existsSync(join(repo, 'SESSION-LOG.md'))).toBe(true);
     expect(existsSync(join(t.worktreePath, 'SESSION-LOG.md'))).toBe(false);
@@ -177,9 +180,13 @@ describe('generateSessionLog for a worktree session', () => {
     git(repo, 'worktree', 'remove', '--force', wt);
   });
 
-  it('skips, and does not retry forever, a folder that is gone and that nothing records', async () => {
-    expect(await generateSessionLogForced(ctx(join(dataDir, 'nowhere')))).toBe('skipped');
+  it('skips, and does not retry forever, a worktree that is gone and that nothing records', async () => {
+    expect(await generateSessionLogForced(ctx(join(dataDir, 'worktrees', 'tracks', 'deadbeef')))).toBe('skipped');
     expect(runs).toHaveLength(0);
+  });
+
+  it('leaves any other missing folder unstamped, to retry later (an unmounted drive, say)', async () => {
+    expect(await generateSessionLogForced(ctx(join(dataDir, 'unmounted')))).not.toBe('skipped');
   });
 });
 
