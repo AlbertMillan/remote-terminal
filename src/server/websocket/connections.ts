@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import WebSocketModule from 'ws';
 export const WS_OPEN = WebSocketModule.OPEN;
-import { createMessage, type SessionInfo, type CategoryInfo } from './protocol.js';
+import { createMessage, type SessionInfo, type CategoryInfo, type LandNotificationPayload } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
@@ -104,6 +104,19 @@ export function broadcastSessionAdded(session: SessionInfo): void {
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage('session.added', { session }));
+    }
+  }
+}
+
+/**
+ * A session-requested Land's outcome, to every open client. Not filtered by
+ * notification preferences: those choose which session events alert, and
+ * this is the only place the result of that Land is ever reported.
+ */
+export function broadcastLandResult(payload: LandNotificationPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('notification', payload));
     }
   }
 }

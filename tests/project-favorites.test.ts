@@ -4,6 +4,10 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import Fastify from 'fastify';
 
+// The first test here builds a Fastify app and loads the route modules cold:
+// ~1.5 s alone, and past the 5 s default when every suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 });
+
 /**
  * Favourites live in the hand-editable projects.json, so the property worth
  * pinning is what a star click must NOT do: overwrite a file it can't parse,

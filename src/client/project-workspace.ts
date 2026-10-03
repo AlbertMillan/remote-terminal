@@ -59,6 +59,10 @@ export interface WorkspaceTrack {
   worktreeMissing?: boolean;
   /** Running sessions in the track's worktree, which Land closes. */
   openSessions?: number;
+  /** Commits on the base branch this branched track lacks. */
+  behind?: number;
+  /** Paths merging the base in would conflict on (plan files excluded); null: unknown. */
+  wouldConflict?: string[] | null;
 }
 
 /** The Land confirmation, naming the worktree sessions Land will close. */
@@ -68,6 +72,14 @@ export function landConfirmText(track: string, openSessions: number): string {
       ? ` ${openSessions} open session${openSessions === 1 ? '' : 's'} in its worktree will be closed.`
       : '';
   return `Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.${closing}`;
+}
+
+/** The Update from main confirmation, naming the branch merged in. */
+export function updateConfirmText(track: string, baseBranch: string): string {
+  return (
+    `Merge ${baseBranch} into "${track}"? It runs in the track's worktree and keeps the track's plan. ` +
+    `Code conflicts abort it with nothing changed. Run the tests in the track's session afterwards.`
+  );
 }
 
 /**
@@ -724,6 +736,14 @@ export class ProjectWorkspace {
     if (data) this.flash(data.detail);
   }
 
+  /** Merge the track's base branch into its worktree (the server keeps the plan). */
+  async updateTrack(cwd: string, track: string): Promise<void> {
+    this.flash(`Updating "${track}" from main…`, 0);
+    const data = await this.trackRequest<{ detail: string }>('/api/projects/track/update', { cwd, track });
+    await this.reload();
+    if (data) this.flash(data.detail);
+  }
+
   async landTrack(cwd: string, track: string): Promise<void> {
     // The server builds the project after merging, so the reply can take a while.
     this.flash(`Landing "${track}" and rebuilding…`);
@@ -814,6 +834,11 @@ export class ProjectWorkspace {
    * pre-edit state with a stale revision, so the next edit would 409 against a
    * change the user just made themselves.
    */
+  /** Reload after a change made elsewhere (a session-requested Land, say). */
+  async refresh(): Promise<void> {
+    await this.reload();
+  }
+
   private async reload(): Promise<void> {
     if (this.selectedCwd) this.unbranched.delete(this.selectedCwd);
     await this.loadBoard();
@@ -871,6 +896,15 @@ export class ProjectWorkspace {
       const trackDelete = target.closest('.pw-track-delete') as HTMLElement | null;
       if (trackDelete) {
         void this.deleteTrack(trackDelete.dataset.cwd || '', trackDelete.dataset.track || '');
+        return;
+      }
+
+      const trackUpdate = target.closest('.pw-track-update') as HTMLElement | null;
+      if (trackUpdate) {
+        const track = trackUpdate.dataset.track || '';
+        const cwd = trackUpdate.dataset.cwd || '';
+        const base = this.getProject(cwd)?.tracks.find((t) => t.name === track)?.branch?.baseBranch || 'main';
+        if (confirm(updateConfirmText(track, base))) void this.updateTrack(cwd, track);
         return;
       }
 

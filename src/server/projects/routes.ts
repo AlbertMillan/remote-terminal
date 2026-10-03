@@ -17,19 +17,19 @@ import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readSpec } from './project-store.js';
 import {
   TrackBranchError,
+  addBehindMain,
   branchNow,
   ensureTrackBranch,
   getActiveTrackBranch,
-  landTrack,
   moveIntoBranch,
   readSpecForTrack,
+  updateTrackFromMain,
 } from './track-branches.js';
 import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
-import { buildProject } from './project-build.js';
+import { landAndBuild } from './track-land.js';
 import { installDependencies, needsInstall } from './project-deps.js';
-import { isServerRoot, recheckBuildState, restartHint } from '../server-restart.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
@@ -76,7 +76,8 @@ function parsePriority(v: unknown): number | null | undefined {
 export function registerProjectRoutes(app: FastifyInstance): void {
   // --- Board -------------------------------------------------------------
   app.get('/api/projects', async () => {
-    return { projects: withProjectUsage(getWorkspaceBoard({ runningSessions: runningSessions() })) };
+    const board = await addBehindMain(getWorkspaceBoard({ runningSessions: runningSessions() }));
+    return { projects: withProjectUsage(board) };
   });
 
   // Cross-project roll-up: what is in flight and what is waiting on you.
@@ -97,6 +98,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
       const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
+      if (board) await addBehindMain([board]);
       // Main's plan with each in-progress track's section from its worktree.
       const plan = readProjectPlan(project);
       const state = { revision: plan.main.revision, doc: plan.doc };
@@ -406,27 +408,32 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       }
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
-      return withErrors(reply, async () => {
-        const landed = await withProjectLock(project.cwd, `landing "${body.track}"`, () =>
-          landTrack(project, body.track as string, {
-            sessions: runningSessions(),
-            terminateSession: (id) => sessionManager.terminateSession(id),
-          })
-        );
-        // Outside the lock: a build touches no git state, and holding the lock
-        // for minutes would refuse every Land/Delete/merge meanwhile. A failed
-        // build does not undo the land — it is reported alongside it.
-        const build = await buildProject(project.cwd);
-        // Landing this server's own project changes nothing it runs until a
-        // restart, and "build passed" alone reads as though nothing more is
-        // needed. Re-check (the cache predates the merge) and say which.
-        const hint = isServerRoot(project.cwd) ? restartHint((await recheckBuildState())?.state) : '';
-        return {
-          ...landed,
-          build,
-          detail: (build.ran ? `${landed.detail} — ${build.detail}` : landed.detail) + hint,
-        };
-      });
+      return withErrors(reply, () =>
+        landAndBuild(project, body.track as string, {
+          sessions: runningSessions(),
+          terminateSession: (id) => sessionManager.terminateSession(id),
+        })
+      );
+    }
+  );
+
+  // Merge the base into a branched track's worktree, putting its plan back
+  // (main holds the commit that deleted it: docs/track-branches.md, "Update
+  // from main"). Under the try lock, like Land.
+  app.post<{ Body?: { cwd?: string; track?: string } }>(
+    '/api/projects/track/update',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track) {
+        return reply.status(400).send({ error: 'cwd and track required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      return withErrors(reply, () =>
+        withProjectLock(project.cwd, `updating "${body.track}" from main`, () =>
+          updateTrackFromMain(project, body.track as string)
+        )
+      );
     }
   );
 

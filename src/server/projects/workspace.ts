@@ -50,6 +50,14 @@ export interface WorkspaceTrack {
    * close, counted as Delete's `sessionsToClose` is. 0 when not branched.
    */
   openSessions: number;
+  /**
+   * Commits on the base branch this branched track lacks, and the paths
+   * merging them in would conflict on (plan files excluded; null when the dry
+   * run couldn't be made). Filled after the board is built (addBehindMain in
+   * track-branches.ts); 0 and [] until then, and for unbranched tracks.
+   */
+  behind: number;
+  wouldConflict: string[] | null;
 }
 
 export interface WorkspaceProject {
@@ -278,6 +286,8 @@ export function getWorkspaceBoard(options: BoardOptions = {}): WorkspaceProject[
           planMissing: false,
           worktreeMissing: false,
           openSessions: 0,
+          behind: 0,
+          wouldConflict: [],
         };
       }
       const b = c.branch;
@@ -292,6 +302,8 @@ export function getWorkspaceBoard(options: BoardOptions = {}): WorkspaceProject[
         planMissing: c.track === null,
         worktreeMissing: !existsSync(b.worktreePath),
         openSessions: sessionsInWorktree(runningSessions, b.worktreePath).length,
+        behind: 0,
+        wouldConflict: [],
       };
     };
     const tracks: WorkspaceTrack[] = state ? state.doc.tracks.map((t) => toTrack(t.name, featuresOf(t))) : [];

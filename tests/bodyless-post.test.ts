@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import { BODYLESS_POST, jsonPost } from '../src/client/job-board.js';
+
+// The first Fastify app here is built cold, which passed the 5 s default when
+// every suite runs in parallel (6 s seen; under 0.2 s alone).
+vi.setConfig({ testTimeout: 30_000 });
 
 /**
  * The contract behind Retry, Approve, Cancel and Discard.

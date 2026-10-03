@@ -75,8 +75,14 @@ export function isPlanningPath(rel: string, docRel: string): boolean {
   const k = rel.replace(/\\/g, '/').toLowerCase();
   const doc = docRel.replace(/\\/g, '/').toLowerCase();
   if (k === doc) return true;
-  const dir = doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/') + 1) : '';
-  return k.startsWith(`${dir}project/`) && k.endsWith('.md') && !k.startsWith(`${dir}project/reviews/`);
+  const dir = specFolderOf(doc);
+  return k.startsWith(dir) && k.endsWith('.md') && !k.startsWith(`${dir}reviews/`);
+}
+
+/** The plan doc's companion `project/` folder, repo-relative with a trailing slash. */
+export function specFolderOf(docRel: string): string {
+  const doc = docRel.replace(/\\/g, '/');
+  return `${doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/') + 1) : ''}project/`;
 }
 
 /**
@@ -95,6 +101,16 @@ export function isSessionLogPath(rel: string): boolean {
 export function nameFiles(paths: string[], max = 8): string {
   const shown = paths.slice(0, max).join(', ');
   return paths.length > max ? `${shown} and ${paths.length - max} more` : shown;
+}
+
+/**
+ * The warning every refusal that mentions merging the base carries. Main holds
+ * the commit that took a branched track's plan off it, so a plain merge in the
+ * worktree deletes every spec the branch never changed, with no conflict
+ * (docs/track-branches.md, "Update from main").
+ */
+export function mergeTrapAdvice(base: string): string {
+  return `Don't run a plain \`git merge ${base}\` in the worktree: it deletes the track's specs that the branch never changed.`;
 }
 
 /**
@@ -212,7 +228,8 @@ export async function commitOnHead(
 
 // --- Sections --------------------------------------------------------------
 
-function docRelOf(project: RegistryProject): string {
+/** The project's plan doc, repo-relative with forward slashes. */
+export function docRelOf(project: RegistryProject): string {
   return (project.doc || 'PROJECT.md').replace(/\\/g, '/');
 }
 

@@ -230,6 +230,7 @@ export function renderTrackActions(
       ? `<button class="pw-track-moveinto" data-cwd="${cwd}" data-track="${name}"
                title="Main's PROJECT.md also has ${track.alsoOnMain} line${track.alsoOnMain === 1 ? '' : 's'} for this track. Move them into its branch, where its plan lives.">also has lines on main · Move into branch</button>`
       : '';
+  const behind = track.branch ? renderBehind(project, track) : '';
   const land = track.branch
     ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
                title="Merge this track into ${escapeAttr(track.branch.baseBranch)} and retire its worktree">Land</button>`
@@ -237,6 +238,7 @@ export function renderTrackActions(
   return `
     <span class="pw-track-actions">
       ${badge}
+      ${behind}
       ${alsoOnMain}
       ${onMain}
       <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
@@ -244,6 +246,28 @@ export function renderTrackActions(
       ${land}
       ${del}
     </span>`;
+}
+
+/**
+ * `N behind main`, what merging it in would conflict on, and Update from
+ * main. Nothing when the track is level with its base. A null conflict list
+ * means the dry run couldn't be made: only the count shows, never "clean".
+ */
+export function renderBehind(project: WorkspaceProject, track: WorkspaceTrack): string {
+  const n = track.behind ?? 0;
+  if (!track.branch || n <= 0) return '';
+  const base = track.branch.baseBranch;
+  const conflicts = track.wouldConflict ?? [];
+  const shown = conflicts.slice(0, 3).join(', ') + (conflicts.length > 3 ? ` +${conflicts.length - 3}` : '');
+  const conflict = conflicts.length
+    ? `<span class="pw-behind pw-behind-conflict" title="${escapeAttr(
+        `Merging ${base} in would conflict in: ${conflicts.join(', ')}`
+      )}">would conflict: ${escapeHtml(shown)}</span>`
+    : '';
+  return `<span class="pw-behind" title="${escapeAttr(`${n} commit${n === 1 ? '' : 's'} on ${base} this track lacks`)}">${n} behind ${escapeHtml(base)}</span>
+      ${conflict}
+      <button class="pw-track-update" data-cwd="${escapeAttr(project.cwd)}" data-track="${escapeAttr(track.name)}"
+              title="Merge ${escapeAttr(base)} into this track's worktree, keeping its plan">Update from ${escapeHtml(base)}</button>`;
 }
 
 export function unbranchedFor(

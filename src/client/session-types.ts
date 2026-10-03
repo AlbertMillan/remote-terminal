@@ -168,6 +168,16 @@ export interface NotificationPayload {
   timestamp: string;
 }
 
+/** A session-requested Land's outcome (server: LandNotificationPayload). */
+export interface LandNotificationPayload {
+  kind: 'land';
+  projectCwd: string;
+  track: string;
+  ok: boolean;
+  detail: string;
+  timestamp: string;
+}
+
 export type ServerMessage =
   | { type: 'auth.success'; id?: string; payload: AuthSuccessPayload }
   | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
@@ -193,7 +203,7 @@ export type ServerMessage =
   | { type: 'category.list'; id?: string; payload: CategoryListPayload }
   | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
-  | { type: 'notification'; id?: string; payload: NotificationPayload }
+  | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload }
   | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };
