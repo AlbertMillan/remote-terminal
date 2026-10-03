@@ -228,11 +228,66 @@ A merge conflict aborts the merge and leaves both checkouts as they were. That i
 taking back the plan commit on main (`git reset` to before it, which is safe because
 nothing was staged, and the working files written back), and the commit that reset the
 branch's PROJECT.md: without that rollback the next Land would read the reset copy, so
-the track's section would be lost for good. The fix for a conflict is to merge the base into
-the track in its worktree, resolve there, and land again.
+the track's section would be lost for good. The fix for a conflict is Update from main
+(below): if it names conflicting files, make them agree on either side, Update again, and
+land. Never a plain `git merge` of the base in the worktree; that is the trap below.
 
 A worktree folder that has gone missing is re-attached to its branch before Land, as
 `ensureTrackBranch` does, rather than failing with a 500.
+
+## Update from main
+
+The spec is `project/track-update-from-main.md`. Code: `behindMain` and
+`updateTrackFromMain` in `src/server/projects/track-branches.ts`, the route
+`POST /api/projects/track/update`, and `renderBehind` on the board.
+
+**The trap.** Branching commits, on **main**, the removal of the track's section and
+specs (`Move "<track>" plan into its track branch`). That commit is on main, not on the
+branch, so a plain `git merge main` in the worktree applies the deletion: the section
+goes, every spec the branch never touched is deleted **with no conflict**, and one it
+revised is a modify/delete conflict. `git merge-tree` reports such a merge as clean. Land
+never hits this, because it merges the other way after copying the plan back
+(`returnSectionToMain`).
+
+**The warning.** A branched track's heading shows `N behind main` and, when the dry run
+(`git merge-tree --write-tree --name-only <branch> <base>`, git 2.38+) has conflicts,
+`would conflict: a.ts, b.ts`. Filled after the board is built (`addBehindMain`), cached
+per track by (base sha, branch sha, plan doc). `addBehindMain` reads the registry entry,
+not just the cwd: a project's `doc` override decides which files are its plan.
+
+- **Commits touching only planning files aren't counted.** Branching itself puts one on
+  main (the move), so every new track would read "1 behind", and the plan never needs an
+  Update: Land copies it across.
+- **Plan files aren't listed as conflicts**: the plan doc, and the track's specs (`specsOf`
+  of the section at the branch's HEAD) that the base lacks. Update settles those itself.
+  A spec the base still has is shared with another section, and a conflict on it is
+  listed like any file's.
+- **A failed dry run shows the count only** (`wouldConflict: null`), never a false
+  "clean".
+
+**Update from main**, in the worktree, under the project try lock (as Land):
+
+1. Refuse on a live job for the track (a job merging into the branch would race it),
+   a running install, or uncommitted code in the worktree; uncommitted planning is
+   committed first (`commitWorktreePlanning`).
+2. Remember the track's section, and the specs it links to that the base lacks, as of
+   HEAD.
+3. `git merge --no-ff --no-commit <base>`.
+4. Put the plan back: the plan doc becomes the **base's** file with this track's section
+   replaced by HEAD's (the worktree's copy is authoritative only for that section, and a
+   three-way merge of the file conflicts on nearly every Update). Each remembered spec is
+   restored from HEAD: git deleted it, or conflicted on it, and the branch's copy is the
+   only one. A spec main still has merges like any file. Taking HEAD's copy over a
+   conflict there would revert main's edit when the track lands.
+5. Anything else unmerged: `git merge --abort` and refuse naming the paths. The worktree
+   is as it was. The message says to make the files agree on either side and Update
+   again, never to merge by hand. If the abort itself fails, the refusal says the worktree
+   is mid-merge instead of claiming nothing changed.
+6. Commit `Merge <base> into track: <name>`. Never pushed; the tests are not run.
+
+A Land after an Update is clean: Land resets the branch's PROJECT.md to the new
+merge-base (main's file at the Update), and the specs main gets back from
+`returnSectionToMain` are identical on both sides.
 
 ## Dependencies
 

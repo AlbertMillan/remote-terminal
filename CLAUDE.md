@@ -214,6 +214,9 @@ before **merge**.
   `git add`/`commit` — or whatever the user staged rides along. Land refuses anything
   staged (git won't merge then) and uncommitted code, naming the files; uncommitted
   planning on main passes, and in the worktree is committed first.
+- Never `git merge <base>` into a track branch without restoring its plan: main holds the
+  commit that deleted it, so the merge silently deletes every spec the branch never
+  touched. Update from main (`updateTrackFromMain`) puts the section and specs back.
 - A job whose `baseBranch` is a track branch merges **in the track worktree** (`mergeCwd`)
   and never pushes; that branch is checked out there, so merging in the project fails.
 - Record `merge_sha` on every job merge and land, and give every job merge the

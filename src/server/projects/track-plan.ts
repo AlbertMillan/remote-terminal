@@ -75,8 +75,14 @@ export function isPlanningPath(rel: string, docRel: string): boolean {
   const k = rel.replace(/\\/g, '/').toLowerCase();
   const doc = docRel.replace(/\\/g, '/').toLowerCase();
   if (k === doc) return true;
-  const dir = doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/') + 1) : '';
-  return k.startsWith(`${dir}project/`) && k.endsWith('.md') && !k.startsWith(`${dir}project/reviews/`);
+  const dir = specFolderOf(doc);
+  return k.startsWith(dir) && k.endsWith('.md') && !k.startsWith(`${dir}reviews/`);
+}
+
+/** The plan doc's companion `project/` folder, repo-relative with a trailing slash. */
+export function specFolderOf(docRel: string): string {
+  const doc = docRel.replace(/\\/g, '/');
+  return `${doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/') + 1) : ''}project/`;
 }
 
 /**
@@ -212,7 +218,8 @@ export async function commitOnHead(
 
 // --- Sections --------------------------------------------------------------
 
-function docRelOf(project: RegistryProject): string {
+/** The project's plan doc, repo-relative with forward slashes. */
+export function docRelOf(project: RegistryProject): string {
   return (project.doc || 'PROJECT.md').replace(/\\/g, '/');
 }
 
