@@ -6,13 +6,17 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   BOOT_ID,
+  BUILD_INPUTS,
   createBuildStateChecker,
+  isServerRoot,
   readBuildStamp,
   registerServerRestartRoutes,
   restartAvailability,
   restartHint,
   type ServerRestartDeps,
 } from '../src/server/server-restart.js';
+// @ts-expect-error — a plain .mjs build script, no types
+import { BUILD_INPUTS as SCRIPT_BUILD_INPUTS, buildInfo, workingTreeId } from '../scripts/write-build-info.mjs';
 import { chipView, waitForNewBoot, type BuildStatus, type ServerStatus } from '../src/client/server-restart.js';
 
 /**
@@ -173,9 +177,9 @@ describe('waitForNewBoot', () => {
 });
 
 /** Writes dist/build-info.json as scripts/write-build-info.mjs does. */
-function stamp(projectRoot: string, sha: string, builtAt: string): void {
+function stamp(projectRoot: string, sha: string, builtAt: string, inputsTree?: string | null): void {
   mkdirSync(join(projectRoot, 'dist'), { recursive: true });
-  writeFileSync(join(projectRoot, 'dist', 'build-info.json'), JSON.stringify({ sha, builtAt }));
+  writeFileSync(join(projectRoot, 'dist', 'build-info.json'), JSON.stringify({ sha, builtAt, inputsTree }));
 }
 
 describe('build state (server behind its build)', () => {
@@ -217,12 +221,47 @@ describe('build state (server behind its build)', () => {
     expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
   });
 
-  it('asks for a restart when dist/ holds a newer build than the running one', async () => {
+  it('asks for a restart when dist/ holds a build of different inputs', async () => {
     const running = built('2026-10-03T09:00:00.000Z');
-    built('2026-10-03T10:00:00.000Z'); // rebuilt since, same commit
+    commit('src/server/app.ts', 'export const x = 1;\n');
+    built('2026-10-03T10:00:00.000Z'); // rebuilt since, with the change
     const status = await createBuildStateChecker(repo, running).check();
     expect(status.state).toBe('restart');
-    expect(status.reason).toMatch(/dist\/ holds/);
+    expect(status.reason).toMatch(/dist\/ holds .*Changed: src\/server\/app\.ts/);
+  });
+
+  it('stays current after a rebuild that changed no input: every Land rebuilds, a docs-only one too', async () => {
+    const running = built('2026-10-03T09:00:00.000Z');
+    built('2026-10-03T10:00:00.000Z'); // same commit, rebuilt
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+    commit('PROJECT.md', '- [x] ticked\n');
+    built('2026-10-03T11:00:00.000Z'); // a docs-only Land's build
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+  });
+
+  it('does not ask for a rebuild once edits built before their commit are committed', async () => {
+    // Edit on main, build, restart, then commit: dist/ already has the change.
+    writeFileSync(join(repo, 'src', 'server', 'index.ts'), 'export const edited = 1;\n');
+    writeFileSync(join(repo, 'src', 'server', 'new-file.ts'), 'export {};\n'); // untracked, built too
+    const running = { ...buildInfo(repo), builtAt: '2026-10-03T10:00:00.000Z' };
+    expect(running.inputsTree).toMatch(/^[0-9a-f]{40}$/);
+    stamp(repo, running.sha, running.builtAt, running.inputsTree);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'commit what was built');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+    // A further change after that commit still counts.
+    commit('src/server/index.ts', 'export const later = 2;\n');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('rebuild');
+  });
+
+  it('stamps the built tree without touching what the user has staged', () => {
+    writeFileSync(join(repo, 'src', 'server', 'index.ts'), 'export const staged = 1;\n');
+    git('add', 'src/server/index.ts');
+    writeFileSync(join(repo, 'src', 'server', 'other.ts'), 'export {};\n'); // untracked, not staged
+    const before = git('diff', '--cached', '--name-only');
+    expect(workingTreeId(repo)).toMatch(/^[0-9a-f]{40}$/);
+    expect(git('diff', '--cached', '--name-only')).toBe(before);
+    expect(git('status', '--porcelain')).toContain('?? src/server/other.ts');
   });
 
   it('asks for a rebuild after a commit to src/', async () => {
@@ -291,6 +330,71 @@ describe('build state (server behind its build)', () => {
   it('reads a stamp only with a sha: a build outside git stamps a null one', () => {
     stamp(repo, null as never, '2026-10-03T10:00:00.000Z');
     expect(readBuildStamp(repo)).toBeNull();
+  });
+});
+
+describe('build state cache', () => {
+  /** A git comparison the test finishes by hand. */
+  function controlledDiff() {
+    const calls: { from: string; to: string; finish: (files: string[] | null) => void }[] = [];
+    const diff = (from: string, to: string) =>
+      new Promise<string[] | null>((finish) => calls.push({ from, to, finish }));
+    return { calls, diff };
+  }
+  const running = { sha: 'a'.repeat(40), builtAt: '2026-10-03T10:00:00.000Z' };
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cr-build-cache-'));
+    stamp(root, running.sha, running.builtAt);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('shares one git between checks that overlap', async () => {
+    const { calls, diff } = controlledDiff();
+    const checker = createBuildStateChecker(root, running, { diff });
+    const first = checker.check();
+    const second = checker.check();
+    await Promise.resolve();
+    expect(calls).toHaveLength(1);
+    calls[0].finish([]);
+    expect((await first).state).toBe('current');
+    expect((await second).state).toBe('current');
+  });
+
+  it('never lets a git that started before invalidate() write its older answer back', async () => {
+    const { calls, diff } = controlledDiff();
+    const checker = createBuildStateChecker(root, running, { diff });
+    const stale = checker.check(); // started before the Land's merge
+    await Promise.resolve();
+    checker.invalidate(); // the Land
+    const fresh = checker.check();
+    await Promise.resolve();
+    expect(calls).toHaveLength(2);
+    calls[1].finish(['src/server/app.ts']);
+    expect((await fresh).state).toBe('rebuild');
+    calls[0].finish([]); // the old answer arrives last
+    expect((await stale).state).toBe('current');
+    // The cache holds the fresh answer, not the late one.
+    expect((await checker.check()).state).toBe('rebuild');
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('scripts/write-build-info.mjs', () => {
+  it('stamps the same build inputs the server diffs', () => {
+    expect(SCRIPT_BUILD_INPUTS).toEqual(BUILD_INPUTS);
+  });
+});
+
+describe('isServerRoot', () => {
+  it('matches the server root however the path is spelled', async () => {
+    await appWith(deps());
+    expect(isServerRoot(root)).toBe(true);
+    expect(isServerRoot(root.toUpperCase().replace(/\\/g, '/') + '/')).toBe(true);
+    expect(isServerRoot(join(root, 'sub'))).toBe(false);
   });
 });
 

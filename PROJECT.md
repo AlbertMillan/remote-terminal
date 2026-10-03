@@ -83,4 +83,4 @@ status: active
 ## Track: Track workflow polish
 - [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
 - [x] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's → project/worktree-dependencies.md
-- [ ] `f-88ovq2` P3 Explain the track flow — a one-time hint on what opening a track does: new worktree path, Claude Code's trust prompt, commit then Land → project/track-flow-hint.md
+- [x] `f-88ovq2` P3 Explain the track flow — a one-time hint on what opening a track does: new worktree path, Claude Code's trust prompt, commit then Land → project/track-flow-hint.md

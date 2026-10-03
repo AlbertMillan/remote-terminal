@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, relative, resolve } from 'path';
 import { promisify } from 'util';
 import type { FastifyInstance } from 'fastify';
 import { createLogger } from './utils/logger.js';
@@ -84,14 +84,21 @@ export function restartAvailability(deps: ServerRestartDeps): RestartAvailabilit
 // mtime says which commit was built. Spec: project/server-behind-build.md.
 
 export interface BuildStamp {
+  /** HEAD when the build ran. */
   sha: string;
   builtAt: string;
+  /**
+   * The git tree of the working copy the build compiled (HEAD plus uncommitted
+   * and untracked changes). Absent from older stamps; `sha` stands in then.
+   */
+  inputsTree?: string | null;
 }
 
 /**
- * `restart`: dist/ holds a newer build than the one running. `rebuild`: a build
- * input changed in a commit after the one dist/ was built from. `unknown`: no
- * stamp, no git, or not running from dist/ — nothing is shown then.
+ * `restart`: dist/ holds a build whose inputs differ from the running one's.
+ * `rebuild`: a build input changed in a commit after what dist/ was built
+ * from. `unknown`: no stamp, no git, or not running from dist/ — nothing is
+ * shown then.
  */
 export type BuildState = 'current' | 'restart' | 'rebuild' | 'unknown';
 
@@ -104,7 +111,8 @@ export interface BuildStatus {
 
 /**
  * What a build reads. A docs-only commit — a planning commit, a Land's tick
- * commit — changes none of these, and must not ask for a rebuild.
+ * commit — changes none of these, and must not ask for a rebuild or restart.
+ * scripts/write-build-info.mjs keeps its own copy; a test checks they match.
  */
 export const BUILD_INPUTS = ['src', 'package.json', 'package-lock.json', 'tsconfig*.json', 'scripts/copy-client-assets.mjs'];
 
@@ -119,12 +127,20 @@ export function buildInfoPath(projectRoot: string): string {
 export function readBuildStamp(projectRoot: string): BuildStamp | null {
   try {
     const parsed = JSON.parse(readFileSync(buildInfoPath(projectRoot), 'utf-8')) as Partial<BuildStamp>;
-    return typeof parsed.sha === 'string' && parsed.sha && typeof parsed.builtAt === 'string'
-      ? { sha: parsed.sha, builtAt: parsed.builtAt }
-      : null;
+    if (typeof parsed.sha !== 'string' || !parsed.sha || typeof parsed.builtAt !== 'string') return null;
+    return {
+      sha: parsed.sha,
+      builtAt: parsed.builtAt,
+      inputsTree: typeof parsed.inputsTree === 'string' && parsed.inputsTree ? parsed.inputsTree : null,
+    };
   } catch {
     return null;
   }
+}
+
+/** What a build actually compiled: its working-tree id, or its commit for an older stamp. */
+function builtFrom(stamp: BuildStamp): string {
+  return stamp.inputsTree || stamp.sha;
 }
 
 /** True when this process was started from the project's dist/, not tsx (dev mode). */
@@ -134,14 +150,15 @@ export function runsFromDist(projectRoot: string, entryScript = process.argv[1] 
 }
 
 /**
- * Committed changes to build inputs between `sha` and HEAD, or null when git
- * can't say (not a repo, or `sha` no longer exists after a rewrite). Only
- * committed changes count: an uncommitted edit says nothing about what landed,
- * and would keep the chip lit through ordinary work.
+ * Build inputs that differ between two tree-ish (a commit, a tree id, HEAD),
+ * or null when git can't say (not a repo, or one side no longer exists after
+ * a rewrite). Committed changes only, on the HEAD side: an uncommitted edit
+ * says nothing about what landed, and would keep the chip lit through
+ * ordinary work.
  */
-async function changedInputs(projectRoot: string, sha: string): Promise<string[] | null> {
+async function changedInputs(projectRoot: string, from: string, to: string): Promise<string[] | null> {
   try {
-    const { stdout } = await execFileAsync('git', ['diff', '--name-only', sha, 'HEAD', '--', ...BUILD_INPUTS], {
+    const { stdout } = await execFileAsync('git', ['diff', '--name-only', from, to, '--', ...BUILD_INPUTS], {
       cwd: projectRoot,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
@@ -156,9 +173,13 @@ function describeStamp(stamp: BuildStamp): string {
   return `${stamp.sha.slice(0, 8)}, built ${stamp.builtAt}`;
 }
 
+function listFiles(files: string[]): string {
+  return files.slice(0, 5).join(', ') + (files.length > 5 ? `, and ${files.length - 5} more` : '');
+}
+
 export interface BuildStateChecker {
   check(): Promise<BuildStatus>;
-  /** Forget the cached `git diff`: after a Land, a build or a restart request. */
+  /** Forget every cached `git diff`: after a Land, a build or a restart request. */
   invalidate(): void;
 }
 
@@ -170,21 +191,33 @@ export interface BuildStateChecker {
 export function createBuildStateChecker(
   projectRoot: string,
   running: BuildStamp | null,
-  opts: { now?: () => number; unknownReason?: string } = {}
+  opts: {
+    now?: () => number;
+    unknownReason?: string;
+    /** The git comparison; tests replace it to control timing. */
+    diff?: (from: string, to: string) => Promise<string[] | null>;
+  } = {}
 ): BuildStateChecker {
   const now = opts.now ?? Date.now;
-  let cache: { sha: string; at: number; changed: string[] | null } | null = null;
+  const compare = opts.diff ?? ((from: string, to: string) => changedInputs(projectRoot, from, to));
+  // One entry per comparison, holding the promise rather than its answer:
+  // overlapping checks (tabs, focus, the restart wait's 1s poll) share a single
+  // git, and invalidate() drops the map, so a git that started before it can
+  // never write its older answer back in afterwards.
+  let cache = new Map<string, { at: number; result: Promise<string[] | null> }>();
 
-  const diffFrom = async (sha: string): Promise<string[] | null> => {
-    if (cache && cache.sha === sha && now() - cache.at < DIFF_CACHE_MS) return cache.changed;
-    const changed = await changedInputs(projectRoot, sha);
-    cache = { sha, at: now(), changed };
-    return changed;
+  const diff = (from: string, to: string): Promise<string[] | null> => {
+    const key = `${from}..${to}`;
+    const hit = cache.get(key);
+    if (hit && now() - hit.at < DIFF_CACHE_MS) return hit.result;
+    const result = compare(from, to);
+    cache.set(key, { at: now(), result });
+    return result;
   };
 
   return {
     invalidate: () => {
-      cache = null;
+      cache = new Map();
     },
     async check(): Promise<BuildStatus> {
       const onDisk = readBuildStamp(projectRoot);
@@ -198,29 +231,39 @@ export function createBuildStateChecker(
       }
       if (!onDisk) return { state: 'unknown', running, onDisk, reason: 'dist/ has no build stamp.' };
 
-      const changed = await diffFrom(onDisk.sha);
-      if (changed === null) {
+      const behind = await diff(builtFrom(onDisk), 'HEAD');
+      if (behind === null) {
         return { state: 'unknown', running, onDisk, reason: `git could not compare ${onDisk.sha.slice(0, 8)} with HEAD.` };
       }
       // Rebuild wins: a plain restart would only load a build that is already stale.
-      if (changed.length > 0) {
-        const shown = changed.slice(0, 5).join(', ') + (changed.length > 5 ? `, and ${changed.length - 5} more` : '');
+      if (behind.length > 0) {
         return {
           state: 'rebuild',
           running,
           onDisk,
-          reason: `Committed since dist/ was built (${describeStamp(onDisk)}): ${shown}.`,
+          reason: `Committed since dist/ was built (${describeStamp(onDisk)}): ${listFiles(behind)}.`,
         };
       }
-      if (onDisk.sha !== running.sha || onDisk.builtAt !== running.builtAt) {
-        return {
-          state: 'restart',
-          running,
-          onDisk,
-          reason: `dist/ holds ${describeStamp(onDisk)}; this server runs ${describeStamp(running)}.`,
-        };
+
+      if (onDisk.sha === running.sha && onDisk.builtAt === running.builtAt) {
+        return { state: 'current', running, onDisk, reason: null };
       }
-      return { state: 'current', running, onDisk, reason: null };
+      // A newer build is only worth a restart — which ends every terminal —
+      // when it compiled different inputs. Every Land rebuilds, a docs-only
+      // one included. If git can't compare the two, say restart: hiding a
+      // build that does differ is the worse mistake.
+      const newer = await diff(builtFrom(running), builtFrom(onDisk));
+      if (newer !== null && newer.length === 0) {
+        return { state: 'current', running, onDisk, reason: null };
+      }
+      return {
+        state: 'restart',
+        running,
+        onDisk,
+        reason:
+          `dist/ holds ${describeStamp(onDisk)}; this server runs ${describeStamp(running)}` +
+          (newer ? `. Changed: ${listFiles(newer)}.` : '.'),
+      };
     },
   };
 }
@@ -229,12 +272,16 @@ export function createBuildStateChecker(
 // projects/routes.ts, reaches it through the two functions below.
 let serverBuild: { root: string; checker: BuildStateChecker } | null = null;
 
-/** True when `cwd` is this server's own project, the only one it can restart into. */
+/**
+ * True when `cwd` is this server's own project, the only one it can restart
+ * into. `relative()` is '' for the same folder however it is spelled (slashes,
+ * a trailing separator, and case on Windows only), so this stays right on Linux.
+ */
 export function isServerRoot(cwd: string): boolean {
-  return !!serverBuild && resolve(cwd).toLowerCase() === resolve(serverBuild.root).toLowerCase();
+  return !!serverBuild && relative(resolve(serverBuild.root), resolve(cwd)) === '';
 }
 
-/** Drop the cached answer and check again; null before the routes are registered. */
+/** Drop the cached answers and check again; null before the routes are registered. */
 export async function recheckBuildState(): Promise<BuildStatus | null> {
   if (!serverBuild) return null;
   serverBuild.checker.invalidate();
