@@ -15,6 +15,11 @@ commands:
   `~/.claude-remote/sessions.db`, and a second instance would bind the same port and open
   the same live database. A job that needs a running server must use the isolated boot in
   Flow 3.
+- **Never ask the user to restart the server to test work in a track or job worktree.**
+  The server on 4220 runs the main checkout's `dist/`, so a restart loads none of the
+  worktree's code, and it closes every open terminal. Test that code on the isolated boot
+  (Flow 3, run from the worktree's own `dist/`). A restart is only worth asking for once
+  the work has landed and main has been rebuilt.
 - The pipeline installs dependencies when it creates the worktree. If `node_modules` is
   still missing, run `npm ci` there. Never link another checkout's `node_modules` in:
   removing the worktree would empty it.

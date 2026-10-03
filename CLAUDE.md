@@ -28,6 +28,11 @@ There is no formatter. Do **not** run prettier (e.g. via `npx`): with no `.prett
 reformats the whole tree to double quotes against the house style. Match the surrounding
 style by hand.
 
+In a track or job worktree, **never ask the user to restart the server to test your code**:
+the server on 4220 runs the main checkout's `dist/`, so a restart loads none of it and
+closes every terminal. Use the isolated boot in `project/QA.md` (Flow 3) from the
+worktree's own build.
+
 ## Architecture
 
 **Server** (Fastify + WebSocket):
