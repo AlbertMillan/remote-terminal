@@ -411,8 +411,8 @@ describe('the build chip', () => {
     expect(chipView(status('unknown'))).toBeNull();
     expect(chipView(null)).toBeNull();
     expect(chipView({ bootId: 'b', canRestart: true, reason: null })).toBeNull(); // an older server
-    expect(chipView(status('restart'))?.text).toBe('Restart to load the new build');
-    expect(chipView(status('rebuild'))?.text).toBe('Build & restart to load new commits');
+    expect(chipView(status('restart'))?.text).toBe('New build');
+    expect(chipView(status('rebuild'))?.text).toBe('New commits');
   });
 
   it('gives the reason and the manual step when this server cannot restart itself', () => {

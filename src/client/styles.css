@@ -143,12 +143,24 @@ body {
   background: linear-gradient(135deg, rgba(122, 162, 247, 0.05) 0%, transparent 50%);
 }
 
+/* The title row: "Claude Remote", and the build chip at its right end when shown.
+   "New commits" fits the 280px sidebar with 1px to spare; past that it wraps below
+   rather than breaking the title. */
+.sidebar-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
 .sidebar-header h1 {
   font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 1px;
-  margin-bottom: 14px;
+  white-space: nowrap;
   background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -238,26 +250,25 @@ body {
 .pu-pct.danger {
   color: var(--danger);
 }
-/* "Restart to load the new build": beside the plan usage chip, amber like its warn level. */
+/* "New build": a small note beside the title; only its icon is amber. The tooltip says what to do. */
 .build-chip {
-  display: block;
-  width: 100%;
-  margin-top: 8px;
-  padding: 8px 12px;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 12px;
-  text-align: left;
-  color: var(--text-primary);
-  background: var(--bg-primary);
-  border: 1px solid rgba(224, 175, 104, 0.4);
-  border-radius: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
   cursor: pointer;
 }
 .build-chip[hidden] {
   display: none;
 }
 .build-chip:hover {
-  border-color: rgba(224, 175, 104, 0.7);
+  color: var(--text-primary);
+  border-color: rgba(224, 175, 104, 0.6);
 }
 .build-chip::before {
   content: '↻ ';

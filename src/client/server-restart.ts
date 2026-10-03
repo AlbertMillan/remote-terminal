@@ -187,13 +187,13 @@ export function chipView(status: ServerStatus | null): ChipView | null {
     );
   }
   return {
-    text: rebuild ? 'Build & restart to load new commits' : 'Restart to load the new build',
+    text: rebuild ? 'New commits' : 'New build',
     title: lines.filter(Boolean).join('\n'),
   };
 }
 
 /**
- * The chip beside "Connected" that says the running server is behind its build.
+ * The chip beside the "Claude Remote" title that says the running server is behind its build.
  * It only ever opens Settings → Server: a restart ends every terminal, so the
  * confirm stays there, in ServerRestartControl, never on one click here.
  */

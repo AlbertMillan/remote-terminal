@@ -22,7 +22,11 @@
     <div id="sidebar-overlay" class="sidebar-overlay"></div>
     <aside id="sidebar">
       <div class="sidebar-header">
-        <h1>Claude Remote</h1>
+        <div class="sidebar-title">
+          <h1>Claude Remote</h1>
+          <!-- The running server is behind its build; opens Settings → Server. See BuildChip in server-restart.ts. -->
+          <button type="button" id="build-chip" class="build-chip" hidden></button>
+        </div>
         <div id="connection-status" class="status disconnected">
           <span class="status-dot"></span>
           <span class="status-text">Disconnected</span>
@@ -32,8 +36,6 @@
           <summary class="plan-usage-summary"></summary>
           <div class="plan-usage-body"></div>
         </details>
-        <!-- The running server is behind its build; opens Settings → Server. See BuildChip in server-restart.ts. -->
-        <button type="button" id="build-chip" class="build-chip" hidden></button>
         <div class="sidebar-header-actions">
           <button id="shortcuts-btn" class="settings-btn" title="Keyboard Shortcuts (?)">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
