@@ -30,6 +30,10 @@ export interface SessionCreateOptions {
   cols?: number;
   rows?: number;
   env?: Record<string, string>;
+  /** The session that started this one through the agent-sessions API. */
+  spawnedBy?: string;
+  /** The `--permission-mode` that session typed into this one. */
+  permissionMode?: string;
 }
 
 export interface SessionMetadata {
@@ -49,6 +53,9 @@ export interface SessionMetadata {
   claudeSessionId: string | null;
   isFork: boolean;
   forkJsonlPath: string | null;
+  /** The session that started this one (docs/session-orchestration.md); null for the user's own. */
+  spawnedBy?: string | null;
+  permissionMode?: string | null;
 }
 
 export interface CategoryMetadata {

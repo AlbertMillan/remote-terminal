@@ -30,6 +30,8 @@ import {
   reviveSession as reviveSessionImpl,
   type SessionRegistry,
 } from './session-open.js';
+import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './session-env.js';
+import { deletePromptFile } from './prompt-file.js';
 
 const logger = createLogger('session-manager');
 
@@ -123,7 +125,8 @@ class SessionManager {
 
     logger.info({ id, name, shell, cwd }, 'Creating new session');
 
-    // Create PTY with session ID environment variable for webhook notifications
+    // sessionEnv: the session id for the notification hooks, and the token and
+    // URLs the agent-sessions CLI uses (docs/session-orchestration.md).
     const pty = createPty({
       shell,
       cwd,
@@ -131,7 +134,7 @@ class SessionManager {
       rows,
       env: {
         ...options.env,
-        CLAUDE_REMOTE_SESSION_ID: id,
+        ...sessionEnv(id),
       },
     });
 
@@ -187,6 +190,8 @@ class SessionManager {
       claudeSessionId: null,
       isFork: false,
       forkJsonlPath: null,
+      spawnedBy: options.spawnedBy ?? null,
+      permissionMode: options.permissionMode ?? null,
     };
 
     try {
@@ -196,6 +201,7 @@ class SessionManager {
       // Database insert failed - clean up PTY to avoid zombie process
       logger.error({ id, error }, 'Failed to persist session to database, cleaning up PTY');
       killPty(pty);
+      revokeSessionToken(id);
       if (tmuxSession) {
         killTmuxSession(tmuxSession).catch(() => {});
       }
@@ -253,6 +259,7 @@ class SessionManager {
 
     // Kill PTY
     killPty(session.pty);
+    revokeSessionToken(id);
 
     // Clean up listeners and buffers
     this.dataListeners.delete(id);
@@ -305,6 +312,8 @@ class SessionManager {
         logger.warn({ id, err }, 'Failed to delete fork JSONL on delete');
       }
     }
+
+    deletePromptFile(id);
 
     // Log before deleting (foreign key constraint)
     logSessionEvent(id, 'deleted');
@@ -432,6 +441,7 @@ class SessionManager {
   }
 
   private handleSessionExit(id: string, exitCode: number): void {
+    revokeSessionToken(id);
     const listeners = this.exitListeners.get(id);
     if (listeners) {
       for (const listener of listeners) {
@@ -569,6 +579,7 @@ class SessionManager {
       }
     }
 
+    revokeAllSessionTokens();
     this.activeSessions.clear();
     this.dataListeners.clear();
     this.exitListeners.clear();

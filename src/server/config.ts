@@ -48,6 +48,12 @@ export interface Config {
     // under the 180s log budget was being killed with finished work in hand.
     stageTimeoutMs: number;
   };
+  agentSessions: {
+    // Sessions one main session may have started and still live, through the
+    // agent-sessions API (docs/session-orchestration.md). Checked before
+    // sessions.maxSessions, which still applies.
+    maxPerParent: number;
+  };
 }
 
 const defaultConfig: Config = {
@@ -82,6 +88,9 @@ const defaultConfig: Config = {
   },
   jobs: {
     stageTimeoutMs: 1_200_000, // 20 minutes
+  },
+  agentSessions: {
+    maxPerParent: 5,
   },
 };
 

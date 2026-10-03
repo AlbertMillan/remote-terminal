@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -57,6 +57,8 @@ export function insertSession(session: SessionMetadata): void {
     session.claudeSessionId ?? null,
     session.isFork ? 1 : 0,
     session.forkJsonlPath ?? null,
+    session.spawnedBy ?? null,
+    session.permissionMode ?? null,
   ));
 }
 
@@ -101,7 +103,8 @@ export function getSession(id: string): SessionMetadata | null {
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
            sort_order as sortOrder, claude_session_id as claudeSessionId,
-           is_fork as isFork, fork_jsonl_path as forkJsonlPath
+           is_fork as isFork, fork_jsonl_path as forkJsonlPath,
+           spawned_by as spawnedBy, permission_mode as permissionMode
     FROM sessions WHERE id = ?
   `, (stmt) => {
     const row = stmt.get(id) as (Omit<SessionMetadata, 'isFork'> & { isFork: number }) | undefined;
@@ -174,7 +177,8 @@ const SESSION_SELECT = `
   SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
          owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
          sort_order as sortOrder, claude_session_id as claudeSessionId,
-         is_fork as isFork, fork_jsonl_path as forkJsonlPath
+         is_fork as isFork, fork_jsonl_path as forkJsonlPath,
+         spawned_by as spawnedBy, permission_mode as permissionMode
   FROM sessions
 `;
 

@@ -74,7 +74,7 @@ export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 
   }
 }
 
-export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null }): SessionInfo {
+export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -90,7 +90,22 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     sortOrder: session.sortOrder ?? 0,
     isFork: session.isFork ?? false,
     claudeSessionId: session.claudeSessionId ?? null,
+    spawnedBy: session.spawnedBy ?? null,
+    permissionMode: session.permissionMode ?? null,
   };
+}
+
+/**
+ * A session the server started on its own (the agent-sessions API), so no
+ * browser asked for it and none is told by `session.created`. Every open
+ * browser lists it; none attaches.
+ */
+export function broadcastSessionAdded(session: SessionInfo): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.added', { session }));
+    }
+  }
 }
 
 export function broadcastSessionKept(sessionId: string, excludeClientId?: string): void {

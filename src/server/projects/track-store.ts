@@ -1,5 +1,6 @@
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../sessions/project-discovery.js';
+import { isInside } from '../utils/paths.js';
 
 /**
  * The `track_branches` table: a track's own branch and worktree, keyed by
@@ -130,4 +131,28 @@ export function markLanded(id: string, mergeSha: string): void {
   getDatabase()
     .prepare('UPDATE track_branches SET landed_at = ?, merge_sha = ? WHERE id = ?')
     .run(new Date().toISOString(), mergeSha, id);
+}
+
+/**
+ * Every track branch of every project: unlanded first, newest first within
+ * each. The order trackBranchContaining() relies on.
+ */
+export function listAllTrackBranches(): TrackBranch[] {
+  const rows = getDatabase()
+    .prepare('SELECT * FROM track_branches ORDER BY landed_at IS NULL DESC, created_at DESC')
+    .all() as TrackBranchRow[];
+  return rows.map(toTrackBranch);
+}
+
+/**
+ * The track branch whose worktree `cwd` is in, across every project. An
+ * unlanded row wins over a landed one that recorded the same folder (a track
+ * reopened after landing). Null for a cwd in no track worktree. Pass
+ * `branches` to resolve many cwds against one read of the table.
+ */
+export function trackBranchContaining(
+  cwd: string,
+  branches: TrackBranch[] = listAllTrackBranches()
+): TrackBranch | null {
+  return branches.find((b) => isInside(b.worktreePath, cwd)) ?? null;
 }
