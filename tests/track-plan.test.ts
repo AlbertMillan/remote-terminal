@@ -27,6 +27,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+/** Land with no running sessions anywhere. */
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
 const { getRegistryPath } = await import('../src/server/projects/registry.js');
 const { getWorkspaceBoard } = await import('../src/server/projects/workspace.js');
 const { registerProjectRoutes } = await import('../src/server/projects/routes.js');
@@ -34,6 +36,7 @@ const { runRebuildStage } = await import('../src/server/jobs/stages/rebuild.js')
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const { pathKey } = await import('../src/server/sessions/project-discovery.js');
 const { withProjectLock } = await import('../src/server/projects/project-lock.js');
+const { sessionManager } = await import('../src/server/sessions/manager.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -208,6 +211,61 @@ describe('board', () => {
     expect(beta.statusCode).toBe(200);
   });
 
+  /**
+   * The session manager as the routes see it: one session in the worktree
+   * whose shell exited, one still running there, one on main. Only the
+   * running one in the worktree counts, and only it is closed.
+   */
+  function fakeSessions(worktreePath: string) {
+    const all = [
+      { id: 'exited', cwd: worktreePath, status: 'terminated' },
+      { id: 'running', cwd: join(worktreePath, 'src'), status: 'active' },
+      { id: 'main', cwd: repo, status: 'active' },
+    ];
+    vi.spyOn(sessionManager, 'getAllSessions').mockReturnValue(all as never);
+    return vi.spyOn(sessionManager, 'terminateSession').mockResolvedValue(true);
+  }
+
+  it('routes count and close only running sessions in the worktree (an exited shell does not block)', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const terminate = fakeSessions(t.worktreePath);
+    try {
+      const planRes = await app.inject({
+        method: 'GET',
+        url: `/api/projects/track/delete-plan?cwd=${encodeURIComponent(repo)}&track=Alpha`,
+      });
+      expect(planRes.statusCode).toBe(200);
+      expect(planRes.json().plan.branch.sessionsToClose).toBe(1);
+
+      const boardRes = await app.inject({ method: 'GET', url: '/api/projects' });
+      const p = (boardRes.json().projects as { cwd: string; tracks: { name: string; openSessions: number }[] }[]).find(
+        (x) => pathKey(x.cwd) === pathKey(repo)
+      );
+      expect(p?.tracks.find((x) => x.name === 'Alpha')?.openSessions).toBe(1);
+
+      const land = await app.inject({
+        method: 'POST',
+        url: '/api/projects/track/land',
+        payload: { cwd: repo, track: 'Alpha' },
+      });
+      expect(land.statusCode).toBe(200);
+      expect(terminate.mock.calls.map((c) => c[0])).toEqual(['running']);
+      expect(existsSync(t.worktreePath)).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('counts the running sessions inside a branched track’s worktree, for the Land confirm', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const board = getWorkspaceBoard({
+      runningSessions: [{ cwd: t.worktreePath }, { cwd: join(t.worktreePath, 'src') }, { cwd: repo }],
+    });
+    const p = board.find((x) => pathKey(x.cwd) === pathKey(repo));
+    expect(p?.tracks.find((x) => x.name === 'Alpha')?.openSessions).toBe(2);
+    expect(p?.tracks.find((x) => x.name === 'Beta')?.openSessions).toBe(0);
+  });
+
   it('shows one copy with a badge when main also has lines, and Move into branch takes them over', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     // A session on main writes a line for the in-progress track.
@@ -236,7 +294,7 @@ describe('land', () => {
     write(t.worktreePath, 'PROJECT.md', read(t.worktreePath).replace('- [ ] `f-aaaaaa`', '- [x] `f-aaaaaa`'));
     write(t.worktreePath, 'project/alpha.md', '# Alpha\n\nRevised in the track.\n');
 
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     expect(read(repo)).toContain('- [x] `f-aaaaaa`');
     expect(read(repo, 'project/alpha.md')).toContain('Revised in the track');
     expect(git(repo, 'status', '--porcelain')).toBe('');
@@ -245,7 +303,7 @@ describe('land', () => {
   it('refuses uncommitted code on main, naming it', async () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     write(repo, 'src/stray.ts', 'export {};\n');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('src/stray.ts'),
     });
@@ -262,7 +320,7 @@ describe('land', () => {
     write(repo, 'PROJECT.md', read(repo).replace('`f-cccccc` Unrelated', '`f-cccccc` Unrelated, a backlog edit'));
     write(repo, 'project/backlog.md', '# Backlog idea\n');
 
-    const result = await tracks.landTrack(project(), 'Alpha', []);
+    const result = await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     expect(result.pushed).toBe(true);
 
     expect(read(repo)).toContain('a backlog edit');
@@ -284,7 +342,7 @@ describe('land', () => {
     write(t.worktreePath, 'PROJECT.md', read(t.worktreePath).replace('- [ ] `f-bbbbbb`', '- [x] `f-bbbbbb`'));
     commitFile(repo, 'PROJECT.md', `${read(repo)}\n## Track: Alpha\n- [ ] \`f-eeeeee\` Added on main\n`, 'main line');
 
-    await tracks.landTrack(project(), 'Alpha', []);
+    await tracks.landTrack(project(), 'Alpha', NO_SESSIONS);
     const landed = read(repo);
     expect(landed.match(/## Track: Alpha/g)).toHaveLength(1);
     expect(landed).toContain('- [x] `f-bbbbbb`');
@@ -498,7 +556,7 @@ describe('land rollback', () => {
     write(repo, 'project/backlog.md', '# Backlog idea\n');
     const docBefore = readFileSync(join(repo, 'PROJECT.md'));
 
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({ status: 409 });
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({ status: 409 });
 
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
     expect(readFileSync(join(repo, 'PROJECT.md')).equals(docBefore)).toBe(true);
@@ -515,7 +573,7 @@ describe('land rollback', () => {
     await tracks.ensureTrackBranch(project(), 'Alpha');
     write(repo, 'PROJECT.md', read(repo).replace('Unrelated', 'Unrelated, staged'));
     git(repo, 'add', 'PROJECT.md');
-    await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+    await expect(tracks.landTrack(project(), 'Alpha', NO_SESSIONS)).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('staged on main: PROJECT.md'),
     });

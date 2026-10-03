@@ -57,6 +57,17 @@ export interface WorkspaceTrack {
   planMissing?: boolean;
   /** Branched, but the worktree folder is gone. */
   worktreeMissing?: boolean;
+  /** Running sessions in the track's worktree, which Land closes. */
+  openSessions?: number;
+}
+
+/** The Land confirmation, naming the worktree sessions Land will close. */
+export function landConfirmText(track: string, openSessions: number): string {
+  const closing =
+    openSessions > 0
+      ? ` ${openSessions} open session${openSessions === 1 ? '' : 's'} in its worktree will be closed.`
+      : '';
+  return `Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.${closing}`;
 }
 
 /**
@@ -866,8 +877,12 @@ export class ProjectWorkspace {
       const trackLand = target.closest('.pw-track-land') as HTMLElement | null;
       if (trackLand) {
         const track = trackLand.dataset.track || '';
-        if (confirm(`Land "${track}"? Its branch is merged, its worktree removed, and the project rebuilt.`)) {
-          void this.landTrack(trackLand.dataset.cwd || '', track);
+        const cwd = trackLand.dataset.cwd || '';
+        // From the last board load: a session opened since is closed too, and
+        // the Land result says how many were.
+        const open = this.getProject(cwd)?.tracks.find((t) => t.name === track)?.openSessions ?? 0;
+        if (confirm(landConfirmText(track, open))) {
+          void this.landTrack(cwd, track);
         }
         return;
       }

@@ -4,7 +4,7 @@ import { dirname, join, isAbsolute } from 'path';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
-import { isInside } from '../utils/paths.js';
+import { sessionsInWorktree } from '../utils/paths.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import {
@@ -34,6 +34,7 @@ import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 import {
   commitWorktreePlanning,
   isPlanningPath,
+  isSessionLogPath,
   moveSectionOffMain,
   nameFiles,
   returnSectionToMain,
@@ -115,15 +116,15 @@ export function trackBranchNameFor(id: string, trackName: string): string {
  * `persistence.dataDir` may be. The full id is
  * the fallback for the rare prefix already taken — createWorktree reuses an
  * existing folder, which would hand this track another one's checkout — and
- * so is a prefix an unlanded row records, whose missing folder reattachIfMissing
- * would otherwise re-create inside this track's. The path is stored on the
- * row, so existing tracks keep their full-id folders.
+ * so is a prefix any row records. An unlanded row's missing folder would be
+ * re-created inside this track's by reattachIfMissing; a landed row's path
+ * must stay its own too, because worktreeOwner traces a session in it back to
+ * that row (trackBranchForPath). The path is stored on the row, so existing
+ * tracks keep their full-id folders.
  */
 export function trackWorktreePathFor(id: string): string {
   const short = join(worktreeRoot(), 'tracks', id.slice(0, 8));
-  const recorded = getDatabase()
-    .prepare('SELECT 1 FROM track_branches WHERE worktree_path = ? AND landed_at IS NULL')
-    .get(short);
+  const recorded = getDatabase().prepare('SELECT 1 FROM track_branches WHERE worktree_path = ?').get(short);
   return existsSync(short) || recorded ? join(worktreeRoot(), 'tracks', id) : short;
 }
 
@@ -342,23 +343,37 @@ export interface LandResult {
   pushed: boolean;
   /** Feature ids in the section Land put back on main. */
   synced: string[];
+  /** Running sessions in the worktree that Land closed before merging. */
+  closedSessions: number;
   detail: string;
+}
+
+/** What Land needs from the session manager — injected, as Delete track's deps are. */
+export interface LandDeps {
+  /** Running sessions only (`getRunningSessions`): an exited shell holds nothing open. */
+  sessions: { id: string; cwd: string }[];
+  /** Must resolve only once the PTY is gone. */
+  terminateSession: (id: string) => Promise<unknown>;
 }
 
 /**
  * Land a track: put its plan back on main, merge its branch into the base
  * once, then retire the worktree.
  *
- * Refused unless every job for the track has finished, no live session is
- * running inside the worktree (on Windows an open shell holds the directory
- * and `git worktree remove` fails half-way), the project is on the base
- * branch, and the checkouts hold nothing Land can't account for:
+ * Refused unless every job for the track has finished, no install is running
+ * in the worktree, the project is on the base branch, and the checkouts hold
+ * nothing Land can't account for:
  *  - the worktree: uncommitted planning files are committed there first
  *    (it belongs to this track and never pushes); anything else refuses;
- *  - main: uncommitted planning files (backlog edits) are let through and
+ *  - main: uncommitted planning files (backlog edits) and the session log
+ *    (worktree sessions are logged into main's copy) are let through and
  *    left uncommitted; anything else refuses, since code edited on main may
  *    be this track's work. Nothing may be STAGED: git refuses to merge then.
  * Every refusal names the files.
+ *
+ * Once nothing refuses, Land closes the sessions running inside the worktree
+ * itself, awaiting each (on Windows an open shell holds the directory and
+ * `git worktree remove` fails half-way).
  *
  * PROJECT.md never goes through the merge. The branch's copy is reset to its
  * merge-base first, and the section is copied onto main by its own commit
@@ -368,7 +383,7 @@ export interface LandResult {
 export async function landTrack(
   project: RegistryProject,
   trackName: string,
-  liveSessionCwds: string[]
+  deps: LandDeps
 ): Promise<LandResult> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
@@ -392,15 +407,9 @@ export async function landTrack(
     );
   }
 
-  const inside = liveSessionCwds.filter((c) => isInside(track.worktreePath, c));
-  if (inside.length > 0) {
-    throw new TrackBranchError(
-      'A session is still open in this track’s worktree — close it before landing',
-      409
-    );
-  }
   // No session exists yet while Open session waits on the install, so the
-  // check above can't see it; the teardown would delete under a running npm.
+  // sessions Land closes can't include it; the teardown would delete under a
+  // running npm.
   if (isInstalling(track.worktreePath)) {
     throw new TrackBranchError(
       'Dependencies are still installing in this track’s worktree — land once the session has opened',
@@ -421,7 +430,9 @@ export async function landTrack(
   if (mainEntries === null) {
     throw new TrackBranchError(`Could not read the repository state at ${project.cwd}`, 500);
   }
-  const mainCode = mainEntries.filter((e) => !isPlanningPath(e.path, docRel)).map((e) => e.path);
+  const mainCode = mainEntries
+    .filter((e) => !isPlanningPath(e.path, docRel) && !isSessionLogPath(e.path))
+    .map((e) => e.path);
   if (mainCode.length > 0) {
     throw new TrackBranchError(
       `The project has uncommitted changes outside the plan: ${nameFiles(mainCode)}. ` +
@@ -449,6 +460,17 @@ export async function landTrack(
       409
     );
   }
+
+  // Every refusal is behind us, so closing now never kills a session for a
+  // Land that then refuses — and the dirty-code check above means a session
+  // with uncommitted code is never closed. Awaited one by one: on Windows an
+  // open shell's cwd makes `git worktree remove` fail half-way, so each shell
+  // must be gone before the merge and teardown start. Their session-log runs
+  // go to the main checkout (worktreeOwner), so nothing waits on those; their
+  // first git reads in the worktree take no index lock, so they cannot make
+  // resetDocToMergeBase below fail.
+  const toClose = sessionsInWorktree(deps.sessions, track.worktreePath);
+  for (const s of toClose) await deps.terminateSession(s.id);
 
   // 1. The plan back onto main, then PROJECT.md out of the merge.
   const returned = await returnSectionToMain({ project, worktreePath: track.worktreePath, trackName });
@@ -511,13 +533,17 @@ export async function landTrack(
       : '';
 
   const synced = returned.featureIds;
-  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced }, 'track landed');
+  const closed = toClose.length;
+  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced, closed }, 'track landed');
   return {
     mergeSha,
     pushed,
     synced,
+    closedSessions: closed,
     detail:
-      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) + leftover,
+      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) +
+      (closed > 0 ? ` — closed ${closed} open session${closed === 1 ? '' : 's'} in its worktree` : '') +
+      leftover,
   };
 }
 
@@ -525,31 +551,52 @@ export async function landTrack(
  * Commit the branch's PROJECT.md back to its merge-base version, if it moved.
  * Returns the HEAD from before that commit, so a failed land can take it back
  * off — or null when nothing was committed.
+ *
+ * Throws when a step fails rather than carrying on: a reset that silently
+ * didn't happen sends the branch's PROJECT.md into the merge, which is the
+ * conflict this function exists to prevent (a held `index.lock` is enough).
  */
 async function resetDocToMergeBase(track: TrackBranch, docRel: string): Promise<string | null> {
   const wt = track.worktreePath;
   const base = (await git(wt, ['merge-base', 'HEAD', track.baseBranch]))?.trim();
   if (!base) return null;
-  const changed = (await git(wt, ['diff', '--name-only', base, 'HEAD', '--', docRel]))?.trim();
-  if (!changed) return null;
+  const changedOut = await git(wt, ['diff', '--name-only', base, 'HEAD', '--', docRel]);
+  if (changedOut === null) throw resetFailed(track, docRel);
+  if (!changedOut.trim()) return null;
   const before = (await git(wt, ['rev-parse', 'HEAD']))?.trim() ?? null;
 
   const existedAtBase = (await git(wt, ['cat-file', '-e', `${base}:${docRel}`])) !== null;
-  if (existedAtBase) {
-    await git(wt, ['checkout', base, '--', docRel]);
-  } else {
-    await git(wt, ['rm', '-q', '--', docRel]);
+  const staged = existedAtBase
+    ? await git(wt, ['checkout', base, '--', docRel])
+    : await git(wt, ['rm', '-q', '--', docRel]);
+  const committed =
+    staged === null
+      ? null
+      : await git(wt, [
+          ...COMMIT_IDENTITY,
+          'commit',
+          '-m',
+          `Leave ${docRel} to the main checkout`,
+          '--no-verify',
+          '--',
+          docRel,
+        ]);
+  if (committed === null) {
+    // Put the file back as HEAD has it, so the worktree is as Land found it
+    // (it was committed clean above) and the next Land starts from there.
+    await git(wt, ['reset', '-q', '--', docRel]);
+    await git(wt, ['checkout', 'HEAD', '--', docRel]);
+    throw resetFailed(track, docRel);
   }
-  await git(wt, [
-    ...COMMIT_IDENTITY,
-    'commit',
-    '-m',
-    `Leave ${docRel} to the main checkout`,
-    '--no-verify',
-    '--',
-    docRel,
-  ]);
   return before;
+}
+
+function resetFailed(track: TrackBranch, docRel: string): TrackBranchError {
+  return new TrackBranchError(
+    `Could not take ${docRel} out of the merge in the track worktree (${track.worktreePath}) — ` +
+      'another git process may have held its index. Nothing was merged; land again.',
+    409
+  );
 }
 
 // --- Branch now ----------------------------------------------------------

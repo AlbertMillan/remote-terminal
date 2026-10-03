@@ -16,6 +16,11 @@ import {
   findEntryForSession,
 } from './session-log-format.js';
 import { git, isGitRepo, runClaude } from '../agent/claude-run.js';
+import { worktreeOwner, type WorktreeOwner } from '../projects/worktree-owner.js';
+import { loadRegistry } from '../projects/registry.js';
+import { worktreeRoot } from '../jobs/worktree.js';
+import { isInside } from '../utils/paths.js';
+import { pathKey } from './project-discovery.js';
 
 const logger = createLogger('project-log');
 
@@ -76,6 +81,16 @@ export function anyDirtyFileTouchedSince(cwd: string, porcelain: string, sinceIs
   return false;
 }
 
+/** The project's plan file, relative to its root: the registry's `doc`, else PROJECT.md. */
+function planDocFor(projectCwd: string): string {
+  try {
+    const key = pathKey(projectCwd);
+    return loadRegistry().projects.find((p) => pathKey(p.cwd) === key)?.doc || 'PROJECT.md';
+  } catch {
+    return 'PROJECT.md';
+  }
+}
+
 export interface SessionLogContext {
   sessionId: string; // claude-remote session id (DB primary key)
   name: string;
@@ -94,13 +109,30 @@ export type LogOutcome = 'generated' | 'skipped' | 'disabled' | 'error';
 // many conventions (Phase N / M-N / SU-N / "✅ shipped" / status blockquotes /
 // prose) and several parallel tracks per project, so the model interprets them
 // into one consistent schema the dashboard renders.
-function phasesInstruction(planGlobs: string[], currentSessionId: string | null): string {
+function phasesInstruction(
+  planGlobs: string[],
+  currentSessionId: string | null,
+  worktree: { path: string; docRel: string } | null = null
+): string {
   const attribution = currentSessionId
     ? `For items you advanced or completed in THIS session, add "${currentSessionId}" to their sessionIds (avoid duplicates). Preserve every id already present.`
     : `Best-effort attribute historical claude session ids: existing log-entry markers carry "claudeSessionId", and the transcripts show who did what — populate sessionIds when reasonably confident (an item may list several). Preserve every id already present.`;
+  // A branched track's section lives only in its worktree, so a run in the
+  // main checkout would build the manifest without it — and attribution and
+  // Delete track read this session's id from that group. Only the plan file
+  // and its specs: the rest of planGlobs (docs/**) is the same in both
+  // checkouts, and reading it twice doubles the run against its timeout.
+  const worktreeDocs = worktree
+    ? `This session worked in the worktree ${worktree.path}, whose branch carries its own copy of the
+plan; an in-progress track's section is ONLY there. Also READ (never edit) ${join(worktree.path, worktree.docRel)}
+and the specs it links to under ${join(worktree.path, 'project')} (Glob "project/*.md" with that
+worktree as the path). For this session's track the worktree's copy is current. Give each group's
+"source" relative to the root you read it from.
+`
+    : '';
   return `MAINTAIN THE PHASES MANIFEST (this powers the project dashboard — do it every run):
 Use Glob to find this project's plan/design docs (patterns: ${planGlobs.join(', ')}) and read them.
-Extract the development stages/phases. Docs differ: numbered "Phase N", "M1/M2" milestones,
+${worktreeDocs}Extract the development stages/phases. Docs differ: numbered "Phase N", "M1/M2" milestones,
 "SU-N"/"DS-N" stages, "✅ shipped" suffixes, a status blockquote, or plain prose — interpret
 each and normalize into this EXACT block, written once right AFTER the "# Session Log" header
 and updated in place on later runs (never duplicate it):
@@ -145,8 +177,14 @@ function buildPrompt(opts: {
   planGlobs: string[];
   /** The entry this conversation already has, when it is being resumed. */
   existingEntry: string | null;
+  /** Where the log file lives: the session's cwd, or a worktree's project's main checkout. */
+  projectCwd: string;
+  /** The track or job worktree the session ran in, when that is not the project itself. */
+  worktree: WorktreeOwner | null;
+  /** The project's plan file, relative to a checkout root (PROJECT.md unless registered otherwise). */
+  planDocRel: string;
 }): string {
-  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, transcriptLarge, editPlanFiles, planGlobs, existingEntry } = opts;
+  const { ctx, fileName, fileExists, branch, nowIso, diff, log, transcriptPath, transcriptLarge, editPlanFiles, planGlobs, existingEntry, projectCwd, worktree, planDocRel } = opts;
 
   // A very large transcript can exhaust the run before it writes the file, so
   // tell the model to skip it and lean on the git diff instead.
@@ -188,10 +226,16 @@ ${existingEntry}
 === END EXISTING ENTRY ===`
     : `3. Prepend ONE new entry to the top of ${fileName} at the project root${fileExists ? ' (the file already exists — keep all existing entries unchanged, newest first)' : ' (create the file with a short "# Session Log" header, then the entry)'}.`;
 
+  const workedIn = worktree
+    ? `Worked in: the ${worktree.kind} worktree ${ctx.cwd} (the git context below is from there).
+${fileName} belongs at the project root above — never create or edit one in the worktree.
+`
+    : '';
+
   return `You are recording what a development session accomplished, in a project changelog.
 
-Project: ${ctx.cwd}
-Branch: ${branch}
+Project: ${projectCwd}
+${workedIn}Branch: ${branch}
 Date (use this exact value in the marker): ${nowIso}
 Session name: ${ctx.name}
 Claude session id: ${ctx.claudeSessionId}
@@ -201,7 +245,7 @@ Your job:
 2. Use the git diff and recent commits below as the ground truth for what actually changed.
 ${writeInstruction}
 ${planInstruction}
-5. ${phasesInstruction(planGlobs, ctx.claudeSessionId)}
+5. ${phasesInstruction(planGlobs, ctx.claudeSessionId, worktree ? { path: ctx.cwd, docRel: planDocRel } : null)}
 
 STRICT CONSTRAINTS:
 - Modify ONLY ${fileName}${editPlanFiles ? ' and the plan/design files you tick checkboxes in' : ''}. Touch no other file.
@@ -239,6 +283,22 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
   const cfg = getConfig().projectLog;
 
   try {
+    // A session in a track or job worktree is logged into its project's main
+    // checkout: the worktree's copy dies with the folder at Land or Delete, and
+    // a run whose cwd is the worktree holds it open, so teardown fails EBUSY on
+    // Windows. Evidence (transcript, git) is still read from where the work was.
+    const owner = worktreeOwner(ctx.cwd);
+    const projectCwd = owner?.projectCwd ?? ctx.cwd;
+    if (!owner && !existsSync(ctx.cwd) && isInside(worktreeRoot(), ctx.cwd)) {
+      // A worktree nothing records any more (a deleted track's, a discarded
+      // job's) leaves nowhere to write, and it never comes back, so retrying
+      // at every boot would never succeed. Only under the worktree root: any
+      // other missing folder may be an unmounted drive, worth a retry later.
+      logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: worktree is gone, skipping');
+      stampSessionLogged(ctx.sessionId, new Date().toISOString());
+      return 'skipped';
+    }
+
     const transcriptPath = tryGetTranscriptPath(homedir(), ctx.cwd, ctx.claudeSessionId);
     if (!transcriptPath) {
       // No transcript on disk → nothing to summarize. Treat as handled.
@@ -252,15 +312,22 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     let dirtyDuringSession = false;
     let diff = '';
     let log = '';
-    let branch = 'no-branch';
+    // A worktree already gone (the startup sweep after a Land) has no git to
+    // read, so the gate falls back to the transcript; its recorded branch
+    // still says where the work happened.
+    let branch = owner?.branch ?? 'no-branch';
 
     if (repo) {
+      // --no-optional-locks: `status` and `diff` otherwise refresh the index
+      // under index.lock. Land closes a worktree's sessions and then commits
+      // in that worktree within a second, and a held lock fails its commit.
+      const read = (args: string[]) => git(ctx.cwd, ['--no-optional-locks', ...args]);
       const [status, committed, branchOut, diffOut, diffCachedOut] = await Promise.all([
-        git(ctx.cwd, ['status', '--porcelain']),
-        git(ctx.cwd, ['log', `--since=${ctx.createdAt}`, '--oneline']),
-        git(ctx.cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
-        git(ctx.cwd, ['diff']),
-        git(ctx.cwd, ['diff', '--cached']),
+        read(['status', '--porcelain']),
+        read(['log', `--since=${ctx.createdAt}`, '--oneline']),
+        read(['rev-parse', '--abbrev-ref', 'HEAD']),
+        read(['diff']),
+        read(['diff', '--cached']),
       ]);
       commitsDuringSession = Boolean(committed?.trim());
       // A dirty tree is only evidence about THIS session for the files it
@@ -269,7 +336,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       // entry on every single close.
       dirtyDuringSession = anyDirtyFileTouchedSince(ctx.cwd, status || '', ctx.createdAt);
       log = (committed || '').slice(0, MAX_LOG_CHARS);
-      branch = branchOut?.trim() || 'no-branch';
+      branch = branchOut?.trim() || branch;
       diff = `${diffOut || ''}\n${diffCachedOut || ''}`.trim().slice(0, MAX_DIFF_CHARS);
     }
 
@@ -303,7 +370,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     }
 
     const fileName = cfg.fileName;
-    const logPath = join(ctx.cwd, fileName);
+    const logPath = join(projectCwd, fileName);
     const fileExists = existsSync(logPath);
     const mtimeBefore = fileMtimeMs(logPath);
 
@@ -320,6 +387,10 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       );
     }
 
+    // Ticking a worktree session's plan from the main checkout would tick
+    // main's copy, which a branched track no longer uses. The session itself,
+    // the board and the rebuild stage tick the worktree's instead.
+    const editPlanFiles = cfg.editPlanFiles && !owner;
     const prompt = buildPrompt({
       ctx,
       fileName,
@@ -330,21 +401,27 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       log,
       transcriptPath,
       transcriptLarge: fileSizeBytes(transcriptPath) > MAX_TRANSCRIPT_BYTES,
-      editPlanFiles: cfg.editPlanFiles,
+      editPlanFiles,
       planGlobs: cfg.planGlobs,
       existingEntry: existing ? entryBodyOnly(existing.entry) : null,
+      projectCwd,
+      worktree: owner,
+      planDocRel: planDocFor(projectCwd),
     });
 
-    logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: generating entry');
+    logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd, logCwd: projectCwd }, 'project-log: generating entry');
     // Edits allowed only to the log file (+ plan files when checkbox-ticking is on).
-    const allowedWrites = cfg.editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
-    await runClaude(ctx.cwd, prompt, allowedWrites, { tag: { projectCwd: ctx.cwd, kind: 'session-log' } });
+    const allowedWrites = editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
+    await runClaude(projectCwd, prompt, allowedWrites, { tag: { projectCwd, kind: 'session-log' } });
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —
     // leaving logged_at unset lets the startup sweep retry it later.
     if (!(existsSync(logPath) && fileMtimeMs(logPath) > mtimeBefore)) {
-      logger.warn({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: run completed but no entry was written');
+      logger.warn(
+        { sessionId: ctx.sessionId, cwd: ctx.cwd, logCwd: projectCwd },
+        'project-log: run completed but no entry was written'
+      );
       return 'error';
     }
     stampSessionLogged(ctx.sessionId, new Date().toISOString());

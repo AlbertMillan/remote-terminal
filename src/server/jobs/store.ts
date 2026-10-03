@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../sessions/project-discovery.js';
+import { isInside } from '../utils/paths.js';
 import { jobEvents } from './events.js';
 import type {
   GateName,
@@ -239,6 +240,18 @@ export function listJobsForProject(cwd: string): JobWithStages[] {
     .prepare('SELECT * FROM job_stages WHERE job_id IN (SELECT value FROM json_each(?)) ORDER BY id')
     .all(JSON.stringify(rows.map((row) => row.id))) as StageRow[];
   return attachStages(rows, stageRows);
+}
+
+/**
+ * The job whose recorded worktree holds `path` (a Take-over session's cwd).
+ * Only a job that still records one: cancel clears it and discard deletes the row.
+ */
+export function jobForWorktreePath(path: string): Job | null {
+  const rows = getDatabase()
+    .prepare('SELECT * FROM jobs WHERE worktree_path IS NOT NULL ORDER BY created_at DESC')
+    .all() as JobRow[];
+  const row = rows.find((r) => isInside(r.worktree_path as string, path));
+  return row ? toJob(row) : null;
 }
 
 export function listJobsByStatus(...statuses: JobStatus[]): Job[] {

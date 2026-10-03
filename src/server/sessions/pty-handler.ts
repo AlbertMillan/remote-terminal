@@ -75,6 +75,27 @@ export function writeToPty(ptyProcess: IPty, data: string): void {
   }
 }
 
+/**
+ * Resolves when the PTY's own process (the shell) exits, or after `timeoutMs`,
+ * whichever is first. Says nothing about the shell's children. Never rejects:
+ * a PTY that ignores its kill must not hang the caller.
+ */
+export function ptyExit(ptyProcess: IPty, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      listener.dispose();
+      logger.warn({ pid: ptyProcess.pid, timeoutMs }, 'PTY did not report its exit in time');
+      resolve();
+    }, timeoutMs);
+    timer.unref?.();
+    const listener = ptyProcess.onExit(() => {
+      clearTimeout(timer);
+      listener.dispose();
+      resolve();
+    });
+  });
+}
+
 export function killPty(ptyProcess: IPty): void {
   try {
     ptyProcess.kill();

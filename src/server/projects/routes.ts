@@ -47,6 +47,11 @@ const logger = createLogger('project-routes');
 
 const STATUSES: FeatureStatus[] = ['pending', 'in_progress', 'done', 'blocked'];
 
+/** Running sessions as Land, Delete and the board's `openSessions` all read them. */
+function runningSessions(): { id: string; cwd: string }[] {
+  return sessionManager.getRunningSessions().map((s) => ({ id: s.id, cwd: s.cwd }));
+}
+
 function isStatus(v: unknown): v is FeatureStatus {
   return typeof v === 'string' && (STATUSES as string[]).includes(v);
 }
@@ -70,7 +75,7 @@ function parsePriority(v: unknown): number | null | undefined {
 export function registerProjectRoutes(app: FastifyInstance): void {
   // --- Board -------------------------------------------------------------
   app.get('/api/projects', async () => {
-    return { projects: withProjectUsage(getWorkspaceBoard()) };
+    return { projects: withProjectUsage(getWorkspaceBoard({ runningSessions: runningSessions() })) };
   });
 
   // Cross-project roll-up: what is in flight and what is waiting on you.
@@ -86,7 +91,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!cwd) return reply.status(400).send({ error: 'cwd required' });
 
       // Build the board once and reuse it for both the lookup and the payload.
-      const allProjects = getWorkspaceBoard();
+      const allProjects = getWorkspaceBoard({ runningSessions: runningSessions() });
       const project = findWorkspaceProject(cwd, allProjects);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
 
@@ -400,10 +405,12 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       }
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
-      const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
       return withErrors(reply, async () => {
         const landed = await withProjectLock(project.cwd, `landing "${body.track}"`, () =>
-          landTrack(project, body.track as string, liveCwds)
+          landTrack(project, body.track as string, {
+            sessions: runningSessions(),
+            terminateSession: (id) => sessionManager.terminateSession(id),
+          })
         );
         // Outside the lock: a build touches no git state, and holding the lock
         // for minutes would refuse every Land/Delete/merge meanwhile. A failed
@@ -510,8 +517,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!cwd || !track) return reply.status(400).send({ error: 'cwd and track required' });
       const project = findWorkspaceProject(cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
-      const liveCwds = sessionManager.getAllSessions().map((s) => s.cwd);
-      return withErrors(reply, async () => ({ plan: await planTrackDelete(project, track, liveCwds) }));
+      return withErrors(reply, async () => ({ plan: await planTrackDelete(project, track, runningSessions()) }));
     }
   );
 
@@ -547,7 +553,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
           revertGuessed: strings(body.revertGuessed),
         },
         {
-          liveSessions: () => sessionManager.getAllSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
+          liveSessions: runningSessions,
           terminateSession: (id) => sessionManager.terminateSession(id),
           cancelJob,
           discardJob,

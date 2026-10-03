@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
+import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
 import { resolveInWorktree } from '../jobs/docs.js';
@@ -76,6 +77,18 @@ export function isPlanningPath(rel: string, docRel: string): boolean {
   if (k === doc) return true;
   const dir = doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/') + 1) : '';
   return k.startsWith(`${dir}project/`) && k.endsWith('.md') && !k.startsWith(`${dir}project/reviews/`);
+}
+
+/**
+ * The session log at the repo root. Like planning, claude-remote writes it and
+ * it is never code; a worktree session's entry is written into main's copy, so
+ * a tracked one leaves main dirty. Land lets it through on MAIN only — not in
+ * commitWorktreePlanning, which would commit a worktree copy onto the track
+ * branch and make every Land conflict with main's.
+ */
+export function isSessionLogPath(rel: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  return norm(rel) === norm(getConfig().projectLog.fileName);
 }
 
 /** A list of paths for an error message, capped so a huge tree can't flood it. */

@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 
-// Mock node-pty before importing modules that use it
+// Mock node-pty before importing modules that use it. Like node-pty, onExit
+// returns a disposable and kill() reports the exit asynchronously.
+const exitCallbacks = new Set<(result: { exitCode: number }) => void>();
+const fireExit = (exitCode = 0) => {
+  for (const cb of [...exitCallbacks]) cb({ exitCode });
+};
 const mockPty = {
   pid: 12345,
   onData: vi.fn((callback: (data: string) => void) => {
@@ -9,10 +14,14 @@ const mockPty = {
   }),
   onExit: vi.fn((callback: (result: { exitCode: number }) => void) => {
     (mockPty as any)._exitCallback = callback;
+    exitCallbacks.add(callback);
+    return { dispose: () => exitCallbacks.delete(callback) };
   }),
   write: vi.fn(),
   resize: vi.fn(),
-  kill: vi.fn(),
+  kill: vi.fn(() => {
+    setImmediate(() => fireExit());
+  }),
 };
 
 vi.mock('node-pty', () => ({
@@ -412,6 +421,70 @@ describe('SessionManager', () => {
     expect(mockPty.kill).toHaveBeenCalled();
 
     await manager.shutdown();
+  });
+
+  it('waits for the killed PTY to exit before terminateSession resolves', async () => {
+    // Let the exits the previous test's shutdown scheduled fire first.
+    await new Promise((r) => setImmediate(r));
+    const manager = createSessionManager();
+    const session = await manager.createSession({ name: 'Slow exit' });
+    mockPty.kill.mockImplementationOnce(() => {}); // the exit comes later
+
+    let resolved = false;
+    const done = manager.terminateSession(session.id).then(() => {
+      resolved = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resolved).toBe(false);
+
+    fireExit();
+    await done;
+    expect(resolved).toBe(true);
+
+    await manager.shutdown();
+  });
+
+  it('leaves a session whose shell exited out of getRunningSessions', async () => {
+    exitCallbacks.clear();
+    const manager = createSessionManager();
+    const exited = await manager.createSession({ name: 'Exited' });
+    const exitedHandler = mockPty.onExit.mock.calls.at(-1)?.[0] as (r: { exitCode: number }) => void;
+    const running = await manager.createSession({ name: 'Running' });
+
+    exitedHandler({ exitCode: 1 });
+
+    expect(manager.getAllSessions().map((s: { id: string }) => s.id)).toContain(exited.id);
+    expect(manager.getRunningSessions().map((s: { id: string }) => s.id)).toEqual([running.id]);
+
+    await manager.shutdown();
+  });
+
+  it('keeps an exited session out of the running list when it is typed into, left or attached', async () => {
+    vi.useFakeTimers();
+    try {
+      exitCallbacks.clear();
+      const manager = createSessionManager();
+      const session = await manager.createSession({ name: 'Typed exit' });
+      const handler = mockPty.onExit.mock.calls.at(-1)?.[0] as (r: { exitCode: number }) => void;
+      mockStmt.run.mockClear(); // drop the insert, which carries 'active' too
+
+      manager.addClient(session.id, 'viewer');
+      manager.writeToSession(session.id, 'exit\r'); // schedules the debounced DB write
+      handler({ exitCode: 0 });
+      manager.writeToSession(session.id, 'x');
+      // Switching away and back, as the sidebar does.
+      manager.removeClient(session.id, 'viewer');
+      expect(manager.getRunningSessions()).toEqual([]);
+      manager.addClient(session.id, 'viewer');
+      vi.advanceTimersByTime(6000);
+
+      expect(manager.getRunningSessions()).toEqual([]);
+      const statusWrites = mockStmt.run.mock.calls.filter((c) => c.includes('active'));
+      expect(statusWrites).toEqual([]);
+      await manager.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('should return false when terminating non-existent session', async () => {

@@ -1,5 +1,6 @@
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../sessions/project-discovery.js';
+import { isInside } from '../utils/paths.js';
 
 /**
  * The `track_branches` table: a track's own branch and worktree, keyed by
@@ -83,6 +84,20 @@ export function findActiveTrackBranchByName(cwd: string, branch: string): TrackB
        WHERE project_key = ? AND branch = ? AND landed_at IS NULL`
     )
     .get(pathKey(cwd), branch) as TrackBranchRow | undefined;
+  return row ? toTrackBranch(row) : null;
+}
+
+/**
+ * The track row whose worktree holds `path`, across every project. An unlanded
+ * row wins; a landed one still matches, because no later row is given a path
+ * any row records (trackWorktreePathFor) — that is how a session in a worktree
+ * since landed is still traced back to its project (the startup sweep).
+ */
+export function trackBranchForPath(path: string): TrackBranch | null {
+  const rows = getDatabase()
+    .prepare('SELECT * FROM track_branches ORDER BY landed_at IS NULL DESC, created_at DESC')
+    .all() as TrackBranchRow[];
+  const row = rows.find((r) => isInside(r.worktree_path, path));
   return row ? toTrackBranch(row) : null;
 }
 
