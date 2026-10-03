@@ -42,9 +42,8 @@ A session whose cwd is inside an **unlanded track worktree** (a `track_branches`
 
 - Resolve the project from the records (the row's `project_cwd`), never by guessing from the
   path. A worktree with no record is logged in place, as today.
-- The entry marker should say where the work happened. Either the session's branch, which
-  `branch` already holds (`track/…` or `job/…`), is enough, or add a `worktree` field. To
-  decide.
+- The entry marker says where the work happened through the session's branch, which
+  `branch` already holds (`track/…` or `job/…`). **Decided: no new `worktree` field.**
 - **Read from the worktree:** the transcript lookup (`tryGetTranscriptPath(…, ctx.cwd, …)`,
   since Claude Code files transcripts under the session's cwd) and the git evidence (status,
   `log --since`, diff, branch). That's where the work is.
@@ -59,8 +58,9 @@ Running `claude -p` in the main checkout is what stops it holding the worktree. 
 1. **The post-run revert** (`claude-run.ts`, "revert any file the run touched outside
    `allowedGlobs`"). Run in main, it diffs main's status before and after the run. A file the
    user changes on main during that window would be reverted. The same exposure already
-   exists for sessions on main, but a track's run would add more of them. Options: snapshot
-   only the log file's path, or run with `allowedGlobs = [fileName]` only.
+   exists for sessions on main, but a track's run would add more of them.
+   **Decided (2026-10-03): keep the current revert behaviour.** It is the same exposure
+   sessions on main already have. Don't narrow it to the log file in this feature.
 2. **Plan-file ticking** (`editPlanFiles` + `planGlobs`). A branched track's plan now lives
    in its worktree (`f-rtcckq`), so ticking plan files in main would tick the wrong copy, or
    nothing. Options:
@@ -71,7 +71,12 @@ Running `claude -p` in the main checkout is what stops it holding the worktree. 
    - pass the worktree's plan files to a main-cwd run by absolute path, which `allowedGlobs`
      can't express today.
 
-   Leaning towards the first.
+   **Decided (2026-10-03): the first.** For a worktree session the run writes only the
+   log entry, with no plan globs in its prompt or its `allowedGlobs`. Ticks come from the
+   session itself, the board and the rebuild stage. The phase manifest in main's log file
+   still needs the track's group with this session id, because attribution and Delete
+   track read it. The prompt may point at the worktree's plan files **to read** (by
+   absolute path); only writing them is off.
 
 ### Tracked `SESSION-LOG.md`
 

@@ -33,6 +33,7 @@ status: active
 - [x] `f-xpd148` Edit-scope enforcement (post-run revert), hard-fail, per-project backfill
 - [x] `f-leww3w` One entry per conversation — scoped gate, amend in place instead of appending
 - [ ] `f-wycv03` P2 Session logs of worktree sessions are written to the main checkout — keep entries past Land, stop the run holding the worktree open → project/session-log-main-checkout.md
+- [ ] `f-p1zm60` P2 Land closes the track worktree's sessions itself — and a session whose shell exited no longer blocks Land → project/land-closes-sessions.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
