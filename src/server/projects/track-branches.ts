@@ -10,6 +10,7 @@ import { pathKey } from '../sessions/project-discovery.js';
 import {
   createWorktree,
   currentBranch,
+  describeLinksLeft,
   ensureGitRepo,
   hasRemote,
   removeWorktree,
@@ -28,6 +29,7 @@ import {
   type TrackBranch,
 } from './track-store.js';
 import { readProjectPlan, type ProjectPlan } from './project-plan.js';
+import { isInstalling } from './project-deps.js';
 import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 import {
   commitWorktreePlanning,
@@ -397,6 +399,14 @@ export async function landTrack(
       409
     );
   }
+  // No session exists yet while Open session waits on the install, so the
+  // check above can't see it; the teardown would delete under a running npm.
+  if (isInstalling(track.worktreePath)) {
+    throw new TrackBranchError(
+      'Dependencies are still installing in this track’s worktree — land once the session has opened',
+      409
+    );
+  }
 
   await reattachIfMissing(project, track);
   const current = (await git(project.cwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim();
@@ -487,10 +497,18 @@ export async function landTrack(
   }
 
   // 4. The branch's commits now live on the base; only the label goes.
-  await removeWorktree(project.cwd, track.id, {
+  const torn = await removeWorktree(project.cwd, track.id, {
     path: track.worktreePath,
     deleteBranch: track.branch,
   });
+  // The land itself stands. A link the teardown could not remove leaves the
+  // worktree registered and the branch checked out there, with nothing else
+  // recording either, so the result has to say where they are.
+  const leftover =
+    torn.linksLeft.length > 0
+      ? ` ${describeLinksLeft(track.worktreePath, torn.linksLeft)} ` +
+        `Then run "git worktree remove ${track.worktreePath}" and "git branch -D ${track.branch}".`
+      : '';
 
   const synced = returned.featureIds;
   logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced }, 'track landed');
@@ -498,9 +516,8 @@ export async function landTrack(
     mergeSha,
     pushed,
     synced,
-    detail: pushed
-      ? `Landed into ${track.baseBranch} and pushed`
-      : `Landed into ${track.baseBranch}`,
+    detail:
+      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) + leftover,
   };
 }
 

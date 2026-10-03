@@ -1,6 +1,8 @@
 import { escapeHtml, escapeAttr } from './html-utils.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog } from './track-branch-now-dialog.js';
+import { installTrackDependencies } from './track-picker.js';
+import { BUILD_CHANGED_EVENT } from './server-restart.js';
 import { formatUsageCost, hasSpend, projectUsageTooltip, type ProjectUsage } from './job-board.js';
 import {
   renderAddRow,
@@ -190,14 +192,17 @@ export class ProjectWorkspace {
   private collapsedTracks = new Set<string>(loadCollapsedTracks());
   /** Projects whose star toggle is still being saved. */
   private favoriteBusy = new Set<string>();
+  private flashTimer: number | null = null;
+  /** Open session clicks still waiting on a branch or an install, keyed by (cwd, track). */
+  private openingTrack = new Set<string>();
 
   constructor(
     private readonly onSelect: (cwd: string) => void,
     private readonly onOpenSession: (cwd: string) => void,
     /** Send a feature to the job pipeline. */
     private readonly onDispatch: (cwd: string, featureId: string, title: string) => void,
-    /** Open a terminal in a track's worktree. */
-    private readonly onOpenTrackSession: (worktreePath: string, trackName: string) => void
+    /** Open a terminal in a track's worktree; `notice` is shown at its top. */
+    private readonly onOpenTrackSession: (worktreePath: string, trackName: string, notice?: string) => void
   ) {}
 
   getProject(cwd: string): WorkspaceProject | undefined {
@@ -622,14 +627,33 @@ export class ProjectWorkspace {
     });
   }
 
-  /** Ensure the track's branch exists, then open a terminal in its worktree. */
+  /**
+   * Ensure the track's branch exists and has its dependencies, then open a
+   * terminal in its worktree. A failed install still opens it, saying why:
+   * the session can fix the install or work without tests.
+   */
   async openTrackSession(cwd: string, track: string): Promise<void> {
-    const data = await this.trackRequest<{ branch: { worktreePath: string } }>(
-      '/api/projects/track/branch',
-      { cwd, track }
-    );
-    if (!data) return;
-    this.onOpenTrackSession(data.branch.worktreePath, track);
+    // An install can take tens of seconds; a second click meanwhile would
+    // open a second session once it finished.
+    const key = `${cwd}|${track}`;
+    if (this.openingTrack.has(key)) return;
+    this.openingTrack.add(key);
+    try {
+      const data = await this.trackRequest<{ branch: { worktreePath: string }; needsInstall?: boolean }>(
+        '/api/projects/track/branch',
+        { cwd, track }
+      );
+      if (!data) return;
+      let notice: string | undefined;
+      if (data.needsInstall) {
+        this.flash('Installing dependencies…', 0);
+        notice = await installTrackDependencies(cwd, track);
+        this.flash(notice ? 'Dependency install failed — opening the session anyway.' : 'Dependencies installed.');
+      }
+      this.onOpenTrackSession(data.branch.worktreePath, track, notice);
+    } finally {
+      this.openingTrack.delete(key);
+    }
     await this.reload();
   }
 
@@ -697,7 +721,11 @@ export class ProjectWorkspace {
       track,
     });
     await this.reload();
-    if (data) this.flash(data.detail);
+    if (data) {
+      this.flash(data.detail);
+      // A Land of this server's own project leaves it behind its build.
+      window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
+    }
   }
 
   /**
@@ -781,13 +809,17 @@ export class ProjectWorkspace {
     if (this.selectedCwd) this.refreshDetail(this.selectedCwd);
   }
 
-  /** Transient message in the detail header. */
-  private flash(message: string): void {
+  /**
+   * Transient message in the detail header. `ms` 0 keeps it until the next
+   * flash replaces it; an earlier flash's timer never hides a later one.
+   */
+  private flash(message: string, ms = 6000): void {
     const el = document.getElementById('project-flash');
     if (!el) return;
     el.textContent = message;
     el.classList.remove('hidden');
-    window.setTimeout(() => el.classList.add('hidden'), 6000);
+    if (this.flashTimer !== null) window.clearTimeout(this.flashTimer);
+    this.flashTimer = ms > 0 ? window.setTimeout(() => el.classList.add('hidden'), ms) : null;
   }
 
   // --- Event wiring ------------------------------------------------------

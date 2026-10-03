@@ -28,6 +28,8 @@ import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './pr
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
 import { buildProject } from './project-build.js';
+import { installDependencies, needsInstall } from './project-deps.js';
+import { isServerRoot, recheckBuildState, restartHint } from '../server-restart.js';
 import { sessionManager } from '../sessions/manager.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
@@ -361,9 +363,31 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       }
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
-      return withErrors(reply, async () => ({
-        branch: await ensureTrackBranch(project, body.track as string),
-      }));
+      return withErrors(reply, async () => {
+        const branch = await ensureTrackBranch(project, body.track as string);
+        // The caller opens a session there; it runs /track/install first when
+        // this is true, so "Installing dependencies…" shows only when it happens.
+        return { branch, needsInstall: needsInstall(branch.worktreePath) };
+      });
+    }
+  );
+
+  // A track worktree's own node_modules, installed before a session opens
+  // there so no agent in it can start a second install into the same folder.
+  // The path comes from the track's row, never from the browser. Never links
+  // the main checkout's copy in (docs/track-branches.md, "Dependencies").
+  app.post<{ Body?: { cwd?: string; track?: string } }>(
+    '/api/projects/track/install',
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.cwd || !body.track) {
+        return reply.status(400).send({ error: 'cwd and track required' });
+      }
+      const project = findWorkspaceProject(body.cwd);
+      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const branch = getActiveTrackBranch(project.cwd, body.track.trim());
+      if (!branch) return reply.status(404).send({ error: `"${body.track}" has no branch` });
+      return { install: await installDependencies(branch.worktreePath) };
     }
   );
 
@@ -385,10 +409,14 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         // for minutes would refuse every Land/Delete/merge meanwhile. A failed
         // build does not undo the land — it is reported alongside it.
         const build = await buildProject(project.cwd);
+        // Landing this server's own project changes nothing it runs until a
+        // restart, and "build passed" alone reads as though nothing more is
+        // needed. Re-check (the cache predates the merge) and say which.
+        const hint = isServerRoot(project.cwd) ? restartHint((await recheckBuildState())?.state) : '';
         return {
           ...landed,
           build,
-          detail: build.ran ? `${landed.detail} — ${build.detail}` : landed.detail,
+          detail: (build.ran ? `${landed.detail} — ${build.detail}` : landed.detail) + hint,
         };
       });
     }

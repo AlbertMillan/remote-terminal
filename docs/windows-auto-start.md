@@ -35,3 +35,18 @@ up if it fails. The route refuses (409) unless the server runs from `dist/` on p
 requires a same-origin request and a Tailscale identity. The client waits for a *different*
 `bootId` from `GET /api/server/status` before reloading, since the old server keeps answering
 for a moment after the 202. Sessions come back stale and revive from the sidebar.
+
+**When a restart is needed:** `npm run build` ends with `scripts/write-build-info.mjs`, which
+stamps `dist/build-info.json` with HEAD (`sha`), `builtAt`, and `inputsTree`: the git tree of
+the working copy it compiled, written through a throwaway index so nothing staged is touched.
+The server reads the stamp once at boot (the build it runs) and again for each
+`GET /api/server/status` (the build on disk). `build.state` is `rebuild` when a build input
+(`src/`, `package.json`, `package-lock.json`, `tsconfig*.json`,
+`scripts/copy-client-assets.mjs`) differs between the on-disk tree and HEAD, so edits built
+before they were committed don't count; and `restart` when the running and on-disk trees
+differ in a build input. A rebuild of the same inputs (every Land builds, a docs-only one
+included) is `current`: a restart ends every terminal. Rebuild wins; docs-only and
+uncommitted changes never count. Either shows a chip beside "Connected" that opens
+Settings → Server — never a one-click restart. A Land of this project re-checks and says
+which is needed. A `dist/` from before stamps, dev mode, or no git shows nothing
+(`unknown`). Spec: `project/server-behind-build.md`.

@@ -138,6 +138,11 @@ before **merge**.
   throw there once skipped `branch -D` — a leaked branch and folder per Land. A failed
   `createWorktree` deletes only the branch **it** created. Git refuses worktree paths past
   ~210 chars on Windows, so track folders use 8 id chars.
+- **Never link the main checkout's `node_modules` (or anything) into a worktree.**
+  `git worktree remove` on Windows deletes *through* a junction and empties the target. If
+  dependencies are missing, run the lockfile's install in the worktree (`project-deps.ts`).
+  `removeWorktree` unlinks every link before git runs and skips git while one is left —
+  keep that order. See `docs/track-branches.md`, "Dependencies".
 - A job's diff base is its recorded `baseBranch`, never the project's current branch — a job
   parked across a branch switch would otherwise be measured against the wrong thing.
 

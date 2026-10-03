@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { lstat, readdir, rm, unlink } from 'fs/promises';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import { getConfig } from '../config.js';
@@ -217,30 +218,61 @@ function describeAddFailure(path: string, stderr: string): string {
   return `Could not create a worktree at ${path}${stderr ? `: ${stderr}` : ''}`;
 }
 
+export interface TeardownResult {
+  removed: boolean;
+  branchDeleted: boolean;
+  /**
+   * Links (or unreadable entries that might hide one) still in the worktree.
+   * Non-empty means git never ran: the worktree is still registered and on
+   * disk, and the caller must keep its record so the teardown can run again.
+   */
+  linksLeft: string[];
+}
+
 /**
  * Remove a job's worktree and, optionally, its branch.
  *
  * Always non-throwing: teardown runs in `finally` paths where a failure must
  * not mask the original outcome. Returns what it managed to clean up.
+ *
+ * Every filesystem step is async: this runs on the server's event loop, and a
+ * synchronous rmSync of a real node_modules (~12k files) froze every live
+ * terminal for 1.7s.
  */
 export async function removeWorktree(
   cwd: string,
   jobId: string,
   options: { deleteBranch?: string | null; path?: string } = {}
-): Promise<{ removed: boolean; branchDeleted: boolean }> {
+): Promise<TeardownResult> {
   const path = options.path || worktreePathFor(jobId);
   let removed = false;
   let branchDeleted = false;
+  let linksLeft: string[] = [];
 
   // Each step runs whatever the one before it did. On Windows a process whose
   // cwd is the folder — the session-log run that a closing session starts
   // there, typically — makes its rmdir fail with EBUSY. That once threw past
   // the branch deletion too, leaking a branch per Land on top of the folder.
   if (existsSync(path)) {
-    // --force: the worktree may hold uncommitted scratch from a failed stage.
-    // git deregisters the worktree even when it cannot delete the folder.
-    removed = (await git(cwd, ['worktree', 'remove', '--force', path])) !== null;
-    if (!removed) removed = removeFolder(path);
+    // Links first. Git for Windows (2.39) deletes *through* a junction: a
+    // node_modules junction to the main checkout's copy emptied it. Node's
+    // rm and unlink remove the link itself. Clearing node_modules also
+    // spares git deleting thousands of files one by one.
+    await removeNodeModules(path);
+    linksLeft = await unlinkLinks(path);
+    if (linksLeft.length > 0) {
+      // Never hand git a tree that still holds a link. The worktree stays
+      // registered; the caller keeps its record so the teardown can run again.
+      logger.warn(
+        { jobId, path, linksLeft },
+        'worktree: a link could not be removed — left in place, not deleted through it'
+      );
+    } else {
+      // --force: the worktree may hold uncommitted scratch from a failed stage.
+      // git deregisters the worktree even when it cannot delete the folder.
+      removed = (await git(cwd, ['worktree', 'remove', '--force', path])) !== null;
+      if (!removed) removed = await removeFolder(path);
+    }
   } else {
     removed = true;
   }
@@ -253,17 +285,91 @@ export async function removeWorktree(
       (await git(cwd, ['branch', '-D', options.deleteBranch])) !== null ||
       !(await branchExists(cwd, options.deleteBranch));
   }
-  if (!removed) {
+  if (!removed && linksLeft.length === 0) {
     logger.warn({ jobId, path }, 'worktree: folder is busy — removal retried in the background');
     retryFolderRemoval(path);
   }
 
   logger.info({ jobId, removed, branchDeleted }, 'worktree: torn down');
-  return { removed, branchDeleted };
+  return { removed, branchDeleted, linksLeft };
+}
+
+/** How a teardown that left links says so, for Land, Cancel and Discard to report. */
+export function describeLinksLeft(path: string, linksLeft: string[]): string {
+  return (
+    `The worktree at ${path} still holds a link that could not be removed (${linksLeft.join(', ')}), ` +
+    'so it was left in place rather than deleted through it. Remove the link, then try again.'
+  );
+}
+
+/** Remove a worktree's node_modules: a junction goes, its target stays. Never throws. */
+async function removeNodeModules(path: string): Promise<void> {
+  try {
+    await rm(join(path, 'node_modules'), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch (error) {
+    logger.warn({ path, code: (error as NodeJS.ErrnoException).code }, 'worktree: node_modules removal failed');
+  }
+}
+
+/**
+ * Unlink every symlink and junction under `root`, `.git` excepted, without
+ * descending into any. Returns what is still there afterwards: links that
+ * would not unlink, and any folder or entry that could not be read — it
+ * might hold a link, so it fails closed rather than letting git near it.
+ * Never throws.
+ */
+export async function unlinkLinks(root: string): Promise<string[]> {
+  const left: string[] = [];
+  const gone = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === 'ENOENT';
+  const walk = async (dir: string): Promise<void> => {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch (error) {
+      if (!gone(error)) left.push(dir);
+      return;
+    }
+    for (const name of names) {
+      if (name === '.git') continue;
+      const entry = join(dir, name);
+      let stat;
+      try {
+        stat = await lstat(entry);
+      } catch (error) {
+        if (!gone(error)) left.push(entry);
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        // lstat reports a junction as a symbolic link too; unlink removes
+        // either without touching the target.
+        try {
+          await unlink(entry);
+          logger.info({ link: entry }, 'worktree: unlinked before removal');
+        } catch (error) {
+          logger.warn({ link: entry, code: (error as NodeJS.ErrnoException).code }, 'worktree: could not unlink');
+          left.push(entry);
+        }
+      } else if (stat.isDirectory()) {
+        await walk(entry);
+      }
+    }
+  };
+  await walk(root);
+  return left;
 }
 
 /** Delete a folder; false when it is still there (on Windows: held open). Never throws. */
-function removeFolder(path: string): boolean {
+async function removeFolder(path: string): Promise<boolean> {
+  try {
+    await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch (error) {
+    logger.debug({ path, code: (error as NodeJS.ErrnoException).code }, 'worktree: folder removal failed');
+  }
+  return !existsSync(path);
+}
+
+/** removeFolder for the boot sweep, which runs before the server takes connections. */
+function removeFolderSync(path: string): boolean {
   try {
     rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
   } catch (error) {
@@ -291,8 +397,8 @@ const retrying = new Set<string>();
 function retryFolderRemoval(path: string, attempt = 1): void {
   if (attempt === 1 && retrying.has(path)) return;
   retrying.add(path);
-  const timer = setTimeout(() => {
-    if (!isDeregistered(path) || removeFolder(path)) {
+  const timer = setTimeout(async () => {
+    if (!isDeregistered(path) || (await removeFolder(path))) {
       retrying.delete(path);
       logger.info({ path, attempt }, 'worktree: leftover folder removed');
     } else if (attempt < RETRY_ATTEMPTS) {
@@ -309,8 +415,9 @@ function retryFolderRemoval(path: string, attempt = 1): void {
  * At server start, delete folders under the worktree root that a teardown
  * left behind: no longer git worktrees (no `.git` link) and holding nothing
  * but empty folders and session-log stubs — the file a session-log run
- * writes into the folder it was holding. Anything else found there is
- * logged and left alone: it could be someone's work.
+ * writes into the folder it was holding — plus, at the top, `node_modules`,
+ * which an install leaves and a busy teardown can fail to finish. Anything
+ * else found there is logged and left alone: it could be someone's work.
  */
 export function sweepLeftoverWorktrees(sessionLogName: string): string[] {
   const swept: string[] = [];
@@ -326,20 +433,31 @@ export function sweepLeftoverWorktrees(sessionLogName: string): string[] {
   };
   for (const path of [...candidates(root), ...candidates(join(root, 'tracks'))]) {
     if (!isDeregistered(path)) continue;
-    if (!onlyStubs(path, sessionLogName)) {
+    if (!onlyStubs(path, sessionLogName, true)) {
       logger.warn({ path }, 'worktree sweep: unrecognised leftover folder, left in place');
       continue;
     }
-    if (removeFolder(path)) swept.push(path);
+    // On its own first, as the teardown does: rmSync never follows a junction.
+    // Synchronous is fine here: this runs before the server takes connections.
+    try {
+      rmSync(join(path, 'node_modules'), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch (error) {
+      logger.warn({ path, code: (error as NodeJS.ErrnoException).code }, 'worktree sweep: node_modules removal failed');
+    }
+    if (removeFolderSync(path)) swept.push(path);
   }
   if (swept.length > 0) logger.info({ swept }, 'worktree sweep: removed leftover folders');
   return swept;
 }
 
-function onlyStubs(dir: string, sessionLogName: string): boolean {
+function onlyStubs(dir: string, sessionLogName: string, top = false): boolean {
   try {
     return readdirSync(dir, { withFileTypes: true }).every((e) =>
-      e.isDirectory() ? onlyStubs(join(dir, e.name), sessionLogName) : e.name === sessionLogName
+      top && e.name === 'node_modules'
+        ? true
+        : e.isDirectory()
+          ? onlyStubs(join(dir, e.name), sessionLogName)
+          : e.name === sessionLogName
     );
   } catch {
     return false;

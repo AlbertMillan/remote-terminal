@@ -238,6 +238,32 @@ body {
 .pu-pct.danger {
   color: var(--danger);
 }
+/* "Restart to load the new build": beside the plan usage chip, amber like its warn level. */
+.build-chip {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid rgba(224, 175, 104, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.build-chip[hidden] {
+  display: none;
+}
+.build-chip:hover {
+  border-color: rgba(224, 175, 104, 0.7);
+}
+.build-chip::before {
+  content: '↻ ';
+  color: rgb(224, 175, 104);
+}
+
 .plan-usage-body {
   padding: 4px 12px 10px;
   border-top: 1px solid var(--border-subtle);
@@ -935,6 +961,14 @@ body {
 .btn-primary:active {
   transform: translateY(0);
   box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+/* Waiting on something (a track's dependency install): no hover lift. */
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
 }
 
 .btn-secondary {

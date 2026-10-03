@@ -162,7 +162,7 @@ describe('worktree creation', () => {
       await new Promise((r) => setTimeout(r, 300));
       try {
         const torn = await removeWorktree(repo, 'job-held', { path, deleteBranch: 'job/held' });
-        expect(torn).toEqual({ removed: false, branchDeleted: true });
+        expect(torn).toEqual({ removed: false, branchDeleted: true, linksLeft: [] });
         expect(git(repo, 'branch', '--list', 'job/held')).toBe('');
         expect(git(repo, 'worktree', 'list').split('\n')).toHaveLength(1);
       } finally {
@@ -288,6 +288,24 @@ describe('landTrack', () => {
     await expect(
       tracks.landTrack(project(), 'Alpha', [join(t.worktreePath, 'src')])
     ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('refuses while dependencies are installing in the worktree', async () => {
+    // Open session waits on the install before any session exists, so the
+    // session check can't see it; the teardown would delete under npm.
+    const { installDependencies } = await import('../src/server/projects/project-deps.js');
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    writeFileSync(join(t.worktreePath, 'package.json'), '{"name":"x","version":"1.0.0"}');
+    writeFileSync(join(t.worktreePath, 'package-lock.json'), '{ not json');
+    const installing = installDependencies(t.worktreePath);
+    try {
+      await expect(tracks.landTrack(project(), 'Alpha', [])).rejects.toMatchObject({
+        status: 409,
+        message: expect.stringMatching(/still installing/),
+      });
+    } finally {
+      await installing;
+    }
   });
 
   it('refuses when the project is not on the branch the track came from', async () => {

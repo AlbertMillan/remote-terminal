@@ -149,14 +149,22 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
  * Kill the spawned process tree. With shell:true the direct child is the shell
  * (cmd.exe on Windows); a plain kill() would leave the real `claude` grandchild
  * orphaned (and still burning quota), so on Windows we taskkill the whole tree.
+ * Settles once taskkill has exited, for a caller that must not touch the
+ * folder while a grandchild is still writing to it.
  */
-function killTree(child: ReturnType<typeof spawn>): void {
+export function killTree(child: ReturnType<typeof spawn>): Promise<void> {
   if (process.platform === 'win32' && child.pid) {
-    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-    killer.on('error', () => child.kill());
-  } else {
-    child.kill();
+    return new Promise((done) => {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      killer.on('error', () => {
+        child.kill();
+        done();
+      });
+      killer.on('close', () => done());
+    });
   }
+  child.kill();
+  return Promise.resolve();
 }
 
 export interface ClaudeRunResult {

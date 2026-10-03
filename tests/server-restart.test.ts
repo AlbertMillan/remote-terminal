@@ -1,15 +1,23 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   BOOT_ID,
+  BUILD_INPUTS,
+  createBuildStateChecker,
+  isServerRoot,
+  readBuildStamp,
   registerServerRestartRoutes,
   restartAvailability,
+  restartHint,
   type ServerRestartDeps,
 } from '../src/server/server-restart.js';
-import { waitForNewBoot } from '../src/client/server-restart.js';
+// @ts-expect-error — a plain .mjs build script, no types
+import { BUILD_INPUTS as SCRIPT_BUILD_INPUTS, buildInfo, workingTreeId } from '../scripts/write-build-info.mjs';
+import { chipView, waitForNewBoot, type BuildStatus, type ServerStatus } from '../src/client/server-restart.js';
 
 /**
  * Restart from the UI kills every terminal, so the route must refuse anything
@@ -72,7 +80,22 @@ describe('POST /api/server/restart', () => {
   it('reports the boot id and availability', async () => {
     const app = await appWith(deps());
     const res = await app.inject({ method: 'GET', url: '/api/server/status' });
-    expect(res.json()).toEqual({ bootId: BOOT_ID, canRestart: true, reason: null });
+    expect(res.json()).toMatchObject({ bootId: BOOT_ID, canRestart: true, reason: null });
+    // An unstamped dist/ (built before stamps existed) shows nothing.
+    expect(res.json().build).toMatchObject({ state: 'unknown', running: null, onDisk: null });
+  });
+
+  it('reports the build state of a stamped dist/ the server runs', async () => {
+    const d = deps();
+    stamp(root, 'a'.repeat(40), '2026-10-03T00:00:00.000Z');
+    const app = await appWith(d);
+    const res = await app.inject({ method: 'GET', url: '/api/server/status' });
+    // The running stamp was read at registration; the temp root is no git repo.
+    expect(res.json().build).toMatchObject({
+      state: 'unknown',
+      running: { sha: 'a'.repeat(40) },
+      reason: expect.stringMatching(/git could not compare/),
+    });
   });
 
   it('refuses a cross-origin request and an unverified caller', async () => {
@@ -150,5 +173,261 @@ describe('waitForNewBoot', () => {
   it('gives up when the server never comes back', async () => {
     const poll = vi.fn(async () => null);
     expect(await waitForNewBoot('old', poll, { intervalMs: 10, limitMs: 50, sleep: noSleep })).toBe(false);
+  });
+});
+
+/** Writes dist/build-info.json as scripts/write-build-info.mjs does. */
+function stamp(projectRoot: string, sha: string, builtAt: string, inputsTree?: string | null): void {
+  mkdirSync(join(projectRoot, 'dist'), { recursive: true });
+  writeFileSync(join(projectRoot, 'dist', 'build-info.json'), JSON.stringify({ sha, builtAt, inputsTree }));
+}
+
+describe('build state (server behind its build)', () => {
+  // A real repository: "a build input changed in a commit" is a property of git.
+  let repo: string;
+  const git = (...args: string[]): string => execFileSync('git', args, { cwd: repo, encoding: 'utf-8' }).trim();
+  const commit = (rel: string, content: string): string => {
+    mkdirSync(join(repo, rel, '..'), { recursive: true });
+    writeFileSync(join(repo, rel), content);
+    git('add', '--', rel);
+    git('commit', '-q', '-m', `edit ${rel}`);
+    return git('rev-parse', 'HEAD');
+  };
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    repo = mkdtempSync(join(tmpdir(), 'cr-build-state-'));
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, '.gitignore'), 'dist/\n');
+    git('add', '.gitignore');
+    commit('src/server/index.ts', 'export {};\n');
+  });
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const built = (builtAt = '2026-10-03T10:00:00.000Z') => {
+    const s = { sha: git('rev-parse', 'HEAD'), builtAt };
+    stamp(repo, s.sha, s.builtAt);
+    return s;
+  };
+
+  it('is current when the server runs the build on disk and no input changed', async () => {
+    const running = built();
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+  });
+
+  it('asks for a restart when dist/ holds a build of different inputs', async () => {
+    const running = built('2026-10-03T09:00:00.000Z');
+    commit('src/server/app.ts', 'export const x = 1;\n');
+    built('2026-10-03T10:00:00.000Z'); // rebuilt since, with the change
+    const status = await createBuildStateChecker(repo, running).check();
+    expect(status.state).toBe('restart');
+    expect(status.reason).toMatch(/dist\/ holds .*Changed: src\/server\/app\.ts/);
+  });
+
+  it('stays current after a rebuild that changed no input: every Land rebuilds, a docs-only one too', async () => {
+    const running = built('2026-10-03T09:00:00.000Z');
+    built('2026-10-03T10:00:00.000Z'); // same commit, rebuilt
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+    commit('PROJECT.md', '- [x] ticked\n');
+    built('2026-10-03T11:00:00.000Z'); // a docs-only Land's build
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+  });
+
+  it('does not ask for a rebuild once edits built before their commit are committed', async () => {
+    // Edit on main, build, restart, then commit: dist/ already has the change.
+    writeFileSync(join(repo, 'src', 'server', 'index.ts'), 'export const edited = 1;\n');
+    writeFileSync(join(repo, 'src', 'server', 'new-file.ts'), 'export {};\n'); // untracked, built too
+    const running = { ...buildInfo(repo), builtAt: '2026-10-03T10:00:00.000Z' };
+    expect(running.inputsTree).toMatch(/^[0-9a-f]{40}$/);
+    stamp(repo, running.sha, running.builtAt, running.inputsTree);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'commit what was built');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+    // A further change after that commit still counts.
+    commit('src/server/index.ts', 'export const later = 2;\n');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('rebuild');
+  });
+
+  it('stamps the built tree without touching what the user has staged', () => {
+    writeFileSync(join(repo, 'src', 'server', 'index.ts'), 'export const staged = 1;\n');
+    git('add', 'src/server/index.ts');
+    writeFileSync(join(repo, 'src', 'server', 'other.ts'), 'export {};\n'); // untracked, not staged
+    const before = git('diff', '--cached', '--name-only');
+    expect(workingTreeId(repo)).toMatch(/^[0-9a-f]{40}$/);
+    expect(git('diff', '--cached', '--name-only')).toBe(before);
+    expect(git('status', '--porcelain')).toContain('?? src/server/other.ts');
+  });
+
+  it('asks for a rebuild after a commit to src/', async () => {
+    const running = built();
+    commit('src/server/app.ts', 'export const x = 1;\n');
+    const status = await createBuildStateChecker(repo, running).check();
+    expect(status.state).toBe('rebuild');
+    expect(status.reason).toContain('src/server/app.ts');
+  });
+
+  it('stays current after a docs-only commit', async () => {
+    const running = built();
+    commit('PROJECT.md', '## Track: X\n');
+    commit('project/spec.md', '# Spec\n');
+    commit('docs/notes.md', 'notes\n');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+  });
+
+  it('ignores uncommitted edits: they say nothing about what landed', async () => {
+    const running = built();
+    writeFileSync(join(repo, 'src', 'server', 'index.ts'), 'export const dirty = 1;\n');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('current');
+  });
+
+  it('counts every build input, not only src/', async () => {
+    for (const rel of ['package.json', 'package-lock.json', 'tsconfig.client.json', 'scripts/copy-client-assets.mjs']) {
+      const running = built();
+      commit(rel, `{"edit":"${rel}"}\n`);
+      expect((await createBuildStateChecker(repo, running).check()).state, rel).toBe('rebuild');
+    }
+  });
+
+  it('is unknown with no stamp on disk, or none for the running build', async () => {
+    const running = built();
+    rmSync(join(repo, 'dist'), { recursive: true, force: true });
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('unknown');
+    built();
+    const devMode = await createBuildStateChecker(repo, null, { unknownReason: 'dev mode' }).check();
+    expect(devMode).toMatchObject({ state: 'unknown', reason: 'dev mode' });
+  });
+
+  it('asks for a rebuild, not a restart, when both are true', async () => {
+    const running = built('2026-10-03T09:00:00.000Z');
+    built('2026-10-03T10:00:00.000Z');
+    commit('src/client/terminal.ts', 'export {};\n');
+    expect((await createBuildStateChecker(repo, running).check()).state).toBe('rebuild');
+  });
+
+  it('reuses the git answer for 30s, and re-checks once invalidated', async () => {
+    let now = 1_000_000;
+    const running = built();
+    const checker = createBuildStateChecker(repo, running, { now: () => now });
+    expect((await checker.check()).state).toBe('current');
+    commit('src/server/app.ts', 'export const y = 2;\n');
+    expect((await checker.check()).state).toBe('current'); // cached
+    checker.invalidate();
+    expect((await checker.check()).state).toBe('rebuild');
+    // The cache also expires on its own.
+    const fresh = createBuildStateChecker(repo, built(), { now: () => now });
+    expect((await fresh.check()).state).toBe('current');
+    commit('src/server/app.ts', 'export const z = 3;\n');
+    now += 31_000;
+    expect((await fresh.check()).state).toBe('rebuild');
+  });
+
+  it('reads a stamp only with a sha: a build outside git stamps a null one', () => {
+    stamp(repo, null as never, '2026-10-03T10:00:00.000Z');
+    expect(readBuildStamp(repo)).toBeNull();
+  });
+});
+
+describe('build state cache', () => {
+  /** A git comparison the test finishes by hand. */
+  function controlledDiff() {
+    const calls: { from: string; to: string; finish: (files: string[] | null) => void }[] = [];
+    const diff = (from: string, to: string) =>
+      new Promise<string[] | null>((finish) => calls.push({ from, to, finish }));
+    return { calls, diff };
+  }
+  const running = { sha: 'a'.repeat(40), builtAt: '2026-10-03T10:00:00.000Z' };
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cr-build-cache-'));
+    stamp(root, running.sha, running.builtAt);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('shares one git between checks that overlap', async () => {
+    const { calls, diff } = controlledDiff();
+    const checker = createBuildStateChecker(root, running, { diff });
+    const first = checker.check();
+    const second = checker.check();
+    await Promise.resolve();
+    expect(calls).toHaveLength(1);
+    calls[0].finish([]);
+    expect((await first).state).toBe('current');
+    expect((await second).state).toBe('current');
+  });
+
+  it('never lets a git that started before invalidate() write its older answer back', async () => {
+    const { calls, diff } = controlledDiff();
+    const checker = createBuildStateChecker(root, running, { diff });
+    const stale = checker.check(); // started before the Land's merge
+    await Promise.resolve();
+    checker.invalidate(); // the Land
+    const fresh = checker.check();
+    await Promise.resolve();
+    expect(calls).toHaveLength(2);
+    calls[1].finish(['src/server/app.ts']);
+    expect((await fresh).state).toBe('rebuild');
+    calls[0].finish([]); // the old answer arrives last
+    expect((await stale).state).toBe('current');
+    // The cache holds the fresh answer, not the late one.
+    expect((await checker.check()).state).toBe('rebuild');
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('scripts/write-build-info.mjs', () => {
+  it('stamps the same build inputs the server diffs', () => {
+    expect(SCRIPT_BUILD_INPUTS).toEqual(BUILD_INPUTS);
+  });
+});
+
+describe('isServerRoot', () => {
+  it('matches the server root however the path is spelled', async () => {
+    await appWith(deps());
+    expect(isServerRoot(root)).toBe(true);
+    expect(isServerRoot(root.toUpperCase().replace(/\\/g, '/') + '/')).toBe(true);
+    expect(isServerRoot(join(root, 'sub'))).toBe(false);
+  });
+});
+
+describe('the build chip', () => {
+  const status = (state: BuildStatus['state'], canRestart = true): ServerStatus => ({
+    bootId: 'b',
+    canRestart,
+    reason: canRestart ? null : 'Not running from dist/.',
+    build: { state, running: null, onDisk: null, reason: 'why' },
+  });
+
+  it('shows only for restart and rebuild', () => {
+    expect(chipView(status('current'))).toBeNull();
+    expect(chipView(status('unknown'))).toBeNull();
+    expect(chipView(null)).toBeNull();
+    expect(chipView({ bootId: 'b', canRestart: true, reason: null })).toBeNull(); // an older server
+    expect(chipView(status('restart'))?.text).toBe('Restart to load the new build');
+    expect(chipView(status('rebuild'))?.text).toBe('Build & restart to load new commits');
+  });
+
+  it('gives the reason and the manual step when this server cannot restart itself', () => {
+    const view = chipView(status('rebuild', false));
+    expect(view?.title).toContain('Not running from dist/.');
+    expect(view?.title).toMatch(/By hand: run npm run build/);
+    expect(chipView(status('restart'))?.title).toMatch(/Settings → Server → Restart/);
+  });
+});
+
+describe('the restart hint after a Land', () => {
+  it('names the action the landed build needs', () => {
+    expect(restartHint('restart')).toBe(' — restart to load it');
+    expect(restartHint('rebuild')).toBe(' — Build & restart to load it');
+    expect(restartHint('current')).toBe('');
+    expect(restartHint(undefined)).toBe('');
   });
 });

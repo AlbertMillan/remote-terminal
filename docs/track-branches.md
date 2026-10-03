@@ -198,6 +198,86 @@ the track in its worktree, resolve there, and land again.
 A worktree folder that has gone missing is re-attached to its branch before Land, as
 `ensureTrackBranch` does, rather than failing with a 500.
 
+## Dependencies
+
+The spec is `project/worktree-dependencies.md`. Code: `src/server/projects/project-deps.ts`,
+`removeWorktree` and `sweepLeftoverWorktrees` in `src/server/jobs/worktree.ts`.
+
+**Each worktree installs its own, from its lockfile** (`npm ci`, `pnpm install
+--frozen-lockfile` or `yarn install --frozen-lockfile`, all `--prefer-offline`; nothing
+without a lockfile). Never a link to the main checkout's copy: agents did that by hand
+twice (2026-09-25, 2026-09-29), and it is dangerous. A worktree holding a `node_modules`
+junction to a target folder, removed five ways (2026-10-02, Git 2.39.1 for Windows,
+Node 20.18):
+
+| How the worktree was removed | Target |
+|---|---|
+| `git worktree remove` | **emptied** |
+| `git worktree remove --force` | **emptied** |
+| Node `fs.rmSync(path, { recursive: true })` | intact |
+| PowerShell 5.1 `Remove-Item -Recurse -Force` | intact |
+| Git Bash `rm -rf` | intact |
+
+`git status` shows such a worktree as clean, so nothing warned before Land, Delete or
+Discard emptied main's `node_modules`.
+
+**Cost.** Measured 2026-10-03 in this track's worktree: `npm ci --prefer-offline
+--no-audit --no-fund` took **21 s** (291 packages) with a warm npm cache.
+`better-sqlite3` and `node-pty` used prebuilt binaries, so nothing compiled.
+
+**When it runs.**
+
+- **Track worktrees:** when a session opens there and `node_modules` is missing. Open
+  session and the new-session picker call `POST /api/projects/track/branch`, which
+  answers `needsInstall`. They then wait on `POST /api/projects/track/install` with
+  "Installing dependencies…" before creating the session, so no agent in it can start a
+  second install into the same folder. The install route takes the worktree from the
+  track's row, never from the browser, and concurrent calls for one folder share one
+  install. Not at branch creation: dispatch creates track branches too, and its job never
+  uses them. A failed install still opens the session, with the failure written at the
+  top of its terminal (client-side, never sent to the PTY). A failed install removes its
+  partial `node_modules`, so the next session opened there tries again.
+- **Job worktrees:** in the design stage, right after the worktree exists, and on every
+  design pass that finds `node_modules` missing (a retried job's worktree is already
+  recorded). It counts against `jobs.stageTimeoutMs`. A failure fails the stage with
+  the tail of the installer's output, and nothing retries it automatically. A cancel kills
+  the installer's process tree and waits for it before the stage unwinds, so teardown
+  never races npm writing into the folder.
+
+**Teardown never follows a link.** `removeWorktree`, before git:
+
+1. Remove the worktree's `node_modules` (`fs/promises` `rm`). It removes a junction
+   itself, never its target, and spares git deleting thousands of files one by one.
+2. Walk the rest (skipping `.git`) with `lstat`, unlinking each symlink or junction, and
+   log each one. A folder or entry it can't read counts as a link left: it might hide
+   one, so the walk fails closed.
+3. `git worktree remove --force`, only if no link is left. Git is never handed a tree
+   that still holds a link.
+
+Every step is async. The teardown runs on the server's event loop, and a synchronous
+`rmSync` of a real `node_modules` (11,791 files) blocked every live terminal for 1.7 s.
+The boot sweep stays synchronous, since it runs before the server listens.
+
+**A link left behind is reported, and the record kept.** `removeWorktree` returns
+`linksLeft`. When it is non-empty the worktree is still registered and on disk, so every
+caller keeps what would let the teardown run again:
+
+- Cancel keeps the job's `worktreePath` and says why in its detail, and so does the
+  merge stage's teardown;
+- Discard refuses with a 409 naming the links, and keeps the row;
+- Delete track keeps its unlanded row and names the leftover path (as for a busy folder);
+- Land stands (the merge is done), and its message names the worktree and the link and
+  says to remove them, since nothing else records them.
+
+**Land and Delete track refuse while an install is running** in the track's worktree
+(`isInstalling`). During Open session's wait no session exists yet, so the
+live-session check can't see it, and the teardown would delete `node_modules` under a
+running npm.
+
+The boot sweep also removes a deregistered folder holding only `node_modules` (and
+session-log stubs): a busy teardown can leave one, and without this it was kept forever.
+It removes `node_modules` with `rmSync` first.
+
 ## One track operation at a time
 
 `src/server/projects/project-lock.ts` allows one of these at a time per project: Land,
