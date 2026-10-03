@@ -46,12 +46,14 @@ import {
   docRelOf,
   isPlanningPath,
   isSessionLogPath,
+  mergeTrapAdvice,
   moveSectionOffMain,
   nameFiles,
   returnSectionToMain,
   specFolderOf,
   specsOf,
   statusEntries,
+  type StatusEntry,
   type MoveMode,
   type MoveResult,
 } from './track-plan.js';
@@ -643,8 +645,7 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
       throw new TrackBranchError(
         `Merging ${base} into the track conflicts in ${nameFiles(unmerged)}. Nothing was changed. ` +
           `Make those files agree on either side — commit the fix on the track branch in its session, ` +
-          `or on ${base} — then Update again. Don't run a plain \`git merge ${base}\` in the worktree: ` +
-          'it deletes the specs of this track that the branch never changed.',
+          `or on ${base} — then Update again. ${mergeTrapAdvice(base)}`,
         409
       );
     }
@@ -748,6 +749,110 @@ export async function landTrack(
   trackName: string,
   deps: LandDeps
 ): Promise<LandResult> {
+  const { track, mainEntries } = await landPreflight(project, trackName);
+  const docRel = docRelOf(project);
+
+  // Every refusal is behind us, so closing now never kills a session for a
+  // Land that then refuses — and the dirty-code check above means a session
+  // with uncommitted code is never closed. Awaited one by one: on Windows an
+  // open shell's cwd makes `git worktree remove` fail half-way, so each shell
+  // must be gone before the merge and teardown start. Their session-log runs
+  // go to the main checkout (worktreeOwner), so nothing waits on those; their
+  // first git reads in the worktree take no index lock, so they cannot make
+  // resetDocToMergeBase below fail.
+  const toClose = sessionsInWorktree(deps.sessions, track.worktreePath);
+  for (const s of toClose) await deps.terminateSession(s.id);
+
+  // 1. The plan back onto main, then PROJECT.md out of the merge.
+  const returned = await returnSectionToMain({ project, worktreePath: track.worktreePath, trackName });
+  let beforeReset: string | null = null;
+  try {
+    beforeReset = await resetDocToMergeBase(track, docRel);
+  } catch (error) {
+    await returned.rollback();
+    throw error;
+  }
+
+  // 2. Merge.
+  const merged = await git(project.cwd, [
+    ...COMMIT_IDENTITY,
+    'merge',
+    '--no-ff',
+    track.branch,
+    '-m',
+    `Merge track: ${trackName}`,
+  ]);
+  if (merged === null) {
+    await git(project.cwd, ['merge', '--abort']);
+    await returned.rollback();
+    // Take the reset commit back off the track branch. Without this the next
+    // Land reads the already-reset copy and the track's section is gone for
+    // good. Safe: the worktree was committed clean above, so --hard discards
+    // nothing else.
+    if (beforeReset) await git(track.worktreePath, ['reset', '--hard', beforeReset]);
+    const planning = mainEntries.map((e) => e.path);
+    throw new TrackBranchError(
+      `Merging ${track.branch} into ${track.baseBranch} failed. Use Update from ${track.baseBranch} on the track; if it names conflicting files, make them agree on either side and Update again, then land. ${mergeTrapAdvice(track.baseBranch)}` +
+        (planning.length > 0
+          ? ` If the uncommitted planning files on main are in the way (${nameFiles(planning)}), commit or stash them.`
+          : ''),
+      409
+    );
+  }
+  const mergeSha = (await git(project.cwd, ['rev-parse', 'HEAD']))?.trim() || '';
+  markLanded(track.id, mergeSha);
+
+  // 3. Publish, as the merge stage does for a job. Only commits go: the
+  // uncommitted backlog edits on main stay where they are.
+  let pushed = false;
+  if (await hasRemote(project.cwd)) {
+    pushed = (await git(project.cwd, ['push'])) !== null;
+  }
+
+  // 4. The branch's commits now live on the base; only the label goes.
+  const torn = await removeWorktree(project.cwd, track.id, {
+    path: track.worktreePath,
+    deleteBranch: track.branch,
+  });
+  // The land itself stands. A link the teardown could not remove leaves the
+  // worktree registered and the branch checked out there, with nothing else
+  // recording either, so the result has to say where they are.
+  const leftover =
+    torn.linksLeft.length > 0
+      ? ` ${describeLinksLeft(track.worktreePath, torn.linksLeft)} ` +
+        `Then run "git worktree remove ${track.worktreePath}" and "git branch -D ${track.branch}".`
+      : '';
+
+  const synced = returned.featureIds;
+  const closed = toClose.length;
+  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced, closed }, 'track landed');
+  return {
+    mergeSha,
+    pushed,
+    synced,
+    closedSessions: closed,
+    detail:
+      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) +
+      (closed > 0 ? ` — closed ${closed} open session${closed === 1 ? '' : 's'} in its worktree` : '') +
+      leftover,
+  };
+}
+
+/**
+ * Land's checks that need no session, in Land's order: no live job, no
+ * running install, the project on the base branch, no code (and nothing
+ * staged) on main, no code in the worktree. Uncommitted planning in the
+ * worktree is committed on the track branch, as Land does. A session that
+ * asks to Land runs this first, while its agent can still act on a refusal
+ * (POST /api/agent/land); Land itself runs it again.
+ *
+ * Returns the track and main's status, which Land's merge-failure message
+ * names.
+ */
+export async function landPreflight(
+  project: RegistryProject,
+  trackName: string
+): Promise<{ track: TrackBranch; mainEntries: StatusEntry[] }> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
   const docRel = docRelOf(project);
@@ -813,92 +918,9 @@ export async function landTrack(
       409
     );
   }
-
-  // Every refusal is behind us, so closing now never kills a session for a
-  // Land that then refuses — and the dirty-code check above means a session
-  // with uncommitted code is never closed. Awaited one by one: on Windows an
-  // open shell's cwd makes `git worktree remove` fail half-way, so each shell
-  // must be gone before the merge and teardown start. Their session-log runs
-  // go to the main checkout (worktreeOwner), so nothing waits on those; their
-  // first git reads in the worktree take no index lock, so they cannot make
-  // resetDocToMergeBase below fail.
-  const toClose = sessionsInWorktree(deps.sessions, track.worktreePath);
-  for (const s of toClose) await deps.terminateSession(s.id);
-
-  // 1. The plan back onto main, then PROJECT.md out of the merge.
-  const returned = await returnSectionToMain({ project, worktreePath: track.worktreePath, trackName });
-  let beforeReset: string | null = null;
-  try {
-    beforeReset = await resetDocToMergeBase(track, docRel);
-  } catch (error) {
-    await returned.rollback();
-    throw error;
-  }
-
-  // 2. Merge.
-  const merged = await git(project.cwd, [
-    ...COMMIT_IDENTITY,
-    'merge',
-    '--no-ff',
-    track.branch,
-    '-m',
-    `Merge track: ${trackName}`,
-  ]);
-  if (merged === null) {
-    await git(project.cwd, ['merge', '--abort']);
-    await returned.rollback();
-    // Take the reset commit back off the track branch. Without this the next
-    // Land reads the already-reset copy and the track's section is gone for
-    // good. Safe: the worktree was committed clean above, so --hard discards
-    // nothing else.
-    if (beforeReset) await git(track.worktreePath, ['reset', '--hard', beforeReset]);
-    const planning = mainEntries.map((e) => e.path);
-    throw new TrackBranchError(
-      `Merging ${track.branch} into ${track.baseBranch} failed. Use Update from ${track.baseBranch} on the track; if it names conflicting files, make them agree on either side and Update again, then land. Don't run a plain \`git merge ${track.baseBranch}\` in the worktree: it deletes the track's specs.` +
-        (planning.length > 0
-          ? ` If the uncommitted planning files on main are in the way (${nameFiles(planning)}), commit or stash them.`
-          : ''),
-      409
-    );
-  }
-  const mergeSha = (await git(project.cwd, ['rev-parse', 'HEAD']))?.trim() || '';
-  markLanded(track.id, mergeSha);
-
-  // 3. Publish, as the merge stage does for a job. Only commits go: the
-  // uncommitted backlog edits on main stay where they are.
-  let pushed = false;
-  if (await hasRemote(project.cwd)) {
-    pushed = (await git(project.cwd, ['push'])) !== null;
-  }
-
-  // 4. The branch's commits now live on the base; only the label goes.
-  const torn = await removeWorktree(project.cwd, track.id, {
-    path: track.worktreePath,
-    deleteBranch: track.branch,
-  });
-  // The land itself stands. A link the teardown could not remove leaves the
-  // worktree registered and the branch checked out there, with nothing else
-  // recording either, so the result has to say where they are.
-  const leftover =
-    torn.linksLeft.length > 0
-      ? ` ${describeLinksLeft(track.worktreePath, torn.linksLeft)} ` +
-        `Then run "git worktree remove ${track.worktreePath}" and "git branch -D ${track.branch}".`
-      : '';
-
-  const synced = returned.featureIds;
-  const closed = toClose.length;
-  logger.info({ cwd: project.cwd, track: trackName, mergeSha, pushed, synced, closed }, 'track landed');
-  return {
-    mergeSha,
-    pushed,
-    synced,
-    closedSessions: closed,
-    detail:
-      (pushed ? `Landed into ${track.baseBranch} and pushed` : `Landed into ${track.baseBranch}`) +
-      (closed > 0 ? ` — closed ${closed} open session${closed === 1 ? '' : 's'} in its worktree` : '') +
-      leftover,
-  };
+  return { track, mainEntries };
 }
+
 
 /**
  * Commit the branch's PROJECT.md back to its merge-base version, if it moved.

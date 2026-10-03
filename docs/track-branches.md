@@ -155,6 +155,12 @@ path (`pathKey`) and track name. Tracks have no id in the PROJECT.md format.
 
 ## Land
 
+From the board's Land button, or from the track's own session (`cr-session land`,
+`POST /api/agent/land`: `docs/session-orchestration.md`, "A session lands its own track").
+Both run `landAndBuild()` (`track-land.ts`). A session's request runs the checks below that
+need no session (`landPreflight`), plus a conflict dry run (`behindMain`), before it
+answers `202`; the Land itself, which closes that session, runs after the reply.
+
 Land is refused (409) unless:
 
 - no job for the track is queued, running or parked;

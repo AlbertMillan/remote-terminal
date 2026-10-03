@@ -8,7 +8,8 @@ import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
-import { BuildChip, ServerRestartControl } from './server-restart.js';
+import { BUILD_CHANGED_EVENT, BuildChip, ServerRestartControl } from './server-restart.js';
+import { isLandNotification, landResultTitle, showLandResult } from './land-result.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { SessionListView } from './session-list-view.js';
@@ -26,6 +27,7 @@ import type {
   CategoryListPayload,
   ErrorPayload,
   NotificationPreferencesPayload,
+  LandNotificationPayload,
   NotificationPayload,
   ServerMessage,
   ConnectionStatus,
@@ -926,7 +928,11 @@ class SessionManager {
     this.updateSettingsUI();
   }
 
-  private handleNotification(payload: NotificationPayload): void {
+  private handleNotification(payload: NotificationPayload | LandNotificationPayload): void {
+    if (isLandNotification(payload)) {
+      this.handleLandResult(payload);
+      return;
+    }
     const session = this.sessions.get(payload.sessionId);
     if (!session) return;
 
@@ -956,6 +962,34 @@ class SessionManager {
 
       this.showBrowserNotification(title, body, payload.sessionId);
     }
+  }
+
+  /**
+   * A Land a session asked for has run. The session is closed by now, so this
+   * is a toast over every view (and a browser notification when the tab is in
+   * the background), plus a board refresh: the track is gone from it, or its
+   * worktree is back to take another look.
+   */
+  private handleLandResult(payload: LandNotificationPayload): void {
+    showLandResult(payload);
+    if (
+      this.browserNotificationsPermission === 'granted' &&
+      this.notificationPreferences.browserEnabled &&
+      !document.hasFocus()
+    ) {
+      const notification = new window.Notification(landResultTitle(payload), {
+        body: payload.detail,
+        icon: '/favicon.ico',
+        tag: `land-${payload.projectCwd}-${payload.track}`,
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    }
+    void this.workspace.refresh();
+    // A land of this server's own project leaves it behind its build.
+    if (payload.ok) window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
   }
 
   private updateSettingsUI(): void {

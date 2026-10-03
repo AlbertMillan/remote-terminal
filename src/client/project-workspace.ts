@@ -834,6 +834,11 @@ export class ProjectWorkspace {
    * pre-edit state with a stale revision, so the next edit would 409 against a
    * change the user just made themselves.
    */
+  /** Reload after a change made elsewhere (a session-requested Land, say). */
+  async refresh(): Promise<void> {
+    await this.reload();
+  }
+
   private async reload(): Promise<void> {
     if (this.selectedCwd) this.unbranched.delete(this.selectedCwd);
     await this.loadBoard();

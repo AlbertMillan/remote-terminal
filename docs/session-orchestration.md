@@ -8,9 +8,10 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 
 | Piece | Where |
 | --- | --- |
-| CLI the agent runs | `scripts/cr-session.mjs` (`start`, `list`; JSON out, prompt on stdin) |
+| CLI the agent runs | `scripts/cr-session.mjs` (`start`, `list`, `land`; JSON out, prompt on stdin) |
 | Skill that tells the agent how | `skills/claude-remote-sessions/SKILL.md` (install below) |
-| Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions` |
+| Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land` |
+| Land's outcome | `notification` with `kind: 'land'` (`broadcastLandResult`), shown by `src/client/land-result.ts` |
 | PTY env + token map | `src/server/sessions/session-env.ts` — `sessionEnv(id)` |
 | Prompt files | `src/server/sessions/prompt-file.ts` — `<dataDir>/prompts/<sessionId>.md` |
 | Typing the command | `injectCommand()` in `session-open.ts` (shared with resume/fork/revive) |
@@ -37,8 +38,9 @@ Headless runs get no token at all — a pipeline stage never starts sessions.
 
 ## Auth model
 
-`/api/*` has no authentication and the server listens on `0.0.0.0`. These two routes start a
-shell and type into it, so they — and only they — require **both**:
+`/api/*` has no authentication and the server listens on `0.0.0.0`. These routes start a
+shell and type into it, or land a track and close its sessions, so they — and only they —
+require **both**, through one guard (`authenticate()`):
 
 1. **Loopback.** `request.socket.remoteAddress` is `127.0.0.1`, `::1` or the IPv4-mapped
    `::ffff:127.0.0.1`. `X-Forwarded-For` is never read: it is whatever the client wrote.
@@ -57,6 +59,9 @@ calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts sti
 installing) or the global `sessions.maxSessions` · 409 the caller already has a live
 session on that track, or a start on it still running · 400 bad body, `bypassPermissions`, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
+`land`: 202 accepted · 400 the caller is in no track's worktree · 409 any Land refusal
+(uncommitted code, a live job, a conflicting merge, the project busy) or a Land of the
+track already under way.
 
 ## Start, step by step
 
@@ -85,6 +90,42 @@ Why a file and a short command rather than the prompt itself: a newline in a typ
 sends it early, PowerShell/bash/cmd quote differently, and the terminal would echo the whole
 prompt. Pasting into `claude` after it starts would need the server to detect Claude's input
 box, and a guess made too early types the prompt into the shell, which runs it as commands.
+
+## A session lands its own track
+
+`node "$CLAUDE_REMOTE_CLI" land` → `POST /api/agent/land`, no body. Spec:
+`project/session-requests-land.md`. The catch is that Land closes the session that asked.
+
+- **The track comes from the caller, never the request.** Token → session id → the
+  session's cwd → the unlanded track whose worktree holds it (`trackBranchContaining`). A
+  session outside every track worktree gets 400. So a session lands only its own track,
+  and an orchestrator in the main checkout can't land a child's. Started sessions can
+  land: they are usually the one the user is talking to.
+- **Phase 1, in the request:** Land's session-free checks (`landPreflight`: live jobs,
+  install, base branch, code or staged files on main, code in the worktree, with worktree
+  planning committed) plus a conflicting merge (`behindMain`). Under the project try lock,
+  released before the reply. A refusal is the CLI's error while the agent can still act.
+- **Phase 2, after the `202`:** a route-level `onResponse` hook starts it, so the reply has
+  been sent before anything is closed. `landAndBuild()` (`track-land.ts`; the board's Land route runs
+  too) takes the lock again, re-runs the preflight, closes the worktree's sessions (the
+  caller included) before merging, lands and rebuilds.
+- **The outcome** goes to every client as a `notification` with `kind: 'land'`, landed or
+  failed, with Land's `detail` (build result and restart hint included). It is not
+  filtered by notification preferences: it is the only report of that Land. The client
+  shows a toast over every view until dismissed, a browser notification when the tab is
+  in the background, and reloads the board. A phase-2 failure leaves the track unlanded
+  with its worktree, so a session can be reopened on it.
+- **The asking agent does not outlive the close.** Closing kills the shell, and node-pty's
+  helper for the console's other processes logs `AttachConsole failed` here, but the agent
+  dies anyway: closing the pseudo-console ends every process attached to it. Checked
+  2026-10-03 with a stand-in agent (a node process with the worktree as cwd that ran
+  `land` and kept running), on a server launched as production does (`WshShell.Run` of a
+  `.bat`, hidden console) and from Git Bash (no console): both times the process was gone,
+  the worktree removed and the branch deleted. An agent slow to exit is covered by
+  `removeWorktree`'s background retry of a busy folder.
+- The skill says: only when the user asks this session to land; commit first, staging by
+  name; never on its own initiative. The CLI prints "Land accepted; this session will
+  close."
 
 ## Sidebar
 

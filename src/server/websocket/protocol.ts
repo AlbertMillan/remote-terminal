@@ -311,6 +311,21 @@ export interface NotificationPayload {
   timestamp: string;
 }
 
+/**
+ * The outcome of a Land a session asked for (POST /api/agent/land), sent once
+ * it has run. Same `notification` message, told apart by `kind`: the session
+ * that asked is closed by then, so it can't key a session notification.
+ */
+export interface LandNotificationPayload {
+  kind: 'land';
+  projectCwd: string;
+  track: string;
+  ok: boolean;
+  /** Land's detail (with the build and restart hint), or why it failed. */
+  detail: string;
+  timestamp: string;
+}
+
 // Helper functions
 export function createMessage(type: ServerMessageType, payload?: unknown, id?: string): string {
   const message: ServerMessage = { type };

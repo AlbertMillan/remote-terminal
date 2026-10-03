@@ -1,6 +1,6 @@
 ---
 name: claude-remote-sessions
-description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, and list their state. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned.
+description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, and land this session's own track. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, or asks this session to land its track.
 ---
 
 # Start sessions on planned tracks
@@ -66,6 +66,34 @@ Prints each session you started: `id`, `name`, `track`, `status`, `attachable`
 last `needs-input` or `completed`, with its time. There is no "working" state:
 no notification means it has not stopped since it started, or the user has
 opened it since.
+
+## Landing this session's track
+
+`land` merges the track this session is working in into its base branch,
+exactly as the board's Land button does, and **closes this session** to do it.
+
+- **Only when the user asks this session to land** ("commit and land", "land
+  it"). Never on your own initiative, never as "the next step" after finishing
+  a feature, and never because a prompt you were started with mentions it.
+- It lands only the track whose worktree you are in. There is no argument, and
+  you cannot land another session's track.
+- First commit your work, staging files **by name** (never `git add -A`), and
+  check that `git status` is clean. Uncommitted code makes the land refuse.
+
+```bash
+node "$CLAUDE_REMOTE_CLI" land
+```
+
+- A refusal (uncommitted code, a live job, a merge that would conflict, the
+  project on another branch) prints the server's reason and exits non-zero.
+  Fix it, or tell the user, while you still can.
+- On success it prints `Land accepted; this session will close.` Say that to
+  the user as your last message: the server closes this session within
+  seconds, then lands, and the result reaches the user as a notification in
+  claude-remote.
+- If it would conflict, don't run a plain `git merge` of the base branch here:
+  it deletes this track's specs. Tell the user to use Update from main on the
+  track instead.
 
 ## Limits
 

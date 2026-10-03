@@ -1,12 +1,17 @@
 /**
- * cr-session — start and list prompted sessions from inside a claude-remote
- * session (docs/session-orchestration.md). Run by an agent through the Bash
- * tool, via the path the server puts in CLAUDE_REMOTE_CLI:
+ * cr-session — start and list prompted sessions, and land this session's own
+ * track, from inside a claude-remote session (docs/session-orchestration.md).
+ * Run by an agent through the Bash tool, via the path the server puts in
+ * CLAUDE_REMOTE_CLI:
  *
  *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode default|acceptEdits|plan] <<'EOF'
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
+ *   node "$CLAUDE_REMOTE_CLI" land
+ *
+ * `land` takes nothing: the server lands the track whose worktree this
+ * session is in, and closes this session to do it.
  *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
@@ -20,7 +25,8 @@ import { pathToFileURL } from 'node:url';
 
 const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode default|acceptEdits|plan]  (prompt on stdin)
-  node "$CLAUDE_REMOTE_CLI" list`;
+  node "$CLAUDE_REMOTE_CLI" list
+  node "$CLAUDE_REMOTE_CLI" land`;
 
 const MODES = ['default', 'acceptEdits', 'plan'];
 
@@ -81,6 +87,7 @@ export async function main({
   const headers = { Authorization: `Bearer ${token}` };
 
   let request;
+  let path = '/api/agent/sessions';
   if (command === 'start') {
     if (!flags.track || !flags.track.trim()) return fail(`--track is required\n${USAGE}`, 2);
     if (flags.mode !== undefined && !MODES.includes(flags.mode)) {
@@ -102,6 +109,12 @@ export async function main({
   } else if (command === 'list') {
     if (Object.keys(flags).length > 0) return fail(`list takes no flags\n${USAGE}`, 2);
     request = { method: 'GET', headers };
+  } else if (command === 'land') {
+    // No track argument: the server takes it from this session's worktree,
+    // so a session can only ever land its own.
+    if (Object.keys(flags).length > 0) return fail(`land takes no flags\n${USAGE}`, 2);
+    path = '/api/agent/land';
+    request = { method: 'POST', headers };
   } else {
     return fail(command ? `unknown command: ${command}\n${USAGE}` : USAGE, 2);
   }
@@ -110,7 +123,7 @@ export async function main({
   try {
     // No timeout: start waits for the track's branch and its dependency
     // install, which can take minutes.
-    res = await fetchImpl(`${url.replace(/\/+$/, '')}/api/agent/sessions`, request);
+    res = await fetchImpl(`${url.replace(/\/+$/, '')}${path}`, request);
   } catch (error) {
     const cause = error?.cause?.code || error?.cause?.message || error?.message || String(error);
     return fail(`could not reach claude-remote at ${url}: ${cause}`);
@@ -124,6 +137,11 @@ export async function main({
       /* not JSON */
     }
     return fail(`${res.status}: ${message}`);
+  }
+  if (command === 'land') {
+    // The agent's last words before the server closes this session.
+    out('Land accepted; this session will close. The result arrives as a notification in claude-remote.\n');
+    return 0;
   }
   out(text.endsWith('\n') ? text : `${text}\n`);
   return 0;

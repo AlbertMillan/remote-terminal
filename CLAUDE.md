@@ -107,13 +107,17 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
 - **Every PTY gets its env through `sessionEnv(id)`** (`sessions/session-env.ts`) — a site
   that builds its own is a session whose agent can't use the CLI. See
   `docs/session-orchestration.md`.
-- `/api/agent/sessions` requires loopback **and** a session token; the rest of `/api/*` has
-  no auth and the server binds `0.0.0.0`, so dropping either check lets the tailnet run
-  commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
+- `/api/agent/*` requires loopback **and** a session token (`authenticate()`, the one guard
+  for every agent route); the rest of `/api/*` has no auth and the server binds `0.0.0.0`,
+  so dropping either check lets the tailnet run commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
   scrollback — and die with their PTY.
 - Started sessions (`spawned_by` set) can't start sessions: one level of nesting, no
   runaway chains. Prompt files live under `<dataDir>/prompts/`, never in the worktree, or
   `commitAll` sweeps them into the branch.
+- A session's Land (`POST /api/agent/land`) takes the track from the caller's worktree,
+  never the request, or a session could land another's track. Its Land runs from the
+  route's `onResponse` hook, after the `202`: it closes the session that asked, whose
+  agent must have its answer first. The project lock is never held across that reply.
 - `src/server/utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers at boot
   and at the PTY chokepoint. It is a **denylist of session-scoped vars, never a `CLAUDE_*`
   wildcard** — otherwise the user's own settings die with it. Without it every PTY silently

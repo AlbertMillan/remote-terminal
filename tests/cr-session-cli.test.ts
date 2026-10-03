@@ -98,6 +98,37 @@ describe('list', () => {
   });
 });
 
+describe('land', () => {
+  it('POSTs to the land route with the token and no body, and prints the accepted message', async () => {
+    const fetchImpl = okFetch({ accepted: true, track: 'Split view' });
+    const res = await run({ argv: ['land'], stdin: { isTTY: true }, fetchImpl });
+    expect(res.code).toBe(0);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:4399/api/agent/land');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer t0ken');
+    expect(init.body).toBeUndefined();
+    expect(res.stdout).toMatch(/^Land accepted; this session will close\./);
+  });
+
+  it("prints the server's refusal and exits non-zero", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'The track worktree has uncommitted changes: a.ts' }), { status: 409 })
+    );
+    const res = await run({ argv: ['land'], fetchImpl });
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stderr).error).toBe('409: The track worktree has uncommitted changes: a.ts');
+    expect(res.stdout).toBe('');
+  });
+
+  it('takes no flags: the track comes from the session, never the command line', async () => {
+    const fetchImpl = okFetch();
+    const res = await run({ argv: ['land', '--track', 'Other'], fetchImpl });
+    expect(res.code).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe('as a process, the way the agent runs it', () => {
   let server: Server | null = null;
   afterEach(() => new Promise<void>((r) => (server ? server.close(() => r()) : r())));

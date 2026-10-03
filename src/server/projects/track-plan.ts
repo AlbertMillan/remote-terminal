@@ -104,6 +104,16 @@ export function nameFiles(paths: string[], max = 8): string {
 }
 
 /**
+ * The warning every refusal that mentions merging the base carries. Main holds
+ * the commit that took a branched track's plan off it, so a plain merge in the
+ * worktree deletes every spec the branch never changed, with no conflict
+ * (docs/track-branches.md, "Update from main").
+ */
+export function mergeTrapAdvice(base: string): string {
+  return `Don't run a plain \`git merge ${base}\` in the worktree: it deletes the track's specs that the branch never changed.`;
+}
+
+/**
  * Commit the track worktree's uncommitted planning files, when they are the
  * only uncommitted files. That worktree belongs to one track and never
  * pushes, so committing board ticks and session-written specs there is safe —
