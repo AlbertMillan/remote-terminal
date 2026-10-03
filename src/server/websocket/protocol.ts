@@ -33,6 +33,7 @@ export type ServerMessageType =
   | 'auth.success'
   | 'auth.failure'
   | 'session.created'
+  | 'session.added'
   | 'session.attached'
   | 'session.detached'
   | 'session.terminated'
@@ -167,6 +168,11 @@ export interface SessionInfo {
    *  revive tooltip: with an id we resume the conversation, without one we only respawn
    *  the shell. */
   claudeSessionId: string | null;
+  /** The session that started this one through the agent-sessions API; the sidebar
+   *  nests it under that session while it is in the list. */
+  spawnedBy: string | null;
+  /** The `--permission-mode` a started session's `claude` runs with. */
+  permissionMode: string | null;
 }
 
 export interface SessionForkPayload {

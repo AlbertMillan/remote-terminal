@@ -443,6 +443,89 @@ body {
   border-color: transparent;
 }
 
+/* Sessions a main session started, nested under it (docs/session-orchestration.md).
+   A child has no drag handle (26px: 20px box + 6px margin), so its 42px indent puts its
+   icon 16px right of its parent's. The guide line sits under the parent's arrow. */
+.session-item.session-child {
+  margin-left: 42px;
+}
+
+.session-item.session-child::before {
+  content: '';
+  position: absolute;
+  left: -20px;
+  top: -5px;
+  bottom: -1px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* Takes the drag handle's 26px slot on a parent row (32px wide, -6px margin), so the
+   parent lines up with other rows. 32px tap area; its own target, so tapping it never
+   opens the parent. */
+.session-group-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  margin: -8px 0 -8px -6px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.session-group-toggle:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.session-item.active .session-group-toggle {
+  color: inherit;
+}
+
+.session-group-toggle svg {
+  transition: transform var(--transition-fast);
+}
+
+.session-item .session-summary {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.7;
+  letter-spacing: 0.3px;
+}
+
+.session-summary-part {
+  white-space: nowrap;
+}
+
+.session-group-toggle.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.session-summary-input {
+  color: var(--warning);
+}
+
+.session-item.active .session-summary-input {
+  color: inherit;
+  font-weight: 700;
+}
+
+.session-mode-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  font-size: 9px;
+  line-height: 14px;
+}
+
 .session-delete-btn {
   background: transparent;
   border: none;

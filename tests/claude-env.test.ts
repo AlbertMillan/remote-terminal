@@ -23,7 +23,12 @@ function inheritedEnv(): Record<string, string | undefined> {
     CLAUDE_PID: '22976',
     CLAUDE_EFFORT: 'high',
     AI_AGENT: 'claude-code_2-1-270_agent',
+    // The claude-remote terminal the server was started from (restart-server.ps1).
+    CLAUDE_REMOTE_SESSION_ID: '5d0b3c1e-0f2a-4c43-9d55-0b6f1d2e7a10',
+    CLAUDE_REMOTE_TOKEN: 'a'.repeat(64),
     // Not markers: the user's own settings and PATH entries.
+    // The statusline script's server address, which the user may set themselves.
+    CLAUDE_REMOTE_URL: 'http://localhost:4220',
     CLAUDE: 'C:\\Users\\Albert\\.local\\bin',
     CLAUDE_CODE_EXECPATH: 'C:\\Users\\Albert\\.local\\bin\\claude.exe',
     ANTHROPIC_API_KEY: 'sk-test',
@@ -53,6 +58,7 @@ describe('withoutInheritedClaudeSession', () => {
     expect(clean.ANTHROPIC_API_KEY).toBe('sk-test');
     expect(clean.CLAUDE_CONFIG_DIR).toBe('C:\\Users\\Albert\\.claude');
     expect(clean.PATH).toBe('/usr/bin');
+    expect(clean.CLAUDE_REMOTE_URL).toBe('http://localhost:4220');
   });
 
   it('does not mutate the environment it was given', () => {

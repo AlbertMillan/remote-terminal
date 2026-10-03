@@ -27,6 +27,14 @@ export const INHERITED_CLAUDE_SESSION_VARS = [
   'CLAUDE_PID',
   'CLAUDE_EFFORT',
   'AI_AGENT',
+  /**
+   * The claude-remote terminal the server was started from. Its id would point
+   * a headless run's hooks at that terminal, and its token is dead with the
+   * old server anyway. PTYs get their own through sessionEnv(); headless runs
+   * get none, since a pipeline stage never starts sessions.
+   */
+  'CLAUDE_REMOTE_SESSION_ID',
+  'CLAUDE_REMOTE_TOKEN',
 ] as const;
 
 /** A copy of `env` without the inherited session markers. Never mutates its input. */

@@ -170,7 +170,7 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null }),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null, spawnedBy: sessionMetadata?.spawnedBy ?? null, permissionMode: sessionMetadata?.permissionMode ?? null }),
         scrollback: scrollback.join('\r\n'),
       },
       message.id
@@ -426,6 +426,8 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
             sortOrder: sessionMetadata?.sortOrder ?? 0,
             isFork: false,
             claudeSessionId: sessionMetadata?.claudeSessionId ?? null,
+            spawnedBy: sessionMetadata?.spawnedBy ?? null,
+            permissionMode: sessionMetadata?.permissionMode ?? null,
           }),
         },
         message.id

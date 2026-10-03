@@ -25,6 +25,8 @@ import { sweepLeftoverWorktrees } from './jobs/worktree.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
 import { registerServerRestartRoutes } from './server-restart.js';
+import { registerAgentSessionRoutes } from './agent/sessions-api.js';
+import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
 import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
@@ -116,6 +118,14 @@ export async function createApp(): Promise<FastifyInstance> {
   // Use dist/client if it exists (has built JS files), otherwise fall back to src/client
   const staticPath = existsSync(join(clientDistPath, 'terminal.js')) ? clientDistPath : clientSrcPath;
 
+  // Every session PTY learns where this server and its CLI are
+  // (docs/session-orchestration.md). The protocol is what was actually set up:
+  // TLS enabled with no usable certificate falls back to HTTP above.
+  configureSessionEnv({
+    url: loopbackUrl(httpsOptions ? 'https' : 'http', config.server.host, config.server.port),
+    cliPath: join(projectRoot, 'scripts', 'cr-session.mjs'),
+  });
+
   logger.debug({ staticPath }, 'Serving static files from');
 
   // Register static file serving
@@ -151,6 +161,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerJobRoutes(app);
   registerPlanUsageRoutes(app);
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
+  // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
+  registerAgentSessionRoutes(app);
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {

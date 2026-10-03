@@ -11,7 +11,7 @@ scrollback, new PTY in the stored cwd. A new session row is deliberately *not* c
 was the alternative (reusing `session.open`) and it leaves a dead row behind every time.
 
 - With a `claude_session_id` on the row, `claude --resume` is injected through the same
-  `_injectResumeCommand` the Fork and history-Resume paths use. Without one, reviving just
+  `injectCommand()` (as `claude --resume <id>`) the Fork and history-Resume paths use. Without one, reviving just
   respawns the shell — useful on its own, and the button's tooltip says which you get.
 - `_initSessionPty()` installs a **fresh, empty** `ScrollbackBuffer` and `getScrollback()`
   prefers the in-memory one, so revive explicitly seeds it from `restoreScrollbackRaw(id)`.

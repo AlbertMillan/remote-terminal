@@ -49,7 +49,8 @@ worktree's own build.
 - `src/server/jobs/` — pipeline: `runner.ts` (re-exports only) → `pipeline.ts` (pump, `runNextStage`,
   stage executors) and `lifecycle.ts` (approve/answer/retry/cancel/discard), `in-flight.ts`,
   `store.ts`, `stages/`, `docs.ts`, `worktree.ts`
-- `src/server/agent/claude-run.ts` — the one hardened path for headless `claude -p` runs
+- `src/server/agent/claude-run.ts` — the one hardened path for headless `claude -p` runs ·
+  `sessions-api.ts` — sessions that start sessions (CLI: `scripts/cr-session.mjs`)
 
 **Client**: `terminal.ts` (xterm.js) · `session-manager.ts` (WebSocket + session state; views in
 `session-list-view.ts`, `project-log-view.ts`, `new-session-modal.ts`, `mobile-nav.ts`,
@@ -71,8 +72,8 @@ worktree's own build.
 
 Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
 `session.list`, `session.open`, `session.revive`, `terminal.data`, `terminal.resize`,
-`ping`. Server: `session.created`, `session.attached`, `terminal.data`, `terminal.exit`,
-`notification`, `pong`.
+`ping`. Server: `session.created`, `session.added` (server-started; never attaches),
+`session.attached`, `terminal.data`, `terminal.exit`, `notification`, `pong`.
 
 - Terminal `cols`/`rows` from **any** message go through `websocket/validation.ts` before
   reaching a PTY — every message carrying them, not just the ones that happened to.
@@ -88,7 +89,7 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
 - Act on records by default. Show inferences as guesses that must be confirmed
   (unticked). A guess acted on by default reverts or moves unrelated work.
 
-## Sessions → `docs/session-revive.md`, `docs/session-fork.md`, `docs/session-history-delete.md`
+## Sessions → `docs/session-revive.md`, `docs/session-fork.md`, `docs/session-history-delete.md`, `docs/session-orchestration.md`
 
 - `attachable` means "a live PTY exists in memory", so **every** row is stale after a
   restart. `shutdown()` parks sessions as `idle`, never `terminated`, so they can revive.
@@ -101,8 +102,18 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
   references it**; the index is re-parsed server-side and mismatches return **409**.
   Transcript ids are untrusted: a plain UUID resolving inside `~/.claude/projects`, or no
   unlink.
-- Fork and history-Resume both inject through `_injectResumeCommand`. Forks cannot be
-  revived: their transcripts are unlinked at boot.
+- Fork, history-Resume, revive and agent-started sessions all type through `injectCommand()`.
+  Forks cannot be revived: their transcripts are unlinked at boot.
+- **Every PTY gets its env through `sessionEnv(id)`** (`sessions/session-env.ts`) — a site
+  that builds its own is a session whose agent can't use the CLI. See
+  `docs/session-orchestration.md`.
+- `/api/agent/sessions` requires loopback **and** a session token; the rest of `/api/*` has
+  no auth and the server binds `0.0.0.0`, so dropping either check lets the tailnet run
+  commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
+  scrollback — and die with their PTY.
+- Started sessions (`spawned_by` set) can't start sessions: one level of nesting, no
+  runaway chains. Prompt files live under `<dataDir>/prompts/`, never in the worktree, or
+  `commitAll` sweeps them into the branch.
 - `src/server/utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers at boot
   and at the PTY chokepoint. It is a **denylist of session-scoped vars, never a `CLAUDE_*`
   wildcard** — otherwise the user's own settings die with it. Without it every PTY silently

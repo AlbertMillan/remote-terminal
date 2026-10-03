@@ -174,7 +174,7 @@ describe('reviveSession — the row keeps its identity', () => {
       expect.objectContaining({
         cwd: '/home/albert/NodeProjects/claude-remote',
         shell: '/bin/bash',
-        env: { CLAUDE_REMOTE_SESSION_ID: STALE_ID },
+        env: expect.objectContaining({ CLAUDE_REMOTE_SESSION_ID: STALE_ID }),
       })
     );
   });

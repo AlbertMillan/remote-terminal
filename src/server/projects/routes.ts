@@ -42,6 +42,7 @@ import {
   type FeatureStatus,
 } from './project-doc-format.js';
 import { withProjectUsage } from '../usage/store.js';
+import { replyWithError, type StatusError } from '../utils/http-errors.js';
 
 const logger = createLogger('project-routes');
 
@@ -600,16 +601,11 @@ async function withErrors<T>(
     if (error instanceof TrackDeleteError) {
       return reply.status(error.status).send({ error: error.message, conflicts: error.conflicts });
     }
-    if (
-      error instanceof TrackBranchError ||
-      error instanceof ProjectBusyError ||
-      error instanceof WorktreeError
-    ) {
-      return reply.status(error.status).send({ error: error.message });
-    }
-    logger.error({ error }, 'project route failed');
-    return reply
-      .status(500)
-      .send({ error: error instanceof Error ? error.message : 'Request failed' });
+    return replyWithError(reply, error, { known: isTrackError, logger, message: 'project route failed' });
   }
+}
+
+/** The track-branch errors that carry their own status, for any route that starts track work. */
+export function isTrackError(error: unknown): error is StatusError {
+  return error instanceof TrackBranchError || error instanceof ProjectBusyError || error instanceof WorktreeError;
 }

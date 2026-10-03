@@ -19,6 +19,11 @@ export interface SessionInfo {
   /** Set once the session reports a Claude conversation (SessionStart/Stop hooks).
    *  Decides whether reviving resumes that conversation or only respawns the shell. */
   claudeSessionId: string | null;
+  /** The session that started this one (agent-sessions API). The sidebar nests it under
+   *  that session while it is in the list, and shows it top-level otherwise. */
+  spawnedBy?: string | null;
+  /** The `--permission-mode` a started session runs with; a chip when not `default`. */
+  permissionMode?: string | null;
 }
 
 export interface CategoryInfo {
@@ -168,6 +173,7 @@ export type ServerMessage =
   | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
   | { type: 'session.list'; id?: string; payload: SessionListPayload }
   | { type: 'session.created'; id?: string; payload: SessionCreatedPayload }
+  | { type: 'session.added'; id?: string; payload: SessionCreatedPayload }
   | { type: 'session.attached'; id?: string; payload: SessionAttachedPayload }
   | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }

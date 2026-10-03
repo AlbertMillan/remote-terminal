@@ -351,6 +351,18 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE track_branches ADD COLUMN plan_in_branch INTEGER NOT NULL DEFAULT 0;
       `,
     },
+    {
+      // Sessions a main session started through the agent-sessions API
+      // (docs/session-orchestration.md). spawned_by is the starting session's
+      // id; it is kept after that session is deleted, and the sidebar then
+      // shows the child as top-level. permission_mode is what `claude` was
+      // started with, for the sidebar's chip.
+      name: '017_session_spawned_by',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN spawned_by TEXT;
+        ALTER TABLE sessions ADD COLUMN permission_mode TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

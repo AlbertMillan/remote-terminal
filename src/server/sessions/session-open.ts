@@ -17,6 +17,7 @@ import {
   getMaxSessionSortOrder,
 } from '../db/queries.js';
 import { restoreScrollbackRaw } from './persistence.js';
+import { revokeSessionToken, sessionEnv } from './session-env.js';
 
 const logger = createLogger('session-manager');
 
@@ -33,10 +34,10 @@ export interface SessionRegistry {
   initSessionPty(session: ActiveSession): void;
 }
 
-// C4: Inject `claude --resume <id>` once the shell produces its first output (= ready for
-// input). Debounced 100ms so rc-file output settles; 5s hard fallback if the shell stays
-// silent. Shared by forkSession and openClaudeSession.
-export function injectResumeCommand(session: ActiveSession, resumeId: string): void {
+// C4: Type `line` once the shell produces its first output (= ready for input). Debounced
+// 100ms so rc-file output settles; 5s hard fallback if the shell stays silent. Shared by
+// fork, history-open, revive (`claude --resume <id>`) and agent-started sessions.
+export function injectCommand(session: ActiveSession, line: string): void {
   let commandSent = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const startupDisposable = session.pty.onData(() => {
@@ -46,16 +47,20 @@ export function injectResumeCommand(session: ActiveSession, resumeId: string): v
       if (!commandSent) {
         commandSent = true;
         startupDisposable.dispose();
-        writeToPty(session.pty, `claude --resume ${resumeId}\r`);
+        writeToPty(session.pty, `${line}\r`);
       }
     }, 100);
   });
   setTimeout(() => {
     if (!commandSent) {
       commandSent = true;
-      writeToPty(session.pty, `claude --resume ${resumeId}\r`);
+      writeToPty(session.pty, `${line}\r`);
     }
   }, 5000);
+}
+
+function injectResumeCommand(session: ActiveSession, resumeId: string): void {
+  injectCommand(session, `claude --resume ${resumeId}`);
 }
 
 export async function forkSession(
@@ -132,8 +137,9 @@ export async function forkSession(
   // Create PTY
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: { CLAUDE_REMOTE_SESSION_ID: id } });
+    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
   } catch (error) {
+    revokeSessionToken(id);
     try { unlinkSync(destJsonlPath); } catch { /* best-effort cleanup */ }
     updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
     throw error;
@@ -242,8 +248,9 @@ export async function openClaudeSession(
 
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: { CLAUDE_REMOTE_SESSION_ID: id } });
+    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
   } catch (error) {
+    revokeSessionToken(id);
     if (forkJsonlPath) { try { unlinkSync(forkJsonlPath); } catch { /* best-effort cleanup */ } }
     updateSession(id, { status: 'terminated', lastAccessedAt: now.toISOString() });
     throw error;
@@ -309,9 +316,10 @@ export function reviveSession(
       cwd: metadata.cwd,
       cols,
       rows,
-      env: { CLAUDE_REMOTE_SESSION_ID: id },
+      env: sessionEnv(id),
     });
   } catch (error) {
+    revokeSessionToken(id);
     // Nearly always a cwd that no longer exists. Say which directory failed rather than
     // silently falling back to home, which would resume the conversation somewhere else.
     const reason = error instanceof Error ? error.message : String(error);
