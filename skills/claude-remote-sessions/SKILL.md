@@ -32,8 +32,10 @@ When it is done, tick f-xxxxxx in this worktree's PROJECT.md. Do not Land the tr
 EOF
 ```
 
-- `--mode default|acceptEdits|plan`: use `default` unless the user named a mode.
-  `bypassPermissions` is refused.
+- `--mode auto|manual|acceptEdits|plan`: leave it out to get `auto`, where the session
+  works through its prompt on its own and still asks before risky actions. Pass
+  `--mode manual` only when the user asks to approve each step themselves, or another
+  mode the user named. `bypassPermissions` and `dontAsk` are refused.
 - `--name "<n>"`: the session's name; defaults to the track name.
 - One call per track. It waits while the track's branch is created and its
   dependencies installed, which can take several minutes — **pass `timeout: 600000`

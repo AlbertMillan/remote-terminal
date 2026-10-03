@@ -30,6 +30,7 @@ import {
 } from './track-store.js';
 import { readProjectPlan, type ProjectPlan } from './project-plan.js';
 import { isInstalling } from './project-deps.js';
+import { ensureLocalClaudeSettings } from './local-claude-settings.js';
 import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 import {
   commitWorktreePlanning,
@@ -159,6 +160,9 @@ export async function ensureTrackBranch(
   const existing = getActiveTrackBranch(project.cwd, name);
   if (existing) {
     await reattachIfMissing(project, existing);
+    // Every session opened here comes through this call first, so a worktree
+    // made before the copy existed gets it now.
+    await ensureLocalClaudeSettings(project.cwd, existing.worktreePath);
     return existing;
   }
 
@@ -196,6 +200,7 @@ export async function ensureTrackBranch(
   // then in both places, which the board ("also has lines on main") and
   // Land (merge by id) both handle.
   await movePlan(project, name, created.path, 'replace');
+  await ensureLocalClaudeSettings(project.cwd, created.path);
 
   logger.info({ cwd: project.cwd, track: name, branch: created.branch }, 'track branch created');
   return getActiveTrackBranch(project.cwd, name) as TrackBranch;

@@ -390,9 +390,11 @@ export class SessionListView {
         </button>`
       : '';
 
-    const mode = session.permissionMode;
-    const modeChipHtml = isChild && mode && mode !== 'default'
-      ? `<span class="session-mode-chip" title="Started with --permission-mode ${escapeAttr(mode)}">${escapeHtml(mode)}</span>`
+    // Shown unless `auto`, the default: a `manual` child waits for the user.
+    // Rows started before `manual` existed are stored as `default`.
+    const mode = session.permissionMode === 'default' ? 'manual' : session.permissionMode;
+    const modeChipHtml = isChild && mode && mode !== 'auto'
+      ? `<span class="session-mode-chip" title="Started in ${escapeAttr(mode)} permission mode">${escapeHtml(mode)}</span>`
       : '';
     const summaryHtml = children.length > 0 ? `<div class="session-summary">${this.childSummary(children)}</div>` : '';
 

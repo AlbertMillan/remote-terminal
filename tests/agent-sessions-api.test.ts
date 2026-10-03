@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { existsSync, readFileSync, rmSync } from 'fs';
+import { join } from 'path';
 
 /**
  * The agent-sessions API (docs/session-orchestration.md): a main session's
@@ -32,7 +33,7 @@ import {
   type AgentSessionDeps,
 } from '../src/server/agent/sessions-api.js';
 import { revokeSessionToken, sessionEnv, sessionForToken } from '../src/server/sessions/session-env.js';
-import { deletePromptFile, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
+import { deletePromptFile, promptDirFor, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession, SessionMetadata } from '../src/server/sessions/types.js';
 
 const PROJECT = 'C:\\p\\demo';
@@ -81,6 +82,7 @@ function makeDeps(): AgentSessionDeps {
     ensureTrackBranch: vi.fn(async () => ({ worktreePath: WORKTREE })),
     needsInstall: vi.fn(() => false),
     installDependencies: vi.fn(async () => ({ ran: true, ok: false, detail: 'npm ci failed' })),
+    ensureLocalClaudeSettings: vi.fn(async () => false),
     createSession: vi.fn(async (opts) => {
       const id = `22222222-2222-4222-8222-${String(++created).padStart(12, '0')}`;
       rows.set(
@@ -270,10 +272,30 @@ describe('start', () => {
     expect((await start(GOOD)).statusCode).toBe(429);
   });
 
-  it('refuses bypassPermissions with 400', async () => {
-    const res = await start({ ...GOOD, permissionMode: 'bypassPermissions' });
+  it.each(['bypassPermissions', 'dontAsk'])('refuses %s with 400', async (permissionMode) => {
+    const res = await start({ ...GOOD, permissionMode });
     expect(res.statusCode).toBe(400);
     expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual', 'default'])('stores %s as manual and types no --permission-mode', async (permissionMode) => {
+    const res = await start({ ...GOOD, permissionMode });
+    expect(res.statusCode).toBe(200);
+    expect(rows.get(res.json().sessionId)!.permissionMode).toBe('manual');
+    const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toMatch(/^claude --add-dir "/);
+    expect(line).not.toContain('--permission-mode');
+  });
+
+  it('copies the local Claude settings into the worktree before the session is created', async () => {
+    const order: string[] = [];
+    (deps.ensureLocalClaudeSettings as ReturnType<typeof vi.fn>).mockImplementation(async () => order.push('settings'));
+    const create = deps.createSession as ReturnType<typeof vi.fn>;
+    const inner = create.getMockImplementation()!;
+    create.mockImplementation(async (opts) => (order.push('create'), inner(opts)));
+    expect((await start(GOOD)).statusCode).toBe(200);
+    expect(deps.ensureLocalClaudeSettings).toHaveBeenCalledWith(PROJECT, WORKTREE);
+    expect(order).toEqual(['settings', 'create']);
   });
 
   it('refuses a prompt over 100 KB with 413', async () => {
@@ -311,8 +333,11 @@ describe('start', () => {
     expect(path.startsWith(WORKTREE)).toBe(false);
     expect(readFileSync(path, 'utf-8')).toBe(prompt);
 
+    // Its own folder, which --add-dir names: readable without asking, and no other session's.
+    expect(path).toBe(join(promptDirFor(body.sessionId), 'prompt.md'));
+    const dir = promptDirFor(body.sessionId).replace(/\\/g, '/');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(line).toBe(`claude --permission-mode acceptEdits "Read ${path.replace(/\\/g, '/')} and follow it."`);
+    expect(line).toBe(`claude --permission-mode acceptEdits --add-dir "${dir}" "Read ${path.replace(/\\/g, '/')} and follow it."`);
     expect(line).not.toContain('\\');
 
     expect(deps.broadcastAdded).toHaveBeenCalledWith(
@@ -320,11 +345,12 @@ describe('start', () => {
     );
   });
 
-  it('defaults to --permission-mode default and the track name', async () => {
+  it('defaults to auto mode and the track name', async () => {
     const res = await start(GOOD);
     expect(res.json().name).toBe('Split view');
+    expect(rows.get(res.json().sessionId)!.permissionMode).toBe('auto');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(line).toMatch(/^claude --permission-mode default "Read /);
+    expect(line).toMatch(/^claude --permission-mode auto --add-dir "[^"]+" "Read /);
   });
 
   it('installs a worktree that needs it, and still starts the session when the install fails', async () => {
@@ -336,12 +362,12 @@ describe('start', () => {
     expect(deps.createSession).toHaveBeenCalled();
   });
 
-  it('removes the prompt file when the session is deleted', async () => {
+  it("removes the session's prompt folder when the session is deleted", async () => {
     const res = await start(GOOD);
-    const path = promptPathFor(res.json().sessionId);
-    expect(existsSync(path)).toBe(true);
+    const dir = promptDirFor(res.json().sessionId);
+    expect(existsSync(promptPathFor(res.json().sessionId))).toBe(true);
     await deps.deleteSession(res.json().sessionId);
-    expect(existsSync(path)).toBe(false);
+    expect(existsSync(dir)).toBe(false);
   });
 });
 

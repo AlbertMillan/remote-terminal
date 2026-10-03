@@ -4,7 +4,7 @@
  * session (docs/session-orchestration.md). Run by an agent through the Bash
  * tool, via the path the server puts in CLAUDE_REMOTE_CLI:
  *
- *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode default|acceptEdits|plan] <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] <<'EOF'
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
@@ -17,10 +17,13 @@
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `usage:
-  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode default|acceptEdits|plan]  (prompt on stdin)
+  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list`;
 
-const MODES = ['default', 'acceptEdits', 'plan'];
+// `auto` is the server's default. `default` is the old name for `manual`, still
+// sent by a skill copy installed before the rename; the server maps it.
+const MODES = ['auto', 'manual', 'acceptEdits', 'plan'];
+const ACCEPTED_MODES = [...MODES, 'default'];
 
 class UsageError extends Error {}
 
@@ -81,7 +84,7 @@ export async function main({
   let request;
   if (command === 'start') {
     if (!flags.track || !flags.track.trim()) return fail(`--track is required\n${USAGE}`, 2);
-    if (flags.mode !== undefined && !MODES.includes(flags.mode)) {
+    if (flags.mode !== undefined && !ACCEPTED_MODES.includes(flags.mode)) {
       return fail(`--mode must be one of: ${MODES.join(', ')}`, 2);
     }
     // Both checked before any request: a prompt the agent forgot to pipe in
