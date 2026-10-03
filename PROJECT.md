@@ -68,12 +68,6 @@ status: active
 - [x] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
 ## Track: UI Improvements
 
-## Track: Track workflow polish
-- [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
-- [x] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's → project/worktree-dependencies.md
-- [ ] `f-yjegeg` P2 Behind main, and Update from main — the track heading shows how far behind it is and what would conflict; one click merges main in without losing the track's plan → project/track-update-from-main.md
-- [ ] `f-jd0ocw` P3 A track's session can ask to Land it — preflight while the agent is alive, then close and land, outcome as a notification → project/session-requests-land.md
-
 ## Track: Project Session Log
 - [x] `f-j6jxm9` Step 1 — Plan / design doc
 - [x] `f-49wrv4` Step 2 — Backend: config block, logged_at migration, maybeLogSession triggers, skip-gate, generator, startup sweep
