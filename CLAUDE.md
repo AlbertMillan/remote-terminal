@@ -112,8 +112,12 @@ Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
   commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
   scrollback — and die with their PTY.
 - Started sessions (`spawned_by` set) can't start sessions: one level of nesting, no
-  runaway chains. Prompt files live under `<dataDir>/prompts/`, never in the worktree, or
-  `commitAll` sweeps them into the branch.
+  runaway chains. Prompt files live under `<dataDir>/prompts/<id>/`, never in the worktree,
+  or `commitAll` sweeps them into the branch; `--add-dir` names that folder only.
+- Track worktrees get a **copy** of the main checkout's `.claude/settings.local.json`
+  (`ensureLocalClaudeSettings`), never a link — `git worktree remove` deletes through one —
+  never over an existing copy, and only once git ignores the path (else `info/exclude`
+  first), or `commitAll` puts it on the branch.
 - `src/server/utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers at boot
   and at the PTY chokepoint. It is a **denylist of session-scoped vars, never a `CLAUDE_*`
   wildcard** — otherwise the user's own settings die with it. Without it every PTY silently

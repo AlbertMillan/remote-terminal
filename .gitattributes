@@ -1,0 +1,4 @@
+# Scripts with a shebang check out LF everywhere, core.autocrlf or not: a CRLF
+# shebang fails on Linux (env: 'node\r') and vitest cannot import it.
+scripts/*.mjs text eol=lf
+scripts/*.sh text eol=lf
