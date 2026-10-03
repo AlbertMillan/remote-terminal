@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * cr-session — start and list prompted sessions from inside a claude-remote
  * session (docs/session-orchestration.md). Run by an agent through the Bash
@@ -13,6 +12,9 @@
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
  * whole prompt inside the Bash call the user approves. Prints JSON. No
  * dependencies beyond Node's fetch.
+ *
+ * No `#!` line: it is always run through `node`, and vitest's module runner
+ * rejects a hashbang in an imported .mjs, which fails the CLI's whole suite.
  */
 import { pathToFileURL } from 'node:url';
 
