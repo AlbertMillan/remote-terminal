@@ -30,7 +30,9 @@ const { loadConfig } = await import('../src/server/config.js');
 const plan = await import('../src/server/usage/plan-limits.js');
 const { registerPlanUsageRoutes, statuslineCommand } = await import('../src/server/usage/plan-routes.js');
 
-const NOW = Date.parse('2026-09-25T12:00:00Z');
+// The real clock, not a fixed date: loadSnapshot() re-validates reset times
+// against Date.now(), so a hard-coded NOW expires the readings a day after it.
+const NOW = Date.now();
 const inHours = (h: number) => Math.round(NOW / 1000 + h * 3600);
 const snapshotFile = join(dataDir, 'plan-usage.json');
 
