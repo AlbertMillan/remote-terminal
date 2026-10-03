@@ -71,3 +71,5 @@ status: active
 ## Track: Track workflow polish
 - [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
 - [x] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's → project/worktree-dependencies.md
+## Track: Session orchestration
+- [ ] `f-s3w8qd` P1 Sessions that start sessions — a main session starts prompted sessions on its planned tracks and lists their state; the sidebar nests them under it → project/session-orchestration.md
