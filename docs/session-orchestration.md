@@ -181,9 +181,18 @@ calls it again before creating the session.
 
 ## Installing the skill
 
-The skill is what makes an agent in **any** project's session know the CLI exists. Install
-it into your user skills folder (`~/.claude/skills/`) once, and again whenever it changes —
-including now that `auto` is the default and `manual` replaced `default`:
+The skill is what makes an agent in **any** project's session know the CLI exists. It goes
+in your user skills folder (`~/.claude/skills/`).
+
+**The server installs it at every boot** (`installSkillsAtBoot()`,
+`src/server/utils/skill-install.ts`), from the checkout it runs from, so a landed change to
+the skill reaches you on the next restart. Installing used to be a manual step after every
+change, and on 2026-10-03 the skill turned out never to have been installed: agents had no
+way to learn about `start` or `land`. An isolated boot (`CLAUDE_REMOTE_CONFIG` set) skips
+it, because it usually runs a worktree's build and would install a skill that hasn't
+landed. A failed install is logged and never fails the boot.
+
+To install without a restart:
 
 ```
 npm run install-skill

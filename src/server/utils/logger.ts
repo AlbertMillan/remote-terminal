@@ -1,32 +1,44 @@
 import pino from 'pino';
 import { createStream } from 'rotating-file-stream';
 import { mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 
 const isDev = process.env.NODE_ENV !== 'production';
 
-// Ensure log directory exists
-const logDir = join(homedir(), '.claude-remote', 'logs');
-if (!existsSync(logDir)) {
-  mkdirSync(logDir, { recursive: true });
+// Only the live server may write ~/.claude-remote/logs. Tests (vitest sets VITEST) write
+// no file, and log nothing unless LOG_LEVEL asks; a boot with CLAUDE_REMOTE_CONFIG (the
+// isolated boot in project/QA.md) logs next to that config. Before this, one `npm test`
+// added ~900 lines of fake sessions, lands and restart requests to the live log, and
+// finding the real events in it meant filtering by hand.
+const underTest = !!process.env.VITEST;
+const configOverride = process.env.CLAUDE_REMOTE_CONFIG;
+const logDir = configOverride
+  ? join(dirname(resolve(configOverride)), 'logs')
+  : join(homedir(), '.claude-remote', 'logs');
+
+const streams: pino.StreamEntry[] = [];
+
+if (underTest) {
+  if (process.env.LOG_LEVEL) streams.push({ stream: process.stdout });
+} else {
+  if (!existsSync(logDir)) {
+    mkdirSync(logDir, { recursive: true });
+  }
+  // Rotating file stream (rotates every 3 days, keeps 7 files), JSON for structured logging
+  streams.push({
+    stream: createStream('server.log', {
+      path: logDir,
+      interval: '3d',
+      maxFiles: 7,
+    }),
+  });
 }
 
-// Create rotating file stream (rotates every 3 days, keeps 7 files)
-const fileStream = createStream('server.log', {
-  path: logDir,
-  interval: '3d',
-  maxFiles: 7,
-});
-
-// Create multistream for both console and file
-const streams: pino.StreamEntry[] = [
-  // Always write to file (JSON format for structured logging)
-  { stream: fileStream },
-];
-
 // In dev mode, also write to console with pretty printing
-if (isDev) {
+if (underTest) {
+  // Already decided above: stdout only when LOG_LEVEL asks for it.
+} else if (isDev) {
   // Use pino-pretty for console output
   const prettyStream = pino.transport({
     target: 'pino-pretty',
@@ -44,7 +56,7 @@ if (isDev) {
 
 export const logger = pino(
   {
-    level: process.env.LOG_LEVEL || (isDev ? 'debug' : 'info'),
+    level: process.env.LOG_LEVEL || (underTest ? 'silent' : isDev ? 'debug' : 'info'),
   },
   pino.multistream(streams)
 );

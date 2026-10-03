@@ -47,7 +47,8 @@ commands:
    - Write a temp config, e.g. `{"server":{"port":4399,"host":"127.0.0.1"},
      "persistence":{"dataDir":"<a temp dir>"}}`.
    - Start it with `CLAUDE_REMOTE_CONFIG=<that file> node dist/server/index.js`, in the
-     background, logging to a file.
+     background. Its log goes to `logs/server.log` next to that config file, never to the
+     live `~/.claude-remote/logs` (test runs write no log file at all).
    - `curl --retry-connrefused --retry 12 --retry-delay 1 http://127.0.0.1:4399/api/jobs`
    - **Always stop it again**, by the PID listening on 4399, and confirm 4220 still
      answers. Leaving it running is a failure of this flow even if everything else passed.

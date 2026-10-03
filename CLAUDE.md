@@ -1,298 +1,174 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repository.
+Loaded into every agent run here, every turn: it holds **rules**. The reasoning (the bug
+each came from, alternatives, measurements) is in the `docs/` file linked from each group.
+**Before changing a subsystem, read its doc.**
 
-This file is loaded into **every** agent run here and re-read on every turn, so it holds
-rules, not reasoning. The reasoning — the bug each rule came from, the alternatives
-weighed, the review findings — lives in `docs/`, linked from each group below. **Before
-changing a subsystem, read its doc.**
+Claude Remote: a self-hosted remote terminal (xterm.js over Tailscale) with session
+persistence (tmux on Linux/macOS, a SQLite-persisted scrollback on Windows/ConPTY), a
+project workspace over `PROJECT.md`, and a job pipeline running features in git worktrees.
 
-## Project Overview
+## Commands and environment
 
-Claude Remote is a secure, self-hosted remote terminal: web-based xterm.js terminals over
-Tailscale, with session persistence (tmux on Linux/macOS, a scrollback buffer on Windows),
-a project workspace over `PROJECT.md`, and a job pipeline that runs features through
-isolated git worktrees.
+`npm run dev` (tsx watch) · `npm run build` · `npm start` · `npm test` (vitest) · `npm run lint`
 
-## Commands
+- No formatter. **Never run prettier**: with no `.prettierrc` it rewrites the tree to double
+  quotes. Match the surrounding style by hand.
+- Port **4220** is the user's live server. In a track or job worktree, **never ask for a
+  restart to test your code**: 4220 runs main's `dist/`, so it loads none of it and closes
+  every terminal. Use the isolated boot (`project/QA.md`, Flow 3).
+- ESM, `@server/*`/`@client/*` aliases, Node 20+, esbuild for production. Data and the live
+  log: `~/.claude-remote/` (`logs/server.log`, JSON; read with `npx pino-pretty`). Tests
+  write no log; an isolated boot logs next to its `CLAUDE_REMOTE_CONFIG`.
 
-```bash
-npm run dev           # Development with hot reload (tsx watch)
-npm run build         # Build both server and client
-npm start             # Run production build
-npm test              # Run tests (vitest)
-npm run lint          # Lint with eslint
-```
+## Map
 
-There is no formatter. Do **not** run prettier (e.g. via `npx`): with no `.prettierrc` it
-reformats the whole tree to double quotes against the house style. Match the surrounding
-style by hand.
+- Server: `index.ts` · `app.ts` · `sessions/` (`manager.ts`, `session-open.ts`,
+  `boot-sweep.ts`, `pty-handler.ts`, `session-env.ts`) · `websocket/` (`handler.ts`,
+  `connections.ts`, `handlers/`, `protocol.ts`, `validation.ts`, `origin.ts`) · `db/` ·
+  `auth/tailscale.ts` · `projects/` (registry, `PROJECT.md`, board, tracks) · `jobs/`
+  (`pipeline.ts`, `lifecycle.ts`, `store.ts`, `stages/`, `worktree.ts`; `runner.ts` only
+  re-exports) · `agent/claude-run.ts` (every headless `claude -p`) · `agent/sessions-api.ts`
+  (agent routes; CLI `scripts/cr-session.mjs`, skill `skills/claude-remote-sessions/`).
+- Client: `terminal.ts` · `session-manager.ts` (+ its `*-view.ts`/`*-modal.ts`) ·
+  `project-workspace.ts` · `job-board*.ts` · `job-overlay.ts` · `decision-format.ts`.
 
-In a track or job worktree, **never ask the user to restart the server to test your code**:
-the server on 4220 runs the main checkout's `dist/`, so a restart loads none of it and
-closes every terminal. Use the isolated boot in `project/QA.md` (Flow 3) from the
-worktree's own build.
+## WebSocket (`/ws`; message types in `protocol.ts`)
 
-## Architecture
-
-**Server** (Fastify + WebSocket):
-
-- `src/server/index.ts` — entry point · `app.ts` — Fastify config and routes
-- `src/server/sessions/manager.ts` — session lifecycle · `session-open.ts` — fork/resume/revive ·
-  `boot-sweep.ts` · `pty-handler.ts` — node-pty + ScrollbackBuffer
-- `src/server/websocket/handler.ts` — connect + dispatch · `connections.ts` — shared connection
-  state and broadcasts · `handlers/` — one module per message family · `protocol.ts` — message
-  types · `validation.ts` — bounds · `origin.ts` — same-origin check on the upgrade
-- `src/server/db/` — SQLite (better-sqlite3), schema and migrations
-- `src/server/auth/tailscale.ts` — identity via `tailscale whois`
-- `src/server/projects/` — registry, `PROJECT.md` parsing, workspace board
-- `src/server/jobs/` — pipeline: `runner.ts` (re-exports only) → `pipeline.ts` (pump, `runNextStage`,
-  stage executors) and `lifecycle.ts` (approve/answer/retry/cancel/discard), `in-flight.ts`,
-  `store.ts`, `stages/`, `docs.ts`, `worktree.ts`
-- `src/server/agent/claude-run.ts` — the one hardened path for headless `claude -p` runs ·
-  `sessions-api.ts` — sessions that start sessions (CLI: `scripts/cr-session.mjs`)
-
-**Client**: `terminal.ts` (xterm.js) · `session-manager.ts` (WebSocket + session state; views in
-`session-list-view.ts`, `project-log-view.ts`, `new-session-modal.ts`, `mobile-nav.ts`,
-`shortcuts-modal.ts`) · `project-workspace.ts` (+ `project-feature-board.ts`) · `job-board.ts`
-(+ `job-board-docs.ts`, `job-board-decision.ts`, `job-board-types.ts`) · `job-overlay.ts` ·
-`decision-format.ts`
-
-**Data**: `~/.claude-remote/` (sessions.db, config.json, logs/, worktrees/)
-
-## Key Technical Details
-
-- Default port **4220**; ESM with `@server/*` / `@client/*` aliases; Node 20+
-- Windows uses ConPTY with scrollback persisted to SQLite; Linux/macOS use a native PTY
-- esbuild for production, tsx for development
-- Logs: `~/.claude-remote/logs/server.log` (JSON, rotates every 3 days) —
-  `cat ~/.claude-remote/logs/server.log | npx pino-pretty | tail -50`
-
-## WebSocket Protocol
-
-Endpoint `/ws`. Client: `session.create`, `session.attach`, `session.terminate`,
-`session.list`, `session.open`, `session.revive`, `terminal.data`, `terminal.resize`,
-`ping`. Server: `session.created`, `session.added` (server-started; never attaches),
-`session.attached`, `terminal.data`, `terminal.exit`, `notification`, `pong`.
-
-- Terminal `cols`/`rows` from **any** message go through `websocket/validation.ts` before
-  reaching a PTY — every message carrying them, not just the ones that happened to.
-- `handleSessionCreate` must `detachFromSession()` before `attachToSession()`, or the
-  previous session's data listener leaks and keystrokes arrive twice.
+- `cols`/`rows` from **any** message pass `websocket/validation.ts` before reaching a PTY.
+- `handleSessionCreate` calls `detachFromSession()` before `attachToSession()`, or the old
+  session's listener leaks and keystrokes arrive twice.
 
 ## Two authors of change → `docs/change-provenance.md`
 
-- Any feature that reads, moves, reverts or attributes project changes must handle
-  **both** job-built edits (recorded: job row, branch, `merge_sha`) and session-built edits
-  (inferred: transcripts, dirty files, commit windows). Built for one path only, it breaks
-  for the user who works the other way.
-- Act on records by default. Show inferences as guesses that must be confirmed
-  (unticked). A guess acted on by default reverts or moves unrelated work.
+- Anything that reads, moves, reverts or attributes changes handles **both** job-built
+  edits (recorded) and session-built edits (inferred), or it breaks for one way of working.
+- Act on records by default; show inferences as **unticked** guesses, or unrelated work
+  is reverted or moved.
 
-## Sessions → `docs/session-revive.md`, `docs/session-fork.md`, `docs/session-history-delete.md`, `docs/session-orchestration.md`
+## Sessions → `docs/session-revive.md`, `session-fork.md`, `session-history-delete.md`, `session-orchestration.md`
 
-- `attachable` means "a live PTY exists in memory", so **every** row is stale after a
-  restart. `shutdown()` parks sessions as `idle`, never `terminated`, so they can revive.
-- Revive brings a row back **in place** (same id, name, category, order, scrollback) and
-  seeds the buffer from `restoreScrollbackRaw(id)` — a fresh `ScrollbackBuffer` wins
-  otherwise and the persisted scrollback is silently dropped. No `maxSessions` check here.
-- A rejected `session.attach` must clear the client's `attachingSessionId`, or every later
-  attach for that id early-returns and the session runs with no terminal.
-- Deleting a history entry unlinks its transcript only when **no surviving entry
-  references it**; the index is re-parsed server-side and mismatches return **409**.
-  Transcript ids are untrusted: a plain UUID resolving inside `~/.claude/projects`, or no
-  unlink.
-- Fork, history-Resume, revive and agent-started sessions all type through `injectCommand()`.
-  Forks cannot be revived: their transcripts are unlinked at boot.
-- **Every PTY gets its env through `sessionEnv(id)`** (`sessions/session-env.ts`) — a site
-  that builds its own is a session whose agent can't use the CLI. See
-  `docs/session-orchestration.md`.
-- `/api/agent/*` requires loopback **and** a session token (`authenticate()`, the one guard
-  for every agent route); the rest of `/api/*` has no auth and the server binds `0.0.0.0`,
-  so dropping either check lets the tailnet run commands here. Tokens live only in `session-env.ts`'s Map — never the DB, logs or
-  scrollback — and die with their PTY.
-- Started sessions (`spawned_by` set) can't start sessions: one level of nesting, no
-  runaway chains. Prompt files live under `<dataDir>/prompts/<id>/`, never in the worktree,
-  or `commitAll` sweeps them into the branch; `--add-dir` names that folder only.
-- Track worktrees get a **copy** of the main checkout's `.claude/settings.local.json`
-  (`ensureLocalClaudeSettings`), never a link — `git worktree remove` deletes through one —
-  never over an existing copy, and only once git ignores the path (else `info/exclude`
-  first), or `commitAll` puts it on the branch.
-- A session's Land (`POST /api/agent/land`) takes the track from the caller's worktree,
-  never the request, or a session could land another's track. Its Land runs from the
-  route's `onResponse` hook, after the `202`: it closes the session that asked, whose
-  agent must have its answer first. The project lock is never held across that reply.
-- `src/server/utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers at boot
-  and at the PTY chokepoint. It is a **denylist of session-scoped vars, never a `CLAUDE_*`
-  wildcard** — otherwise the user's own settings die with it. Without it every PTY silently
-  skips saving its transcript, breaking Fork, resume, take-over and SESSION-LOG at once.
+- `attachable` = a live PTY in memory, so every row is stale after a restart. `shutdown()`
+  parks sessions `idle`, never `terminated`, so they can revive.
+- Revive is **in place** (same id, name, order) and seeds from `restoreScrollbackRaw(id)`,
+  or the persisted scrollback is dropped. No `maxSessions` check there.
+- A rejected `session.attach` clears the client's `attachingSessionId`, or that session
+  never gets a terminal again.
+- History delete unlinks a transcript only if **no surviving entry** references it (index
+  re-parsed server-side, 409 on mismatch); a transcript id must be a plain UUID inside
+  `~/.claude/projects`, or nothing is unlinked.
+- Fork, Resume, revive and started sessions all type through `injectCommand()`.
+- **Every PTY gets its env from `sessionEnv(id)`**, or its agent can't use the CLI.
+- `/api/agent/*` needs loopback **and** a session token (`authenticate()`, the one guard);
+  the rest of `/api/*` is unauthenticated on `0.0.0.0`, so dropping either lets the tailnet
+  run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
+- Started sessions (`spawned_by`) can't start sessions. Prompt files live under
+  `<dataDir>/prompts/<id>/`, never in a worktree, or `commitAll` commits them.
+- Worktrees get a **copy** of `.claude/settings.local.json` (`ensureLocalClaudeSettings`),
+  never a link, never over an existing copy, and only once git ignores the path.
+- `POST /api/agent/land` takes the track from the **caller's** worktree, never the request,
+  and lands from `onResponse`, after the `202`: it closes the caller, whose agent needs its
+  answer first. Never hold the project lock across that reply.
+- `utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers with a
+  **denylist**, never a `CLAUDE_*` wildcard (that kills the user's settings). Without it no
+  PTY saves its transcript, breaking Fork, resume and SESSION-LOG.
+- The server installs `skills/` into `~/.claude/skills` at boot (`installSkillsAtBoot`),
+  never on an isolated boot, which would install an unlanded skill.
 
 ## Job pipeline → `docs/job-pipeline.md`
 
-design → implement → integrate → review → fix → qa → merge → rebuild, each in the job's own
-worktree under `~/.claude-remote/worktrees/`. Gates: after **design**, after **review**,
-before **merge**.
+design → implement → integrate → review → fix → qa → merge → rebuild, each in the job's
+worktree. Gates after **design**, after **review**, before **merge**.
 
-- The merge gate is checked **before** its stage, so a parked job keeps `stage` on the last
-  *completed* stage and approval lives in `approved_gate`. Changing that breaks the gate.
-- **Cancel** takes `queued`/`running`/`parked`; **Discard** takes `failed`/`done`/
-  `cancelled`. Neither accepts the other's statuses — one verb for both is what once left
-  failed jobs unremovable.
-- Cancel's order is load-bearing: mark `cancelled` → abort → **await the stage unwinding** →
-  tear down. The `catch` in `runNextStage` keeps its `stillLive()` guard or the abort is
-  rewritten as `failed`; awaiting first stops `git worktree remove` racing open file handles.
-- Discard restores the project only for a job that **never merged**. A landed merge is
-  reported (`mergeLanded`) and left in place.
-- Stages use `jobs.stageTimeoutMs` (20 min), **not** `projectLog.timeoutMs` (180s).
-- QA precedence is failed > skipped > passed: one passing command must never mask a driver
-  that never ran.
-- Usage comes only from the transcript ledger (`src/server/usage/`), never the `claude -p`
-  envelope — a killed run prints none, and on `--resume` it reports the whole session's
-  total. Key rows by `message.id`: a response repeats once per content block, and summing
-  lines doubles every figure. See `docs/token-usage-feature.md`.
-- Every `runClaude` call passes a `tag`, recorded in `agent_runs` **before** the spawn — a
-  run killed a second in is attributable only if its row already exists. A message belongs
-  to the run whose window holds it (one resumed session spans stages); outside every window
-  it is the job's with no stage (Take over). Discard never deletes ledger rows. Reads are
-  cached: anything writing ledger tables outside `usage/` calls `invalidateUsageCache()`,
-  or the board keeps serving the old figures.
+- The merge gate is checked **before** its stage: a parked job keeps `stage` on the last
+  completed one and approval in `approved_gate`.
+- **Cancel** takes `queued`/`running`/`parked`; **Discard** takes `failed`/`done`/`cancelled`.
+  Never one verb for both.
+- Cancel: mark `cancelled` → abort → **await the stage unwinding** → tear down. Keep the
+  `stillLive()` guard in `runNextStage`'s `catch`, or an abort is recorded as `failed`.
+- Discard restores the project only for a job that **never merged** (`mergeLanded`).
+- Stages use `jobs.stageTimeoutMs`, not `projectLog.timeoutMs`.
+- QA precedence: failed > skipped > passed; a pass never masks a driver that never ran.
+- Usage comes only from the transcript ledger (`src/server/usage/`), keyed by `message.id`,
+  never the `claude -p` envelope. Every `runClaude` passes a `tag`, recorded in
+  `agent_runs` **before** the spawn. Discard never deletes ledger rows; writes outside
+  `usage/` call `invalidateUsageCache()`. → `docs/token-usage-feature.md`
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
-- Worktree teardown steps (`removeWorktree`) are **independent**: on Windows a process whose
-  cwd is the folder (a closing session's session-log run) makes rmdir fail `EBUSY`, and a
-  throw there once skipped `branch -D` — a leaked branch and folder per Land. A failed
-  `createWorktree` deletes only the branch **it** created. Git refuses worktree paths past
-  ~210 chars on Windows, so track folders use 8 id chars.
-- **Never link the main checkout's `node_modules` (or anything) into a worktree.**
-  `git worktree remove` on Windows deletes *through* a junction and empties the target. If
-  dependencies are missing, run the lockfile's install in the worktree (`project-deps.ts`).
-  `removeWorktree` unlinks every link before git runs and skips git while one is left —
-  keep that order. See `docs/track-branches.md`, "Dependencies".
-- A job's diff base is its recorded `baseBranch`, never the project's current branch — a job
-  parked across a branch switch would otherwise be measured against the wrong thing.
+- `removeWorktree`'s steps are **independent** (a busy folder must not skip `branch -D`);
+  a failed `createWorktree` deletes only the branch it created; track folders use 8 id
+  chars (git refuses paths past ~210 on Windows).
+- **Never link `node_modules` (or anything) into a worktree**: `git worktree remove`
+  deletes through a junction. Install with the lockfile (`project-deps.ts`).
+  `removeWorktree` unlinks every link before git runs and skips git while one remains.
+- A job's diff base is its recorded `baseBranch`, never the project's current branch.
 
-### Agent runs — `src/server/agent/claude-run.ts`
+### Agent runs — `agent/claude-run.ts`
 
-- Runs queue **per project lane**; runs with no lane (session-log, migration) share the
-  default one. A global queue made one project's stage wait on another's.
-- A stage stamps `spawned_at` when its process actually starts; `started_at` is when it was
-  admitted. The gap is queue wait, and showing it as work makes a job look hung.
-- Every run passes `--tools`, `--strict-mcp-config` and `--disable-slash-commands`.
-  `--allowedTools` is a permission list and costs **no** tokens; `--tools` decides which
-  definitions exist at all and is the largest term in the prompt — the full built-in set is
-  ~22.7k tokens per turn against ~4.5k for the six a stage uses. `builtinToolsFor()` derives
-  it from the allowlist each run already declares, so the two cannot drift.
-- **Enabling MCP for a stage needs care** (browser-driven QA is the likely first). Dropping
-  `--strict-mcp-config` while `--tools` omits `ToolSearch` makes every MCP tool load
-  *eagerly* instead of deferred: measured at 134k prompt tokens against 28k. Scope it with
-  `--mcp-config` to the one server needed, or keep `ToolSearch` in the set.
-- An answered question **resumes the session that asked** (`--resume`). A failed resume
-  falls back to the full pass; `RunAbortedError` is re-thrown so a cancel is never re-run.
-- Prompt-level scoping is advisory; enforcement is the post-run revert of anything touched
-  outside the allowed globs. Keep both.
-- The design prompt carries a length budget and requires self-contained questions: quote
-  what you cite, because the reader sees the question and nothing else.
+- Runs queue **per project lane**; lane-less runs share the default lane.
+- `spawned_at` = process start, `started_at` = admission; the gap is queue wait, not work.
+- Every run passes `--tools` (from `builtinToolsFor()`), `--strict-mcp-config` and
+  `--disable-slash-commands`. Enabling MCP for a stage: scope `--mcp-config` to one server
+  or keep `ToolSearch` in `--tools`, or every MCP tool loads eagerly.
+- An answer **resumes the session that asked**; a failed resume re-runs the pass, but
+  `RunAbortedError` is re-thrown so a cancel never re-runs.
+- Prompt scoping is advisory; the post-run revert outside the allowed globs enforces it.
+  Keep both.
+- Design questions must be self-contained (quote what you cite) and within its length budget.
 
 ### Project docs
 
-`PROJECT.md` (tracks of feature lines) · `project/<slug>.md` (one spec) · `project/QA.md`
-(what "verified" means) · `project/reviews/` (per-job, gitignored).
+`PROJECT.md` · `project/<slug>.md` (spec) · `project/QA.md` · `project/reviews/` (gitignored)
 
 - Feature ids `f-xxxxxx` are server-generated and **stable**: never renumber, reuse or
-  rewrite one — jobs, specs and findings reference them.
-- `project-doc-format.ts` is the only source of truth for the format; parsing never throws
-  and unrecognized lines round-trip verbatim.
-- Every UI write carries a content-hash `revision` and returns **409** when the file changed
-  underneath.
+  rewrite one.
+- `project-doc-format.ts` owns the format; parsing never throws, unknown lines round-trip.
+- Every UI write carries a content-hash `revision`; a stale one gets **409**.
 
 ### Track branches → `docs/track-branches.md`
 
-- Main's PROJECT.md is authoritative for the **backlog** and **landed** tracks; an
-  in-progress track's **worktree** is authoritative for that track — its section and
-  specs move there at branch creation (`track-plan.ts`). Read plans through
-  `readProjectPlan()` and write through `planFileFor()` (`project-plan.ts`), or the board,
-  dispatch and ids miss every branched track. Never write `## Track:` on main for a
-  branched track. Writes to a worktree's file go under the project lock, or a tick made
-  during Land is overwritten by its merge-base reset.
-- A move removes a spec from main only when the worktree holds main's content; otherwise
-  main's copy — perhaps uncommitted or untracked — is deleted with no way back.
-- Land copies the section back to main **before** merging and resets the branch's copy
-  to its merge-base — merge the file instead and every land conflicts on it; copy after
-  the merge and a spec the move removed is deleted or conflicts.
-- Commits on main for the plan go through a **temporary index** (`commitOnHead`), never
-  `git add`/`commit` — or whatever the user staged rides along. Land refuses anything
-  staged (git won't merge then) and uncommitted code, naming the files; uncommitted
-  planning on main passes, and in the worktree is committed first.
-- Never `git merge <base>` into a track branch without restoring its plan: main holds the
-  commit that deleted it, so the merge silently deletes every spec the branch never
-  touched. Update from main (`updateTrackFromMain`) puts the section and specs back.
-- A job whose `baseBranch` is a track branch merges **in the track worktree** (`mergeCwd`)
-  and never pushes; that branch is checked out there, so merging in the project fails.
-- Record `merge_sha` on every job merge and land, and give every job merge the
-  `Job-Id`/`Feature` trailers (`jobs/merge-trailers.ts`). Discard deletes the row and its
-  sha, and the `Merge job: <title>` message is shared by same-titled jobs; the trailers
-  survive both.
-- `track_branches` is unique only among **unlanded** rows (partial index). A landed row
-  keeps its `merge_sha` for Delete; making it plainly unique blocks reopening a track.
-- A session in a track or job worktree is session-logged into the project's main checkout
-  (`worktreeOwner()`), with the run's cwd there too. Run it in the worktree and the entry dies
-  with the folder at Land, and its process holds the folder so teardown fails `EBUSY`.
-- Land closes the sessions running in the worktree itself, **after** every refusal (or it
-  kills a session for a Land that then refuses) and awaiting each close (on Windows an open
-  shell makes `git worktree remove` fail half-way). Land, Delete and the board read
-  `getRunningSessions()`: an exited shell stays listed as `terminated` but holds nothing.
-- Delete track reverts only merges tied to the track by a recorded sha, a trailer, or a
-  **unique** exact `Merge job: <title>` subject on a merge with no trailer; never tick a
-  guess by default, or unrelated work is reverted. Trailer and subject lookups read only
-  `--first-parent` merges: once a track lands, its job merges are reachable from main,
-  and reverting them on top of the land reverts them twice.
-- Its step order is load-bearing: preflight clean → cancel → revert `--no-commit` →
-  (conflict: `revert --abort` + `reset --hard` preflight HEAD) → teardown → file edits →
-  one commit. Tearing down before the revert makes a conflict unrecoverable.
-- Land, Delete track, Branch now and a merge into a track branch share a per-project
-  **try** lock (`project-lock.ts`). Never make it wait: Delete holds it while
-  `cancelJob` awaits the stage it is cancelling, so a waiting merge deadlocks it.
-- `track-attribution.ts` output is a guess: board count, confirmed list for Branch now,
-  **unticked** in Delete. Match files with `gitStatusEntries(cwd, { allUntracked: true })`
-  — plain `--porcelain` collapses a new directory to one entry and hides its files.
+- Main's `PROJECT.md` owns backlog and landed tracks; a branched track's **worktree** owns
+  its section and specs. Read via `readProjectPlan()`, write via `planFileFor()`, or the
+  board and dispatch miss branched tracks. Never write `## Track:` on main for one.
+  Worktree-file writes take the project lock.
+- A move deletes a spec from main only if the worktree holds main's exact content.
+- Land copies the section back to main **before** merging and resets the branch's copy to
+  its merge-base. Merging main into a track branch must restore the track's section and
+  specs (`updateTrackFromMain`): main holds the commit that deleted them.
+- Plan commits on main use a **temporary index** (`commitOnHead`), never `git add`, or the
+  user's staged work rides along. Land refuses staged files and uncommitted code, naming them.
+- A job based on a track branch merges **in the track worktree** (`mergeCwd`), never pushes.
+- Every job merge and Land records `merge_sha`; job merges carry `Job-Id`/`Feature`
+  trailers (`jobs/merge-trailers.ts`).
+- `track_branches` is unique only among **unlanded** rows (partial index).
+- Worktree sessions are session-logged into main (`worktreeOwner()`), run there too, or the
+  entry dies with the folder and the run holds it open (`EBUSY`).
+- Land closes the worktree's running sessions **after** every refusal, awaiting each.
+  Land, Delete and the board read `getRunningSessions()` (an exited shell holds nothing).
+- Delete track reverts only merges tied by sha, trailer, or a **unique** `Merge job:
+  <title>` subject, reading `--first-parent` merges only. Its order: preflight → cancel →
+  revert `--no-commit` (conflict: abort + `reset --hard`) → teardown → edits → one commit.
+- Land, Delete, Branch now and merges into a track share a **try** lock
+  (`project-lock.ts`); never make it wait, or Delete deadlocks against a merge.
+- `track-attribution.ts` is a guess (unticked in Delete); match files with
+  `gitStatusEntries(cwd, { allUntracked: true })`.
 
 ## Job board → `docs/job-decisions.md`, `docs/job-documents.md`
 
-- `decision-format.ts` is a parser over prose, not a markdown renderer. **Every rule
-  degrades to "no match", never to a wrong match**, and nothing the model wrote is dropped.
-- It leaves `_` alone: it appears in identifiers (`MAX_HISTORICAL_DAYS`) far more than as
-  emphasis.
-- One answer box per question; all must be filled, since the stage re-runs from its own
-  prompt.
-- `render()` replaces the board wholesale and fires mid-decision, so every toggle goes
-  through it and `captureDrafts()` keeps part-written answers. Never hand-patch the DOM.
-- The document pane lists what the branch changed (`git diff --numstat`) union the markdown
-  in the worktree (`git ls-files --cached --others --exclude-standard` — tracked-only would
-  miss a doc a running stage just wrote). Documents are **read-only**: an edit here would be
-  swept into the branch by the next stage's `commitAll`.
-- References (`§3.2`, paths) resolve unique-among-changed → unique-among-all → plain text.
-  Linking only ever **wraps**, through one escape-and-link helper, or refs go live in some
-  parts of a card and dead in others.
-- Browser-supplied paths are untrusted: `resolveInWorktree()` resolves symlinks *before* the
-  containment check.
-- Hiding the pane is a **class (`docsCollapsed`), never a delete**: `linked()` and
-  `specPathOf()` read `this.docs`, so dropping the list unlinks every `§3.2` in the
-  question. Unfolding a cached list must also `expanded.add()` — the pane renders only
-  inside `renderBody()`, so otherwise the button flips its own label and shows nothing.
-- Anything that opens a document unfolds the pane, `openReference()`'s early return
-  included — `applyPendingAnchor()` scrolls into a `display: none` container and silently
-  does nothing.
+- `decision-format.ts` parses prose: every rule degrades to **no match**, never a wrong
+  one, and drops nothing. It leaves `_` alone (identifiers).
+- One answer box per question, all required.
+- `render()` replaces the board wholesale; toggles go through it, `captureDrafts()` keeps
+  drafts. Never hand-patch the DOM.
+- Documents are **read-only** (the next `commitAll` would sweep an edit in). The pane
+  lists `git diff --numstat` plus `git ls-files --cached --others --exclude-standard`.
+- Reference linking only **wraps**, through one escape-and-link helper.
+- `resolveInWorktree()` resolves symlinks before its containment check.
+- Hiding the pane is the `docsCollapsed` class, never dropping `this.docs`; opening a
+  document always unfolds it (`openReference()`'s early return included).
 
-## Keyboard shortcuts
+## Elsewhere
 
-`SHORTCUT_GROUPS` in `src/client/shortcuts.ts` is the single source of truth; the modal and
-the welcome hints both render from it. Register a new shortcut there and both surfaces pick
-it up — no HTML or CSS needed.
-
-## Setup that lives outside the code
-
-Hook configuration for notifications, fork and session ids: `docs/notifications.md`,
-`docs/session-fork.md`. Windows auto-start (`start-server.bat`, the hidden VBS launcher):
-`docs/windows-auto-start.md`. Session-log generation: `docs/session-log-feature.md`.
-Token accounting: `docs/token-usage-feature.md`.
-Plan usage chip (status line relay, `scripts/statusline.mjs`): `docs/plan-usage.md` — the script
-runs on every status line render, so it prints first and never waits on the server.
+Shortcuts: register in `SHORTCUT_GROUPS` (`src/client/shortcuts.ts`) only. Hooks:
+`docs/notifications.md`, `docs/session-fork.md`. Auto-start: `docs/windows-auto-start.md`.
+Session logs: `docs/session-log-feature.md`. Plan usage chip: `docs/plan-usage.md`
+(`scripts/statusline.mjs` prints first and never waits on the server).

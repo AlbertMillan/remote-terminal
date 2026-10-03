@@ -3,6 +3,7 @@ import { getConfig } from './config.js';
 import { createLogger, getLogDirectory } from './utils/logger.js';
 import { getPlatform } from './utils/platform.js';
 import { scrubProcessEnv } from './utils/claude-env.js';
+import { installSkillsAtBoot } from './utils/skill-install.js';
 
 const logger = createLogger('server');
 
@@ -47,6 +48,7 @@ async function main() {
     });
 
     logger.info({ address, protocol }, 'Server started');
+    void installSkillsAtBoot();
 
     // Print helpful startup message
     console.log(`
