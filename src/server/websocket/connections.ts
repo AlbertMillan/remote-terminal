@@ -100,6 +100,17 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
  * browser asked for it and none is told by `session.created`. Every open
  * browser lists it; none attaches.
  */
+/**
+ * Delete the sessions of a worktree Land or Delete track just removed, and
+ * drop them from every sidebar: a terminated row there points at a folder
+ * that no longer exists, so it can neither attach nor revive.
+ */
+export async function removeWorktreeSessions(worktreePath: string): Promise<void> {
+  for (const id of await sessionManager.deleteSessionsIn(worktreePath)) {
+    broadcastSessionUpdate(id, 'deleted');
+  }
+}
+
 export function broadcastSessionAdded(session: SessionInfo): void {
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {

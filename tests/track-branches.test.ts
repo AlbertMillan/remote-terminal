@@ -26,7 +26,7 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
 /** Land with no running sessions anywhere. */
-const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { runMergeStage } = await import('../src/server/jobs/stages/merge.js');
 
 const DOC = `## Track: Alpha
@@ -291,8 +291,10 @@ describe('landTrack', () => {
    */
   function recordingSessions(sessions: { id: string; cwd: string }[]) {
     const calls: { id: string; mainHead: string }[] = [];
+    const removed: { path: string; existed: boolean }[] = [];
     return {
       calls,
+      removed,
       deps: {
         sessions,
         terminateSession: async (id: string) => {
@@ -300,6 +302,9 @@ describe('landTrack', () => {
           await new Promise((r) => setTimeout(r, 20));
           calls.push({ id, mainHead: git(repo, 'rev-parse', 'HEAD') });
           return true;
+        },
+        removeSessions: async (path: string) => {
+          removed.push({ path, existed: existsSync(path) });
         },
       },
     };
@@ -327,6 +332,8 @@ describe('landTrack', () => {
     expect(result.detail).toMatch(/closed 2 open sessions/);
     expect(existsSync(t.worktreePath)).toBe(false);
     expect(existsSync(beta.worktreePath)).toBe(true);
+    // Their rows go from the sidebar once the folder is gone, and only this worktree's.
+    expect(fake.removed).toEqual([{ path: t.worktreePath, existed: false }]);
   });
 
   it('closes nothing, and keeps the session, when the worktree has uncommitted code', async () => {

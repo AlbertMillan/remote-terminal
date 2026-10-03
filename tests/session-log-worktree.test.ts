@@ -56,7 +56,7 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
 /** Land with no running sessions anywhere. */
-const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { generateSessionLogForced } = await import('../src/server/sessions/project-log.js');
 const { worktreeOwner } = await import('../src/server/projects/worktree-owner.js');
 const { createJob, updateJob } = await import('../src/server/jobs/store.js');

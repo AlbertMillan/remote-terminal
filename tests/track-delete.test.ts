@@ -26,7 +26,7 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
 /** Land with no running sessions anywhere. */
-const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const store = await import('../src/server/jobs/store.js');
 const { jobMergeMessageArgs } = await import('../src/server/jobs/merge-trailers.js');
@@ -78,6 +78,7 @@ function mergeLikeAJob(
 const deps = () => ({
   liveSessions: () => [] as { id: string; cwd: string }[],
   terminateSession: vi.fn(async () => true),
+  removeSessions: vi.fn(async () => undefined),
   cancelJob: vi.fn(async (id: string) => store.updateJob(id, { status: 'cancelled' })),
   discardJob: vi.fn(async (id: string) => store.deleteJob(id)),
 });

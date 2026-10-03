@@ -12,7 +12,7 @@ import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../se
 import { getSession as getSessionFromDb } from '../db/queries.js';
 import { getConfig } from '../config.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
-import { broadcastLandResult, broadcastSessionAdded, sessionToInfo } from '../websocket/connections.js';
+import { broadcastLandResult, broadcastSessionAdded, removeWorktreeSessions, sessionToInfo } from '../websocket/connections.js';
 import type { LandNotificationPayload, SessionInfo } from '../websocket/protocol.js';
 import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { findWorkspaceProject, listBoardCwds } from '../projects/workspace.js';
@@ -395,6 +395,7 @@ export const defaultLandDeps: AgentLandDeps = {
     landAndBuild(project, trackName, {
       sessions: sessionManager.getRunningSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
       terminateSession: (id) => sessionManager.terminateSession(id),
+      removeSessions: removeWorktreeSessions,
     }),
   notify: broadcastLandResult,
 };

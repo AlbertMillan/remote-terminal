@@ -6,6 +6,7 @@ import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './typ
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDefaultShell, isWindows } from '../utils/platform.js';
+import { sessionsInWorktree } from '../utils/paths.js';
 import {
   insertSession,
   updateSession,
@@ -344,6 +345,17 @@ class SessionManager {
     deleteSessionFromDb(id);
 
     return true;
+  }
+
+  /**
+   * Delete every session row whose cwd is in `worktreePath` — running or not:
+   * once Land or Delete track removes the folder, none of them can attach or
+   * revive. Returns the ids deleted so the caller can tell clients.
+   */
+  async deleteSessionsIn(worktreePath: string): Promise<string[]> {
+    const ids = sessionsInWorktree(getAllSessionsFromDb(), worktreePath).map((s) => s.id);
+    for (const id of ids) await this.deleteSession(id);
+    return ids;
   }
 
   writeToSession(id: string, data: string): boolean {

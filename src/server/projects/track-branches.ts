@@ -723,6 +723,11 @@ export interface LandDeps {
   sessions: { id: string; cwd: string }[];
   /** Must resolve only once the PTY is gone. */
   terminateSession: (id: string) => Promise<unknown>;
+  /**
+   * Delete every session row in the worktree (running or not) once it is
+   * removed, and drop them from the sidebar (`removeWorktreeSessions`).
+   */
+  removeSessions: (worktreePath: string) => Promise<unknown>;
 }
 
 /**
@@ -822,6 +827,14 @@ export async function landTrack(
   // The land itself stands. A link the teardown could not remove leaves the
   // worktree registered and the branch checked out there, with nothing else
   // recording either, so the result has to say where they are.
+  // Unless a link kept the worktree registered: its sessions can still revive
+  // there. (A busy folder is deregistered and retried, so it goes.) A failure here is logged, never
+  // thrown — the land itself stands.
+  if (torn.linksLeft.length === 0) {
+    await deps.removeSessions(track.worktreePath).catch((error: Error) => {
+      logger.warn({ track: trackName, error: error.message }, 'land: removing worktree sessions failed');
+    });
+  }
   const leftover =
     torn.linksLeft.length > 0
       ? ` ${describeLinksLeft(track.worktreePath, torn.linksLeft)} ` +

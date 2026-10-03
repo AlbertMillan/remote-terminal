@@ -25,7 +25,7 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
-const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 
 // Two specs: alpha.md is revised in some tests, alpha-notes.md never is —
 // the silent-delete case.

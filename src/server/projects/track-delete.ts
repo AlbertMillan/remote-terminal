@@ -149,6 +149,8 @@ export interface TrackDeleteChoices {
 export interface TrackDeleteDeps {
   liveSessions: () => { id: string; cwd: string }[];
   terminateSession: (id: string) => Promise<unknown>;
+  /** Delete the worktree's session rows once it is removed (`removeWorktreeSessions`). */
+  removeSessions: (worktreePath: string) => Promise<unknown>;
   cancelJob: (id: string) => Promise<unknown>;
   discardJob: (id: string) => Promise<unknown>;
 }
@@ -729,6 +731,13 @@ async function tearDown(
       deleteBranch: plan.branch.name,
     });
     branchRemoved = torn.removed && torn.branchDeleted;
+    // Unless a link kept the worktree registered (its sessions can still
+    // revive there); a busy folder is deregistered and retried, so it goes.
+    if (torn.linksLeft.length === 0) {
+      await deps.removeSessions(plan.branch.worktreePath).catch((error: Error) => {
+        logger.warn({ track: trackName, error: error.message }, 'track-delete: removing worktree sessions failed');
+      });
+    }
   }
   deleteTrackBranchRows(cwd, trackName, { keepUnlanded: !branchRemoved });
   return {

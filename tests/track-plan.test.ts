@@ -28,7 +28,7 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
 /** Land with no running sessions anywhere. */
-const NO_SESSIONS = { sessions: [], terminateSession: async () => true };
+const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { getRegistryPath } = await import('../src/server/projects/registry.js');
 const { getWorkspaceBoard } = await import('../src/server/projects/workspace.js');
 const { registerProjectRoutes } = await import('../src/server/projects/routes.js');
@@ -372,6 +372,7 @@ describe('delete', () => {
   const deps = () => ({
     liveSessions: () => [] as { id: string; cwd: string }[],
     terminateSession: vi.fn(async () => true),
+    removeSessions: vi.fn(async () => undefined),
     cancelJob: vi.fn(async () => undefined),
     discardJob: vi.fn(async () => undefined),
   });
@@ -384,9 +385,11 @@ describe('delete', () => {
     const plan = await planTrackDelete(project(), 'Alpha', []);
     expect(plan.features.map((f) => f.id)).toEqual(['f-aaaaaa', 'f-bbbbbb']);
     expect(plan.inDoc).toBe(false);
-    await executeTrackDelete(project(), 'Alpha', { token: plan.token, revert: [], deleteSpecs: [] }, deps());
+    const d = deps();
+    await executeTrackDelete(project(), 'Alpha', { token: plan.token, revert: [], deleteSpecs: [] }, d);
 
     expect(existsSync(t.worktreePath)).toBe(false);
+    expect(d.removeSessions).toHaveBeenCalledWith(t.worktreePath);
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
     expect(read(repo)).toBe(doc);
     expect(existsSync(join(repo, 'project', 'shared.md'))).toBe(true);

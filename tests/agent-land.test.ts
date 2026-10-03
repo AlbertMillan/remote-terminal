@@ -107,6 +107,7 @@ beforeEach(async () => {
           onClose(id);
           sessions.delete(id);
         },
+        removeSessions: async () => undefined,
       }),
     notify: (payload) => {
       events.push(`notify ${payload.ok ? 'ok' : 'failed'}`);

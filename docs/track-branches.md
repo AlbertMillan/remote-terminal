@@ -211,6 +211,15 @@ find and close the session, wait for its log run, Land" (spec:
 - The board's Land confirm says "N open session(s) in its worktree will be closed",
   from the branched track's `openSessions` as of the last board load. The result's
   detail says how many were actually closed.
+- **Once the worktree is gone, its session rows are deleted** (`removeWorktreeSessions`
+  → `sessionManager.deleteSessionsIn`), every row whose cwd is inside it, running or
+  not, with a `session.deleted` broadcast so they leave every sidebar. Closing alone
+  left them there as `terminated`, pointing at a folder that no longer exists, so they
+  could neither attach nor revive. Delete track does the same. Skipped when a link kept
+  the worktree registered (`linksLeft`): the folder is still there and its sessions can
+  revive. Not done at close time, because a merge conflict after the close leaves the
+  worktree, and its sessions, in place. The Claude transcripts are untouched, so the
+  conversations stay resumable from history.
 
 It then puts the section back on main (`returnSectionToMain`): one commit through the
 temporary index of HEAD's PROJECT.md plus the worktree's section — merged by id with any

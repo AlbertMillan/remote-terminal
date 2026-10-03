@@ -31,6 +31,7 @@ import { ProjectBusyError, withProjectLock } from './project-lock.js';
 import { landAndBuild } from './track-land.js';
 import { installDependencies, needsInstall } from './project-deps.js';
 import { sessionManager } from '../sessions/manager.js';
+import { removeWorktreeSessions } from '../websocket/connections.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
 import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
@@ -412,6 +413,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         landAndBuild(project, body.track as string, {
           sessions: runningSessions(),
           terminateSession: (id) => sessionManager.terminateSession(id),
+          removeSessions: removeWorktreeSessions,
         })
       );
     }
@@ -563,6 +565,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         {
           liveSessions: runningSessions,
           terminateSession: (id) => sessionManager.terminateSession(id),
+          removeSessions: removeWorktreeSessions,
           cancelJob,
           discardJob,
         }

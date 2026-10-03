@@ -281,6 +281,7 @@ describe('guesses in Delete track', () => {
   const deps = () => ({
     liveSessions: () => [],
     terminateSession: vi.fn(async () => true),
+    removeSessions: vi.fn(async () => undefined),
     cancelJob: vi.fn(async () => undefined),
     discardJob: vi.fn(async () => undefined),
   });
