@@ -66,9 +66,10 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   `<dataDir>/prompts/<id>/`, never in a worktree, or `commitAll` commits them.
 - Worktrees get a **copy** of `.claude/settings.local.json` (`ensureLocalClaudeSettings`),
   never a link, never over an existing copy, and only once git ignores the path.
-- `POST /api/agent/land` takes the track from the **caller's** worktree, never the request,
-  and lands from `onResponse`, after the `202`: it closes the caller, whose agent needs its
-  answer first. Never hold the project lock across that reply.
+- `POST /api/agent/land` lands the **caller's** worktree's track, or a named one only if a
+  session the caller started (`spawned_by`) works in it; never any other, or one token lands
+  the whole project. It lands from `onResponse`, after the `202`: it may close the caller,
+  whose agent needs its answer first. Never hold the project lock across that reply.
 - `utils/claude-env.ts` strips inherited `CLAUDE_CODE_*` session markers with a
   **denylist**, never a `CLAUDE_*` wildcard (that kills the user's settings). Without it no
   PTY saves its transcript, breaking Fork, resume and SESSION-LOG.

@@ -8,7 +8,7 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 
 | Piece | Where |
 | --- | --- |
-| CLI the agent runs | `scripts/cr-session.mjs` (`start`, `list`, `land`; JSON out, prompt on stdin) |
+| CLI the agent runs | `scripts/cr-session.mjs` (`start`, `list`, `land [--track]`; JSON out, prompt on stdin) |
 | Skill that tells the agent how | `skills/claude-remote-sessions/SKILL.md` (install below) |
 | Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land` |
 | Land's outcome | `notification` with `kind: 'land'` (`broadcastLandResult`), shown by `src/client/land-result.ts` |
@@ -60,7 +60,8 @@ calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts sti
 installing) or the global `sessions.maxSessions` · 409 the caller already has a live
 session on that track, or a start on it still running · 400 bad body, `bypassPermissions` or `dontAsk`, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
-`land`: 202 accepted · 400 the caller is in no track's worktree · 409 any Land refusal
+`land`: 202 accepted · 400 the caller is in no track's worktree (no `track`), or a blank
+`track` · 403 a named track neither the caller's nor a started session's · 409 any Land refusal
 (uncommitted code, a live job, a conflicting merge, the project busy) or a Land of the
 track already under way.
 
@@ -133,11 +134,19 @@ calls it again before creating the session.
 `node "$CLAUDE_REMOTE_CLI" land` → `POST /api/agent/land`, no body. Spec:
 `project/session-requests-land.md`. The catch is that Land closes the session that asked.
 
-- **The track comes from the caller, never the request.** Token → session id → the
-  session's cwd → the unlanded track whose worktree holds it (`trackBranchContaining`). A
-  session outside every track worktree gets 400. So a session lands only its own track,
-  and an orchestrator in the main checkout can't land a child's. Started sessions can
-  land: they are usually the one the user is talking to.
+- **The track comes from the caller.** With no body: token → session id → the session's
+  cwd → the unlanded track whose worktree holds it (`trackBranchContaining`). A session
+  outside every track worktree gets 400. Started sessions can land: they are usually the
+  one the user is talking to.
+- **A parent can land its child's track** with `land --track "<name>"` (body
+  `{ track }`). The server accepts the name only if it is the caller's own track or the
+  track a session **the caller started** (`spawned_by`) works in, running or finished, in
+  the caller's project. Anything else is 403, so a token can never reach a track outside its
+  own family; a child can't land a sibling's. The parent sits in the main checkout, so the
+  Land closes the child but not the parent: the `202` carries `closesCaller: false` and the
+  CLI says "the track's sessions will close". The result is the same notification.
+  Confirmation is the skill's job: the agent names the track, asks the user and lands only
+  on an explicit yes. Nothing server-side waits for one.
 - **Phase 1, in the request:** Land's session-free checks (`landPreflight`: live jobs,
   install, base branch, code or staged files on main, code in the worktree, with worktree
   planning committed) plus a conflicting merge (`behindMain`). Under the project try lock,

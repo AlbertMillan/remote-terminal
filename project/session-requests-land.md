@@ -86,5 +86,5 @@ the session to *trigger* it. The catch is that the Land closes the session that 
 
 - Landing a *different* track than the caller's.
 - Landing by the orchestrating session on a child's
-  behalf.
+  behalf. (Added later as `land --track`; see `docs/session-orchestration.md`.)
 - Delete track from a session.

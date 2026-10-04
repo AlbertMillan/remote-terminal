@@ -8,10 +8,11 @@
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
- *   node "$CLAUDE_REMOTE_CLI" land
+ *   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
  *
- * `land` takes nothing: the server lands the track whose worktree this
- * session is in, and closes this session to do it.
+ * `land` with no track lands the track whose worktree this session is in, and
+ * closes this session to do it. `--track` names a track a session this one
+ * started works in; the server refuses any other.
  *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
@@ -26,7 +27,7 @@ import { pathToFileURL } from 'node:url';
 const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
-  node "$CLAUDE_REMOTE_CLI" land`;
+  node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]`;
 
 // `auto` is the server's default. `default` is the old name for `manual`, still
 // sent by a skill copy installed before the rename; the server maps it.
@@ -113,11 +114,20 @@ export async function main({
     if (Object.keys(flags).length > 0) return fail(`list takes no flags\n${USAGE}`, 2);
     request = { method: 'GET', headers };
   } else if (command === 'land') {
-    // No track argument: the server takes it from this session's worktree,
-    // so a session can only ever land its own.
-    if (Object.keys(flags).length > 0) return fail(`land takes no flags\n${USAGE}`, 2);
+    // No track: the server takes it from this session's worktree. A named one
+    // must be a track this session or one it started works in; the server checks.
+    if (Object.keys(flags).some((f) => f !== 'track')) return fail(`land takes only --track\n${USAGE}`, 2);
     path = '/api/agent/land';
-    request = { method: 'POST', headers };
+    if (flags.track === undefined) {
+      request = { method: 'POST', headers };
+    } else {
+      if (!flags.track.trim()) return fail(`--track needs a track name\n${USAGE}`, 2);
+      request = {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ track: flags.track }),
+      };
+    }
   } else {
     return fail(command ? `unknown command: ${command}\n${USAGE}` : USAGE, 2);
   }
@@ -142,8 +152,19 @@ export async function main({
     return fail(`${res.status}: ${message}`);
   }
   if (command === 'land') {
-    // The agent's last words before the server closes this session.
-    out('Land accepted; this session will close. The result arrives as a notification in claude-remote.\n');
+    let closesCaller = true;
+    try {
+      closesCaller = JSON.parse(text).closesCaller !== false;
+    } catch {
+      /* not JSON: assume the caller closes, the safe thing to tell its agent */
+    }
+    // Either the agent's last words before the server closes this session, or
+    // a parent's report that its child's track is on its way.
+    out(
+      closesCaller
+        ? 'Land accepted; this session will close. The result arrives as a notification in claude-remote.\n'
+        : "Land accepted; the track's sessions will close. The result arrives as a notification in claude-remote.\n"
+    );
     return 0;
   }
   out(text.endsWith('\n') ? text : `${text}\n`);

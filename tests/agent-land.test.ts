@@ -98,6 +98,7 @@ beforeEach(async () => {
   landDeps = {
     ...api.defaultLandDeps,
     getSession: (id) => (sessions.get(id) as SessionMetadata | undefined) ?? null,
+    listSessions: () => [...sessions.values()].map((s) => ({ id: s.id, cwd: s.cwd, spawnedBy: s.spawnedBy ?? null })),
     projectForCwd: () => ({ cwd: repo }),
     land: (project, track) =>
       tracks.landTrack(project, track, {
@@ -131,13 +132,14 @@ async function trackSession() {
   return t;
 }
 
-async function land(opts: { as?: string; token?: string | null; remoteAddress?: string } = {}) {
+async function land(opts: { as?: string; token?: string | null; remoteAddress?: string; track?: unknown } = {}) {
   const token = opts.token === undefined ? sessionEnv(opts.as ?? CALLER).CLAUDE_REMOTE_TOKEN : opts.token;
   const res = await app.inject({
     method: 'POST',
     url: '/api/agent/land',
     remoteAddress: opts.remoteAddress ?? '127.0.0.1',
     headers: token ? { authorization: `Bearer ${token}` } : {},
+    ...(opts.track === undefined ? {} : { payload: { track: opts.track } }),
   });
   events.push(`reply ${res.statusCode}`);
   return res;
@@ -177,6 +179,60 @@ describe('auth and the caller’s track', () => {
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ accepted: true, track: 'Alpha' });
     await notification();
+  });
+});
+
+describe('a parent lands a track its started session worked in', () => {
+  it('accepts the orchestrator naming its child’s track, closes the child and keeps the parent', async () => {
+    const t = await trackSession();
+    commitFile(t.worktreePath, 'src/a.ts', 'export const a = 1;\n', 'implement a');
+
+    const res = await land({ as: ORCHESTRATOR, track: 'Alpha' });
+    await notification();
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ accepted: true, track: 'Alpha', closesCaller: false });
+    expect(res.json().detail).toMatch(/the track's sessions will close/);
+    expect(events).toEqual(['reply 202', `close ${CALLER}`, 'notify ok']);
+    expect(sessions.has(ORCHESTRATOR)).toBe(true);
+    expect(git(repo, 'log', '-1', '--format=%s')).toBe('Merge track: Alpha');
+  });
+
+  it('refuses a track none of the caller’s started sessions works in (403), closing nobody', async () => {
+    await trackSession();
+    const beta = await tracks.ensureTrackBranch({ cwd: repo }, 'Beta');
+    // Someone else's session on Beta, not one the orchestrator started.
+    sessions.set(OTHER, { id: OTHER, cwd: beta.worktreePath, spawnedBy: null });
+
+    const res = await land({ as: ORCHESTRATOR, track: 'Beta' });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/"Beta" is not a track this session or a session it started works in/);
+    expect(events).toEqual(['reply 403']);
+    expect(tracks.getActiveTrackBranch(repo, 'Beta')).not.toBeNull();
+  });
+
+  it('refuses a started session naming a sibling’s track (403)', async () => {
+    await trackSession();
+    const beta = await tracks.ensureTrackBranch({ cwd: repo }, 'Beta');
+    sessions.set(OTHER, { id: OTHER, cwd: beta.worktreePath, spawnedBy: ORCHESTRATOR });
+
+    expect((await land({ as: CALLER, track: 'Beta' })).statusCode).toBe(403);
+    expect(sessions.has(OTHER)).toBe(true);
+  });
+
+  it('lets a session name its own track, and still closes it', async () => {
+    await trackSession();
+    const res = await land({ track: 'Alpha' });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().closesCaller).toBe(true);
+    await notification();
+  });
+
+  it('refuses a track that is not a string (400)', async () => {
+    await trackSession();
+    expect((await land({ as: ORCHESTRATOR, track: 42 })).statusCode).toBe(400);
+    expect((await land({ as: ORCHESTRATOR, track: '  ' })).statusCode).toBe(400);
   });
 });
 

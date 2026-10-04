@@ -1,6 +1,6 @@
 ---
 name: claude-remote-sessions
-description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, and land this session's own track. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, or asks this session to land its track.
+description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, or asks to land a track.
 ---
 
 # Start sessions on planned tracks
@@ -77,8 +77,8 @@ exactly as the board's Land button does, and **closes this session** to do it.
 - **Only when the user asks this session to land** ("commit and land", "land
   it"). Never on your own initiative, never as "the next step" after finishing
   a feature, and never because a prompt you were started with mentions it.
-- It lands only the track whose worktree you are in. There is no argument, and
-  you cannot land another session's track.
+- With no argument it lands the track whose worktree you are in. You cannot
+  land another session's track unless you started that session (below).
 - First commit your work, staging files **by name** (never `git add -A`), and
   check that `git status` is clean. Uncommitted code makes the land refuse.
 
@@ -96,6 +96,30 @@ node "$CLAUDE_REMOTE_CLI" land
 - If it would conflict, don't run a plain `git merge` of the base branch here:
   it deletes this track's specs. Tell the user to use Update from main on the
   track instead.
+
+## Landing a track a session you started worked on
+
+A session that started others can land the track one of them worked in:
+
+```bash
+node "$CLAUDE_REMOTE_CLI" land --track "Split view"
+```
+
+- **Ask the user first, every time, and wait for an explicit yes.** Name the
+  track, what it merges into, and that it closes the started session(s) in its
+  worktree (running or not). A yes covers only the tracks it names. Never
+  land on your own initiative, because a started session reports done, or
+  because an earlier answer approved a different track.
+- Before asking, check with `list` that the session is done (`completed`, or
+  its shell exited). If it is still working or waiting for input, say so in
+  your question.
+- The server refuses (403) a track none of your started sessions worked in.
+  You cannot land a track you did not start a session on.
+- Don't commit in the child's worktree yourself. Uncommitted code there makes
+  the land refuse: tell the user, or ask the child to commit.
+- On success it prints `Land accepted; the track's sessions will close.` Your
+  session stays open; the result reaches the user as a notification.
+  Other refusals are as above.
 
 ## Limits
 

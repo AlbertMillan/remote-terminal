@@ -32,7 +32,8 @@ const logger = createLogger('agent-sessions');
  *
  * A main session's agent calls these through scripts/cr-session.mjs to start a
  * prompted session on one of its planned tracks, and to list the ones it
- * started; a track's session calls the land route to land its own track.
+ * started; a track's session calls the land route to land its own track, and
+ * a parent to land a track one of its started sessions worked in.
  * They start a shell and type into it, or close sessions, so unlike the rest of /api/*
  * they authenticate: the request must come from loopback AND carry the
  * calling session's in-memory token (sessionEnv()). Either alone is not
@@ -373,6 +374,8 @@ export function listAgentSessions(deps: AgentSessionDeps, callerId: string): Sta
  */
 export interface AgentLandDeps {
   getSession(id: string): SessionMetadata | null;
+  /** Every session row, live or not: a parent may land a child that has finished. */
+  listSessions(): Pick<SessionMetadata, 'id' | 'cwd' | 'spawnedBy'>[];
   /** The unlanded track whose worktree holds `cwd`, or null. */
   trackBranchFor(cwd: string): TrackBranch | null;
   projectForCwd(cwd: string): RegistryProject | null;
@@ -385,6 +388,7 @@ export interface AgentLandDeps {
 
 export const defaultLandDeps: AgentLandDeps = {
   getSession: getSessionFromDb,
+  listSessions: () => sessionManager.getSessionList(),
   trackBranchFor: (cwd) => {
     const branch = trackBranchContaining(cwd);
     return branch && branch.landedAt === null ? branch : null;
@@ -403,6 +407,12 @@ export const defaultLandDeps: AgentLandDeps = {
 export interface AcceptedLand {
   project: RegistryProject;
   track: string;
+  /** The caller is in the track's worktree, so the Land closes it too. */
+  closesCaller: boolean;
+}
+
+export interface LandBody {
+  track?: unknown;
 }
 
 // Lands accepted and not yet finished, by project and track. Phase 1 releases
@@ -419,16 +429,52 @@ export function dropAcceptedLand(accepted: AcceptedLand): void {
 }
 
 /**
- * Phase 1 of a session's Land, inside the request. The track is the one whose
- * worktree the CALLER is in — never named by the request — so a session can
- * land only its own track, and an orchestrator can't land a child's. Every
- * refusal reaches the agent while it is still running.
+ * The unlanded track a caller may land: with no name, the one whose worktree
+ * it is in; with a name, that same one or the track a session IT STARTED
+ * works in (spawned_by), finished or not. A request can name a track, but
+ * never reach one outside the caller's own family: its token says who asks.
  */
-export async function requestLand(deps: AgentLandDeps, callerId: string): Promise<AcceptedLand> {
+function landableTrack(
+  deps: AgentLandDeps,
+  caller: SessionMetadata,
+  callerId: string,
+  named: string | null
+): { branch: TrackBranch; closesCaller: boolean } {
+  const own = deps.trackBranchFor(caller.cwd);
+  if (named === null) {
+    if (!own) throw new AgentSessionError(400, "This session isn't in a track's worktree");
+    return { branch: own, closesCaller: true };
+  }
+  const project = deps.projectForCwd(caller.cwd);
+  const inProject = (b: TrackBranch | null): b is TrackBranch =>
+    b !== null && b.trackName === named && !!project && pathKey(b.projectCwd) === pathKey(project.cwd);
+  if (inProject(own)) return { branch: own, closesCaller: true };
+  for (const s of deps.listSessions()) {
+    if (s.spawnedBy !== callerId) continue;
+    const branch = deps.trackBranchFor(s.cwd);
+    if (inProject(branch)) return { branch, closesCaller: isInside(branch.worktreePath, caller.cwd) };
+  }
+  throw new AgentSessionError(
+    403,
+    `"${named}" is not a track this session or a session it started works in; it can land only those`
+  );
+}
+
+/**
+ * Phase 1 of a session's Land, inside the request. Without a track in the
+ * body, the track is the one whose worktree the caller is in; a parent names
+ * a track one of its started sessions works in (landableTrack). Every refusal
+ * reaches the agent while it is still running.
+ */
+export async function requestLand(deps: AgentLandDeps, callerId: string, body: LandBody = {}): Promise<AcceptedLand> {
   const caller = deps.getSession(callerId);
   if (!caller) throw new AgentSessionError(401, 'The calling session no longer exists');
-  const branch = deps.trackBranchFor(caller.cwd);
-  if (!branch) throw new AgentSessionError(400, "This session isn't in a track's worktree");
+  let named: string | null = null;
+  if (body.track !== undefined) {
+    if (typeof body.track !== 'string' || !body.track.trim()) throw new AgentSessionError(400, 'track must be a non-empty string');
+    named = body.track.trim();
+  }
+  const { branch, closesCaller } = landableTrack(deps, caller, callerId, named);
   const project = deps.projectForCwd(caller.cwd);
   if (!project || pathKey(project.cwd) !== pathKey(branch.projectCwd)) {
     throw new AgentSessionError(400, `${caller.cwd} is not in a workspace project`);
@@ -443,7 +489,7 @@ export async function requestLand(deps: AgentLandDeps, callerId: string): Promis
     throw new AgentSessionError(409, `A Land of "${branch.trackName}" is already under way; its result comes as a notification`);
   }
   landsUnderWay.add(key);
-  return { project, track: branch.trackName };
+  return { project, track: branch.trackName, closesCaller };
 }
 
 /**
@@ -488,7 +534,7 @@ export function registerAgentSessionRoutes(
   // Phase 2 of each accepted Land, run once its 202 has been sent: the Land
   // closes the session that asked, and its agent must have its answer first.
   const acceptedLands = new WeakMap<FastifyRequest, AcceptedLand>();
-  app.post(
+  app.post<{ Body?: LandBody }>(
     '/api/agent/land',
     {
       onResponse: async (request) => {
@@ -509,12 +555,14 @@ export function registerAgentSessionRoutes(
     async (request, reply) => {
       try {
         const callerId = authenticate(request, deps);
-        const accepted = await requestLand(landDeps, callerId);
+        const accepted = await requestLand(landDeps, callerId, (request.body ?? {}) as LandBody);
         acceptedLands.set(request, accepted);
+        const closing = accepted.closesCaller ? 'this session will close' : "the track's sessions will close";
         return reply.code(202).send({
           accepted: true,
           track: accepted.track,
-          detail: `Land of "${accepted.track}" accepted; this session will close. The result is sent as a notification.`,
+          closesCaller: accepted.closesCaller,
+          detail: `Land of "${accepted.track}" accepted; ${closing}. The result is sent as a notification.`,
         });
       } catch (error) {
         return sendError(reply, error);

@@ -135,11 +135,24 @@ describe('land', () => {
     expect(res.stdout).toBe('');
   });
 
-  it('takes no flags: the track comes from the session, never the command line', async () => {
-    const fetchImpl = okFetch();
-    const res = await run({ argv: ['land', '--track', 'Other'], fetchImpl });
-    expect(res.code).toBe(2);
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it('sends --track in the body, and says the parent stays open when the server does', async () => {
+    const fetchImpl = okFetch({ accepted: true, track: 'Split view', closesCaller: false });
+    const res = await run({ argv: ['land', '--track', 'Split view'], stdin: { isTTY: true }, fetchImpl });
+    expect(res.code).toBe(0);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:4399/api/agent/land');
+    expect(JSON.parse(init.body as string)).toEqual({ track: 'Split view' });
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(res.stdout).toMatch(/^Land accepted; the track's sessions will close\./);
+  });
+
+  it('takes only --track, and not a blank one', async () => {
+    for (const argv of [['land', '--name', 'x'], ['land', '--track', ' ']]) {
+      const fetchImpl = okFetch();
+      const res = await run({ argv, fetchImpl });
+      expect(res.code).toBe(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
   });
 });
 
