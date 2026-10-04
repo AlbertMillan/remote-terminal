@@ -9,7 +9,14 @@ import { PlanUsageChip } from './plan-usage-chip.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
 import { BUILD_CHANGED_EVENT, BuildChip, ServerRestartControl } from './server-restart.js';
-import { isLandNotification, landResultTitle, showLandResult } from './land-result.js';
+import {
+  isLandNotification,
+  isPromptMissingNotification,
+  landResultTitle,
+  promptMissingTitle,
+  showLandResult,
+  showPromptMissing,
+} from './land-result.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { SessionListView } from './session-list-view.js';
@@ -29,6 +36,7 @@ import type {
   NotificationPreferencesPayload,
   LandNotificationPayload,
   NotificationPayload,
+  PromptMissingNotificationPayload,
   ServerMessage,
   ConnectionStatus,
 } from './session-types.js';
@@ -928,9 +936,17 @@ class SessionManager {
     this.updateSettingsUI();
   }
 
-  private handleNotification(payload: NotificationPayload | LandNotificationPayload): void {
+  private handleNotification(
+    payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload
+  ): void {
     if (isLandNotification(payload)) {
       this.handleLandResult(payload);
+      return;
+    }
+    if (isPromptMissingNotification(payload)) {
+      // A toast, never a badge: an idle session badged would read as "needs input".
+      showPromptMissing(payload);
+      this.showBrowserNotification(promptMissingTitle(payload), payload.detail, payload.sessionId);
       return;
     }
     const session = this.sessions.get(payload.sessionId);

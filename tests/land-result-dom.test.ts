@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isLandNotification, showLandResult } from '../src/client/land-result.js';
+import { isLandNotification, isPromptMissingNotification, showLandResult, showPromptMissing } from '../src/client/land-result.js';
 import type { LandNotificationPayload } from '../src/client/session-types.js';
 
 /**
@@ -49,5 +49,31 @@ describe('land result toast', () => {
     showLandResult(OK);
     expect(toast().classList.contains('land-result-failed')).toBe(false);
     expect(toast().querySelectorAll('.land-result-title')).toHaveLength(1);
+  });
+});
+
+describe('prompt-missing toast', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="land-result-toast" class="land-result-toast hidden"></div>';
+  });
+  const toast = () => document.getElementById('land-result-toast') as HTMLElement;
+
+  it('names the started session, as a failure, in the same toast', () => {
+    const payload = {
+      kind: 'prompt-missing' as const,
+      sessionId: 's1',
+      name: 'Strategy Lab UI',
+      detail: 'Claude started, but the prompt never reached it',
+      timestamp: OK.timestamp,
+    };
+    expect(isPromptMissingNotification(payload)).toBe(true);
+    expect(isLandNotification(payload)).toBe(false);
+    expect(isPromptMissingNotification(OK)).toBe(false);
+
+    showPromptMissing(payload);
+    expect(toast().classList.contains('hidden')).toBe(false);
+    expect(toast().classList.contains('land-result-failed')).toBe(true);
+    expect(toast().querySelector('.land-result-title')?.textContent).toBe('Started session "Strategy Lab UI" never got its prompt');
+    expect(toast().querySelector('.land-result-detail')?.textContent).toMatch(/^Claude started, but the prompt never reached it\. Open it/);
   });
 });

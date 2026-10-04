@@ -12,6 +12,7 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 | Skill that tells the agent how | `skills/claude-remote-sessions/SKILL.md` (install below) |
 | Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land` |
 | Land's outcome | `notification` with `kind: 'land'` (`broadcastLandResult`), shown by `src/client/land-result.ts` |
+| Did the prompt arrive | `src/server/agent/prompt-delivery.ts`; `kind: 'prompt-missing'` (`broadcastPromptMissing`), same toast |
 | PTY env + token map | `src/server/sessions/session-env.ts` — `sessionEnv(id)` |
 | Prompt files | `src/server/sessions/prompt-file.ts` — `<dataDir>/prompts/<sessionId>/prompt.md` |
 | Worktree's local settings | `src/server/projects/local-claude-settings.ts` — `ensureLocalClaudeSettings()` |
@@ -93,6 +94,28 @@ track already under way.
    so no shell reads an escape, and a path holding `"`, `%`, `$` or a backtick is refused (the
    session is removed) rather than typed into a command that would silently read another file.
 8. Broadcast `session.added`; return `{ sessionId, name, worktreePath, install }`.
+9. Schedule one check `PROMPT_GRACE_MS` (90 s) later (`checkPromptArrived`), below.
+
+## Did the prompt arrive
+
+A session whose prompt never reached its agent sits idle and looks exactly like one that
+is working: `active`, attachable, no notification. That happened to every start until the
+`--` fix, so the server checks (`agent/prompt-delivery.ts`):
+
+- **Evidence.** Claude writes no transcript until its first message, and our prompt names
+  `<id>/prompt.md`. So a **user** line naming that file, in a transcript from the
+  session's folder (`~/.claude/projects/<cwd with every non-alphanumeric as ->`, written
+  since the session was created) or in the one its claude-session hook registered, means
+  `received`. A later SendMessage or typed message never names the file, so it never counts.
+- `pending` within the grace period, then `not-received`, with a `detail` naming whether
+  Claude registered at all (no registration: it never started, or the hook isn't installed).
+- `list` reports it per session as `prompt: { state, detail? }`, computed on each call.
+- The scheduled check sends a `notification` with `kind: 'prompt-missing'` only for a
+  session still live and `not-received`; deleted or exited ones are left alone. The client
+  shows it in the land-result toast, never as a badge (an idle session badged reads as
+  "needs input"), and as a browser notification that opens the session.
+- Nothing retypes the prompt: by then Claude's input box or a dialog has the keyboard, and
+  a blind retype could answer the dialog or run in the shell.
 
 Why a file and a short command rather than the prompt itself: a newline in a typed command
 sends it early, PowerShell/bash/cmd quote differently, and the terminal would echo the whole

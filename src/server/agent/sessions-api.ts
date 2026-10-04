@@ -12,8 +12,14 @@ import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../se
 import { getSession as getSessionFromDb } from '../db/queries.js';
 import { getConfig } from '../config.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
-import { broadcastLandResult, broadcastSessionAdded, removeWorktreeSessions, sessionToInfo } from '../websocket/connections.js';
-import type { LandNotificationPayload, SessionInfo } from '../websocket/protocol.js';
+import {
+  broadcastLandResult,
+  broadcastPromptMissing,
+  broadcastSessionAdded,
+  removeWorktreeSessions,
+  sessionToInfo,
+} from '../websocket/connections.js';
+import type { LandNotificationPayload, PromptMissingNotificationPayload, SessionInfo } from '../websocket/protocol.js';
 import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { findWorkspaceProject, listBoardCwds } from '../projects/workspace.js';
 import { readProjectPlan } from '../projects/project-plan.js';
@@ -24,6 +30,7 @@ import { listAllTrackBranches, trackBranchContaining, type TrackBranch } from '.
 import { isTrackError } from '../projects/routes.js';
 import { installDependencies, needsInstall, type InstallResult } from '../projects/project-deps.js';
 import { ensureLocalClaudeSettings } from '../projects/local-claude-settings.js';
+import { PROMPT_GRACE_MS, promptDelivery, type PromptDelivery } from './prompt-delivery.js';
 
 const logger = createLogger('agent-sessions');
 
@@ -102,6 +109,11 @@ export interface AgentSessionDeps {
   lastNotification(id: string): { type: NotificationType; timestamp: Date } | undefined;
   broadcastAdded(session: SessionInfo): void;
   maxPerParent(): number;
+  /** Whether a started session's agent got its prompt (agent/prompt-delivery.ts). */
+  promptDelivery(session: SessionMetadata): PromptDelivery;
+  notifyPromptMissing(payload: PromptMissingNotificationPayload): void;
+  /** Run `fn` once after `ms`; never keeps the process alive. */
+  schedule(fn: () => void, ms: number): void;
 }
 
 /**
@@ -164,6 +176,11 @@ export const defaultDeps: AgentSessionDeps = {
   lastNotification: (id) => notificationService.getSessionNotification(id),
   broadcastAdded: broadcastSessionAdded,
   maxPerParent: () => getConfig().agentSessions.maxPerParent,
+  promptDelivery: (session) => promptDelivery(session),
+  notifyPromptMissing: broadcastPromptMissing,
+  schedule: (fn, ms) => {
+    setTimeout(fn, ms).unref();
+  },
 };
 
 /** The calling session's id, or an error naming why the request is refused. */
@@ -325,6 +342,8 @@ export async function startAgentSession(
       })
     );
 
+    deps.schedule(() => checkPromptArrived(deps, session.id), PROMPT_GRACE_MS);
+
     logger.info({ callerId, sessionId: session.id, track, mode: permissionMode }, 'agent-sessions: started a session');
     return { sessionId: session.id, name, worktreePath, install };
   } finally {
@@ -332,6 +351,31 @@ export async function startAgentSession(
     if (left > 0) pendingStarts.set(callerId, left);
     else pendingStarts.delete(callerId);
     pendingTracks.delete(trackKey);
+  }
+}
+
+/**
+ * Once, a grace period after a start: tell the user when the prompt never
+ * reached the agent. Its parent only learns through `list`, and a session
+ * that never got its prompt looks just like one that is working. A session
+ * already deleted or exited is left alone: somebody has dealt with it.
+ */
+export function checkPromptArrived(deps: AgentSessionDeps, sessionId: string): void {
+  try {
+    const session = deps.listSessions().find((s) => s.id === sessionId);
+    if (!session || !isLive(session)) return;
+    const delivery = deps.promptDelivery(session);
+    if (delivery.state !== 'not-received') return;
+    logger.warn({ sessionId, detail: delivery.detail }, 'agent-sessions: a started session never got its prompt');
+    deps.notifyPromptMissing({
+      kind: 'prompt-missing',
+      sessionId,
+      name: session.name,
+      detail: delivery.detail ?? 'The prompt never reached it',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.warn({ error, sessionId }, 'agent-sessions: could not check whether a started session got its prompt');
   }
 }
 
@@ -343,6 +387,8 @@ export interface StartedSessionState {
   attachable: boolean;
   permissionMode: string | null;
   notification: { type: NotificationType; at: string } | null;
+  /** `pending` until the grace period ends; `not-received` is a session that will never start on its own. */
+  prompt: PromptDelivery;
 }
 
 export function listAgentSessions(deps: AgentSessionDeps, callerId: string): StartedSessionState[] {
@@ -364,6 +410,7 @@ export function listAgentSessions(deps: AgentSessionDeps, callerId: string): Sta
         // Rows started before `manual` existed are stored as `default`.
         permissionMode: s.permissionMode ? (MODE_ALIASES[s.permissionMode] ?? s.permissionMode) : null,
         notification: n ? { type: n.type, at: n.timestamp.toISOString() } : null,
+        prompt: deps.promptDelivery(s),
       };
     });
 }

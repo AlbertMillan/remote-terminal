@@ -178,6 +178,15 @@ export interface LandNotificationPayload {
   timestamp: string;
 }
 
+/** A started session's prompt never reached its agent (server: PromptMissingNotificationPayload). */
+export interface PromptMissingNotificationPayload {
+  kind: 'prompt-missing';
+  sessionId: string;
+  name: string;
+  detail: string;
+  timestamp: string;
+}
+
 export type ServerMessage =
   | { type: 'auth.success'; id?: string; payload: AuthSuccessPayload }
   | { type: 'auth.failure'; id?: string; payload: AuthFailurePayload }
@@ -203,7 +212,7 @@ export type ServerMessage =
   | { type: 'category.list'; id?: string; payload: CategoryListPayload }
   | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
-  | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload }
+  | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload }
   | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };

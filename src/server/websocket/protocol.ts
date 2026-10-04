@@ -326,6 +326,19 @@ export interface LandNotificationPayload {
   timestamp: string;
 }
 
+/**
+ * A started session's prompt never reached its agent (agent/prompt-delivery.ts).
+ * Sent once, a grace period after the start; the same `notification` message,
+ * told apart by `kind`, because a session badge would read as "needs input".
+ */
+export interface PromptMissingNotificationPayload {
+  kind: 'prompt-missing';
+  sessionId: string;
+  name: string;
+  detail: string;
+  timestamp: string;
+}
+
 // Helper functions
 export function createMessage(type: ServerMessageType, payload?: unknown, id?: string): string {
   const message: ServerMessage = { type };

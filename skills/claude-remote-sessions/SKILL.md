@@ -69,6 +69,18 @@ last `needs-input` or `completed`, with its time. There is no "working" state:
 no notification means it has not stopped since it started, or the user has
 opened it since.
 
+Each entry also has `prompt`, whether the session's agent actually got the
+prompt you passed:
+
+- `received`: it did.
+- `pending`: within about 90 seconds of the start; Claude may still be loading.
+- `not-received`: it never will on its own (`prompt.detail` says what the
+  server saw). The session sits idle and looks just like a working one.
+
+About two minutes after starting sessions, run `list`. For any `not-received`
+session, tell the user, and if you can message it (it shows in `ListAgents`),
+send it the task yourself. The user also gets a warning in claude-remote.
+
 ## Landing this session's track
 
 `land` merges the track this session is working in into its base branch,

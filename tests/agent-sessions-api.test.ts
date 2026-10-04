@@ -28,6 +28,7 @@ vi.mock('../src/server/config.js', async () => {
 });
 
 import {
+  checkPromptArrived,
   registerAgentSessionRoutes,
   MAX_PROMPT_BYTES,
   type AgentSessionDeps,
@@ -106,6 +107,9 @@ function makeDeps(): AgentSessionDeps {
     lastNotification: () => undefined,
     broadcastAdded: vi.fn(),
     maxPerParent: () => 2,
+    promptDelivery: vi.fn(() => ({ state: 'pending' as const })),
+    notifyPromptMissing: vi.fn(),
+    schedule: vi.fn(),
   };
 }
 
@@ -384,8 +388,48 @@ describe('list', () => {
     const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions).toEqual([
-      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', notification: { type: 'needs-input', at: at.toISOString() } },
-      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, notification: null },
+      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
+      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, notification: null, prompt: { state: 'pending' } },
     ]);
+  });
+});
+
+describe('did the prompt arrive', () => {
+  it('schedules one check after the grace period for each start', async () => {
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(200);
+    const schedule = deps.schedule as ReturnType<typeof vi.fn>;
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(schedule.mock.calls[0][1]).toBe(90_000);
+  });
+
+  it('notifies once the check finds the prompt never arrived', async () => {
+    const id = (await start(GOOD)).json().sessionId;
+    deps.promptDelivery = vi.fn(() => ({ state: 'not-received' as const, detail: 'Claude started, but the prompt never reached it' }));
+    (deps.schedule as ReturnType<typeof vi.fn>).mock.calls[0][0]();
+    expect(deps.notifyPromptMissing).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'prompt-missing', sessionId: id, name: 'Split view', detail: 'Claude started, but the prompt never reached it' })
+    );
+  });
+
+  it('stays quiet when the prompt arrived, or the session is gone or exited', () => {
+    rows.set('c1', row('c1', { spawnedBy: MAIN_ID, cwd: WORKTREE }));
+    deps.promptDelivery = vi.fn(() => ({ state: 'received' as const }));
+    checkPromptArrived(deps, 'c1');
+
+    deps.promptDelivery = vi.fn(() => ({ state: 'not-received' as const }));
+    checkPromptArrived(deps, 'deleted');
+    rows.set('c2', row('c2', { spawnedBy: MAIN_ID, cwd: WORKTREE, status: 'terminated' }));
+    checkPromptArrived(deps, 'c2');
+
+    expect(deps.notifyPromptMissing).not.toHaveBeenCalled();
+  });
+
+  it('never throws from the timer, even when the check does', () => {
+    rows.set('c1', row('c1', { spawnedBy: MAIN_ID, cwd: WORKTREE }));
+    deps.promptDelivery = vi.fn(() => {
+      throw new Error('disk gone');
+    });
+    expect(() => checkPromptArrived(deps, 'c1')).not.toThrow();
   });
 });

@@ -1,7 +1,13 @@
 import type { WebSocket } from 'ws';
 import WebSocketModule from 'ws';
 export const WS_OPEN = WebSocketModule.OPEN;
-import { createMessage, type SessionInfo, type CategoryInfo, type LandNotificationPayload } from './protocol.js';
+import {
+  createMessage,
+  type SessionInfo,
+  type CategoryInfo,
+  type LandNotificationPayload,
+  type PromptMissingNotificationPayload,
+} from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
@@ -125,6 +131,15 @@ export function broadcastSessionAdded(session: SessionInfo): void {
  * this is the only place the result of that Land is ever reported.
  */
 export function broadcastLandResult(payload: LandNotificationPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('notification', payload));
+    }
+  }
+}
+
+/** A started session's prompt never arrived. Unfiltered, like a Land result: nothing else says so. */
+export function broadcastPromptMissing(payload: PromptMissingNotificationPayload): void {
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage('notification', payload));
