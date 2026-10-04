@@ -60,10 +60,12 @@ const MODE_ALIASES: Record<string, PermissionMode> = { default: 'manual' };
  * renamed its default (it lists `manual`, no longer `default`), and leaving the
  * flag out gets the default under either name. `--add-dir` is the session's own
  * prompt folder only, so it reads its prompt without asking and no other's.
+ * `--` before the prompt is required: `--add-dir` takes several directories,
+ * and without it the prompt is read as one more, so the session starts idle.
  */
 export function startCommand(mode: PermissionMode, promptDir: string, promptPath: string): string {
   const flag = mode === 'manual' ? '' : `--permission-mode ${mode} `;
-  return `claude ${flag}--add-dir "${promptDir}" "Read ${promptPath} and follow it."`;
+  return `claude ${flag}--add-dir "${promptDir}" -- "Read ${promptPath} and follow it."`;
 }
 
 export const MAX_PROMPT_BYTES = 100 * 1024;

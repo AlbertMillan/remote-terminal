@@ -85,9 +85,11 @@ track already under way.
    the next stage's `commitAll` sweeps it into the branch. The folder is the session's own
    and is deleted with the session row.
 7. `injectCommand()` types
-   `claude [--permission-mode <mode>] --add-dir "<dir>" "Read <dir>/prompt.md and follow it."`
+   `claude [--permission-mode <mode>] --add-dir "<dir>" -- "Read <dir>/prompt.md and follow it."`
    once the shell is ready. `--add-dir` names that session's prompt folder only, so it reads
-   its prompt without asking and can't read another session's. The paths use forward slashes
+   its prompt without asking and can't read another session's. The `--` is required:
+   `--add-dir` takes several directories, and without it the prompt is read as one more, so
+   the session starts idle with no prompt and nothing says so (every start until 2026-10-04). The paths use forward slashes
    so no shell reads an escape, and a path holding `"`, `%`, `$` or a backtick is refused (the
    session is removed) rather than typed into a command that would silently read another file.
 8. Broadcast `session.added`; return `{ sessionId, name, worktreePath, install }`.
