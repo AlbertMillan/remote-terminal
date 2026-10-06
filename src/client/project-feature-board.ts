@@ -322,6 +322,7 @@ export function renderFeatureRow(
           ? `<span class="pw-priority p${f.priority}" title="Priority">P${f.priority}</span>`
           : ''
       }
+      <span class="pw-feature-id" title="Feature id">${escapeHtml(f.id)}</span>
       <span class="phase-title pw-title" data-cwd="${cwd}" data-id="${id}"
             title="Click to rename">${escapeHtml(f.title)}</span>
       ${

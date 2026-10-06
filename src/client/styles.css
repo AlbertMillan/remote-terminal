@@ -2860,6 +2860,14 @@ body {
 .pw-priority.p1 { color: var(--danger); }
 .pw-priority.p2 { color: var(--warning); }
 
+.pw-feature-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  user-select: all;
+}
+
 .pw-title { cursor: text; }
 .pw-title:hover { text-decoration: underline dotted; }
 
