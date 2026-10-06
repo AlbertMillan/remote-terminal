@@ -111,4 +111,25 @@ describe('decodeProjectSlugs', () => {
       'C:\\Users\\Albert\\NodeProjects\\ideas\\atlas',
     ]);
   });
+
+  it('lists each directory once across slugs', () => {
+    const listed: string[] = [];
+    const counting = (dir: string) => {
+      listed.push(dir);
+      return FS(dir);
+    };
+    decodeProjectSlugs(
+      ['C--Users-Albert-NodeProjects-claude-remote', 'C--Users-Albert-NodeProjects-ideas-atlas'],
+      counting
+    );
+    expect(listed.length).toBe(new Set(listed).size);
+  });
+
+  it('takes the first listed directory when two normalize alike', () => {
+    const fs = fakeFs({
+      'C:\\': ['Users'],
+      'C:\\Users': ['my_proj', 'my-proj', 'my proj'],
+    });
+    expect(decodeProjectSlugs(['C--Users-my-proj'], fs)).toEqual(['C:\\Users\\my_proj']);
+  });
 });

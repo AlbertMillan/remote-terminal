@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from 'fs';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { sessionsInWorktree } from '../utils/paths.js';
@@ -112,6 +112,23 @@ function isJobWorktree(path: string): boolean {
 }
 
 /**
+ * Claude Code's scratchpads are not projects either.
+ *
+ * Each session gets a scratch folder under `<tmp>/claude/<project slug>/<session
+ * id>/scratchpad`; a command run there leaves a transcript directory, so each
+ * would otherwise appear on the board under its session id.
+ */
+function scratchpadRoot(): string {
+  return join(tmpdir(), 'claude');
+}
+
+function isScratchpad(path: string): boolean {
+  const root = pathKey(scratchpadRoot());
+  const key = pathKey(path);
+  return key === root || key.startsWith(root + SEP);
+}
+
+/**
  * A project's in-progress track copies by track name. Never throws: the board
  * must still render when the database is unavailable.
  */
@@ -198,7 +215,7 @@ function rollUpBoard(discovered: string[], registry: Registry) {
     ...discovered,
     ...registry.projects.map((p) => p.cwd),
     ...recoverCwdsFromSlugs(),
-  ]).filter((cwd) => !isJobWorktree(cwd));
+  ]).filter((cwd) => !isJobWorktree(cwd) && !isScratchpad(cwd));
   return rollUpProjects(cwds, registry);
 }
 

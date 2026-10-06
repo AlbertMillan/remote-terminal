@@ -55,6 +55,34 @@ function splitSlug(slug: string): { root: string; tokens: string[] } | null {
 }
 
 /**
+ * A directory's children keyed by normalizeSegment(), keeping the first name in
+ * listing order for each key: the match the old `entries.find()` picked.
+ */
+type DirIndex = (dir: string) => Map<string, string>;
+
+/**
+ * One index shared by every slug in a pass. Normalizing is the cost: a slug
+ * walk tries up to one candidate per token run against every child, and Temp
+ * alone holds thousands of directories, so normalizing per comparison ran
+ * millions of regexes. Here each child is normalized once per pass.
+ */
+function indexer(lister: DirLister): DirIndex {
+  const cache = new Map<string, Map<string, string>>();
+  return (dir) => {
+    let index = cache.get(dir);
+    if (!index) {
+      index = new Map();
+      for (const name of lister(dir)) {
+        const key = normalizeSegment(name);
+        if (!index.has(key)) index.set(key, name);
+      }
+      cache.set(dir, index);
+    }
+    return index;
+  };
+}
+
+/**
  * Decode a slug to an existing absolute path, or null when no directory on disk
  * matches it (the project was moved or deleted).
  *
@@ -62,38 +90,30 @@ function splitSlug(slug: string): { root: string; tokens: string[] } | null {
  * the real filesystem.
  */
 export function decodeProjectSlug(slug: string, lister: DirLister = defaultLister): string | null {
+  return decodeWith(slug, indexer(lister));
+}
+
+function decodeWith(slug: string, index: DirIndex): string | null {
   const split = splitSlug(slug);
   if (!split) return null;
   const { root, tokens } = split;
-
-  // Cache listings: one slug walk revisits the same parent directories often.
-  const cache = new Map<string, string[]>();
-  const list = (dir: string): string[] => {
-    let entries = cache.get(dir);
-    if (!entries) {
-      entries = lister(dir);
-      cache.set(dir, entries);
-    }
-    return entries;
-  };
 
   // Bound the search so a pathological slug can't fan out indefinitely.
   let steps = 0;
   const MAX_STEPS = 10000;
 
-  const walk = (index: number, current: string): string | null => {
-    if (index >= tokens.length) return current;
+  const walk = (i: number, current: string): string | null => {
+    if (i >= tokens.length) return current;
     if (++steps > MAX_STEPS) return null;
 
-    const entries = list(current);
+    const children = index(current);
     // Try the longest token run first: a directory whose own name contains a
     // hyphen ("rent-seeker") should win over splitting it into two levels that
     // happen to both exist.
-    for (let take = tokens.length - index; take >= 1; take--) {
-      const candidate = normalizeSegment(tokens.slice(index, index + take).join('-'));
-      const match = entries.find((e) => normalizeSegment(e) === candidate);
+    for (let take = tokens.length - i; take >= 1; take--) {
+      const match = children.get(normalizeSegment(tokens.slice(i, i + take).join('-')));
       if (!match) continue;
-      const next = walk(index + take, join(current, match));
+      const next = walk(i + take, join(current, match));
       if (next) return next;
     }
     return null;
@@ -104,12 +124,14 @@ export function decodeProjectSlug(slug: string, lister: DirLister = defaultListe
 
 /**
  * Decode every slug under a ~/.claude/projects directory, dropping the ones
- * whose directory no longer exists on disk.
+ * whose directory no longer exists on disk. Listings are shared across the
+ * slugs, which mostly walk the same parents.
  */
 export function decodeProjectSlugs(slugs: string[], lister: DirLister = defaultLister): string[] {
+  const index = indexer(lister);
   const out: string[] = [];
   for (const slug of slugs) {
-    const decoded = decodeProjectSlug(slug, lister);
+    const decoded = decodeWith(slug, index);
     if (decoded) out.push(decoded);
   }
   return out;
