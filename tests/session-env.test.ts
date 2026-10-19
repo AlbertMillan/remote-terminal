@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { existsSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -129,7 +129,6 @@ beforeEach(() => {
   manager = createSessionManager();
 });
 
-afterAll(() => rmSync(dataDir, { recursive: true, force: true }));
 
 function lastEnv(): Record<string, string> {
   const calls = createPty.mock.calls as unknown as [{ env: Record<string, string> }][];

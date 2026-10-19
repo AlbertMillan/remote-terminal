@@ -2,10 +2,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import pino from 'pino';
 
 // The logger picks its destination when the module loads, so each case sets the env,
 // points homedir() at a temp folder, and imports a fresh copy.
 const dirs: string[] = [];
+const loggers: pino.Logger[] = [];
 const saved = { ...process.env };
 const tmp = () => {
   const d = mkdtempSync(join(tmpdir(), 'cr-logger-'));
@@ -16,10 +18,26 @@ const tmp = () => {
 async function loadLogger(home: string) {
   vi.resetModules();
   vi.doMock('os', async (orig) => ({ ...(await orig<typeof import('os')>()), homedir: () => home }));
-  return import('../src/server/utils/logger.js');
+  const mod = await import('../src/server/utils/logger.js');
+  loggers.push(mod.logger);
+  return mod;
 }
 
-afterEach(() => {
+// A non-test logger's rotating file stream opens asynchronously, so it re-creates its
+// logs folder after a plain rmSync; end it (which waits for the open) before removing.
+async function closeFileStreams(logger: pino.Logger): Promise<void> {
+  const multi = (logger as unknown as Record<symbol, { streams?: { stream: NodeJS.WritableStream }[] }>)[pino.symbols.streamSym];
+  for (const { stream } of multi?.streams ?? []) {
+    if (stream === process.stdout) continue;
+    await new Promise<void>((done) => {
+      stream.once('close', () => done());
+      stream.end();
+    });
+  }
+}
+
+afterEach(async () => {
+  for (const logger of loggers.splice(0)) await closeFileStreams(logger);
   process.env = { ...saved };
   vi.doUnmock('os');
   vi.resetModules();

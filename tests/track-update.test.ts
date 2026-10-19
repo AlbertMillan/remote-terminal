@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -76,6 +76,10 @@ beforeEach(() => {
   writeFileSync(join(repo, 'shared.ts'), 'one\n');
   git(repo, 'add', '.');
   git(repo, 'commit', '-q', '-m', 'plan');
+});
+
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
 });
 
 const project = () => ({ cwd: repo });

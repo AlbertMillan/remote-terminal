@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, onTestFinished, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -100,6 +100,10 @@ beforeEach(() => {
   git(repo, 'commit', '-q', '-m', 'plan');
 });
 
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
+});
+
 describe('worktreeOwner', () => {
   it('resolves a track worktree, and a folder inside it, to the project from the record', async () => {
     const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
@@ -116,7 +120,9 @@ describe('worktreeOwner', () => {
 
   it('is null for the main checkout and for an unrecorded folder', () => {
     expect(worktreeOwner(repo)).toBeNull();
-    expect(worktreeOwner(mkdtempSync(join(tmpdir(), 'cr-slog-other-')))).toBeNull();
+    const other = mkdtempSync(join(tmpdir(), 'cr-slog-other-'));
+    onTestFinished(() => rmSync(other, { recursive: true, force: true }));
+    expect(worktreeOwner(other)).toBeNull();
   });
 });
 

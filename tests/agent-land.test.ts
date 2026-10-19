@@ -122,6 +122,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close();
+  rmSync(repo, { recursive: true, force: true });
 });
 
 /** A started session (spawned by an orchestrator) in the track's worktree, as the usual caller is. */

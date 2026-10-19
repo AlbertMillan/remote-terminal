@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { existsSync, readFileSync, rmSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -127,7 +127,6 @@ afterEach(async () => {
   await app.close();
 });
 
-afterAll(() => rmSync(dataDir, { recursive: true, force: true }));
 
 function start(body: unknown, opts: { token?: string | null; remoteAddress?: string; headers?: Record<string, string> } = {}) {
   const token = opts.token === undefined ? mainToken : opts.token;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { makeTmpDataDir } from './helpers/tmp-data-dir.js';
 
@@ -68,7 +68,6 @@ beforeAll(() => {
 
 afterAll(() => {
   closeDatabase();
-  rmSync(dataDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {

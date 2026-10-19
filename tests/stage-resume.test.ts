@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -43,6 +43,7 @@ const { RunAbortedError } = await import('../src/server/agent/claude-run.js');
 
 function worktree(): string {
   const dir = mkdtempSync(join(tmpdir(), 'cr-resume-'));
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'project'), { recursive: true });
   // A spec must exist when the stage finishes or it throws by contract.
   writeFileSync(join(dir, 'project', 'a-feature.md'), '# Spec\n\n## Goal\nDone.\n');

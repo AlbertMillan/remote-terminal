@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { appendFileSync, readFileSync, rmSync } from 'fs';
+import { appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { makeTmpDataDir } from './helpers/tmp-data-dir.js';
 
@@ -13,7 +13,6 @@ const SCRIPT = join(__dirname, '..', 'scripts', 'install-skill.mjs');
 const SOURCE = join(__dirname, '..', 'skills', 'claude-remote-sessions', 'SKILL.md');
 
 let dest: string;
-afterEach(() => rmSync(dest, { recursive: true, force: true }));
 
 function install(): string {
   return execFileSync(process.execPath, [SCRIPT, '--dest', dest], { encoding: 'utf-8' });

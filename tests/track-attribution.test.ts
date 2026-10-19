@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -134,6 +134,10 @@ beforeEach(() => {
 
   transcripts = join(FAKE_HOME, '.claude', 'projects', resolve(repo).replace(/[^a-zA-Z0-9]/g, '-'));
   mkdirSync(transcripts, { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
 });
 
 describe('guessTrackWork', () => {

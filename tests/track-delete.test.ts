@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -121,6 +121,10 @@ beforeEach(() => {
   writeFileSync(join(repo, 'shared.ts'), 'line 1\nline 2\nline 3\n');
   git(repo, 'add', '.');
   git(repo, 'commit', '-q', '-m', 'plan');
+});
+
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
 });
 
 describe('a track that was branched but never landed', () => {

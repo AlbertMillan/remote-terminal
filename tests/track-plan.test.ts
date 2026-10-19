@@ -90,6 +90,10 @@ beforeEach(() => {
   git(repo, 'commit', '-q', '-m', 'plan');
 });
 
+afterEach(() => {
+  rmSync(repo, { recursive: true, force: true });
+});
+
 describe('branch creation', () => {
   it('leaves main clean, with one commit that removes the section and its own spec', async () => {
     const before = git(repo, 'rev-parse', 'HEAD');
