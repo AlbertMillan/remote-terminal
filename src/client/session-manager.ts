@@ -678,6 +678,10 @@ class SessionManager {
       case 'jobs.summary':
         this.jobOverlay.update(message.payload);
         break;
+      case 'projects.changed':
+        // A session changed a track outside the board (an Update from main).
+        void this.workspace.refresh();
+        break;
       case 'session.error':
         this.handleSessionError(message.payload);
         break;

@@ -23,15 +23,14 @@ import {
   getActiveTrackBranch,
   moveIntoBranch,
   readSpecForTrack,
-  updateTrackFromMain,
 } from './track-branches.js';
 import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
-import { landAndBuild } from './track-land.js';
+import { defaultUpdateDeps, landAndBuild, updateAndInstall } from './track-land.js';
 import { installDependencies, needsInstall } from './project-deps.js';
 import { sessionManager } from '../sessions/manager.js';
-import { removeWorktreeSessions } from '../websocket/connections.js';
+import { broadcastProjectsChanged, removeWorktreeSessions } from '../websocket/connections.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
 import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
@@ -421,7 +420,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
 
   // Merge the base into a branched track's worktree, putting its plan back
   // (main holds the commit that deleted it: docs/track-branches.md, "Update
-  // from main"). Under the try lock, like Land.
+  // from main"). Under the try lock, like Land; a reinstall after it.
   app.post<{ Body?: { cwd?: string; track?: string } }>(
     '/api/projects/track/update',
     async (request, reply) => {
@@ -432,9 +431,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
       return withErrors(reply, () =>
-        withProjectLock(project.cwd, `updating "${body.track}" from main`, () =>
-          updateTrackFromMain(project, body.track as string)
-        )
+        updateAndInstall(project, body.track as string, { ...defaultUpdateDeps, announce: broadcastProjectsChanged })
       );
     }
   );

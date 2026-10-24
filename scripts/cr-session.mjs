@@ -1,6 +1,7 @@
 /**
- * cr-session — start and list prompted sessions, and land this session's own
- * track, from inside a claude-remote session (docs/session-orchestration.md).
+ * cr-session — start and list prompted sessions, and land or update this
+ * session's own track, from inside a claude-remote session
+ * (docs/session-orchestration.md).
  * Run by an agent through the Bash tool, via the path the server puts in
  * CLAUDE_REMOTE_CLI:
  *
@@ -9,10 +10,13 @@
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
  *   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
+ *   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
  *
  * `land` with no track lands the track whose worktree this session is in, and
- * closes this session to do it. `--track` names a track a session this one
- * started works in; the server refuses any other.
+ * closes this session to do it. `update` merges the base branch into that
+ * track the way the board's Update from main does, keeping its plan, and
+ * reinstalls dependencies when the lockfile changed. For both, `--track` names
+ * a track a session this one started works in; the server refuses any other.
  *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
@@ -27,7 +31,8 @@ import { pathToFileURL } from 'node:url';
 const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
-  node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]`;
+  node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
+  node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]`;
 
 // `auto` is the server's default. `default` is the old name for `manual`, still
 // sent by a skill copy installed before the rename; the server maps it.
@@ -113,11 +118,11 @@ export async function main({
   } else if (command === 'list') {
     if (Object.keys(flags).length > 0) return fail(`list takes no flags\n${USAGE}`, 2);
     request = { method: 'GET', headers };
-  } else if (command === 'land') {
+  } else if (command === 'land' || command === 'update') {
     // No track: the server takes it from this session's worktree. A named one
     // must be a track this session or one it started works in; the server checks.
-    if (Object.keys(flags).some((f) => f !== 'track')) return fail(`land takes only --track\n${USAGE}`, 2);
-    path = '/api/agent/land';
+    if (Object.keys(flags).some((f) => f !== 'track')) return fail(`${command} takes only --track\n${USAGE}`, 2);
+    path = `/api/agent/${command}`;
     if (flags.track === undefined) {
       request = { method: 'POST', headers };
     } else {
@@ -135,7 +140,7 @@ export async function main({
   let res;
   try {
     // No timeout: start waits for the track's branch and its dependency
-    // install, which can take minutes.
+    // install, and update for a reinstall, either of which can take minutes.
     res = await fetchImpl(`${url.replace(/\/+$/, '')}${path}`, request);
   } catch (error) {
     const cause = error?.cause?.code || error?.cause?.message || error?.message || String(error);
@@ -166,6 +171,15 @@ export async function main({
         : "Land accepted; the track's sessions will close. The result arrives as a notification in claude-remote.\n"
     );
     return 0;
+  }
+  if (command === 'update') {
+    // The server's detail says what merged, any reinstall, and what to do next.
+    try {
+      out(`${JSON.parse(text).detail}\n`);
+      return 0;
+    } catch {
+      /* not JSON: print it as it came */
+    }
   }
   out(text.endsWith('\n') ? text : `${text}\n`);
   return 0;

@@ -1,6 +1,6 @@
 ---
 name: claude-remote-sessions
-description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, or asks to land a track.
+description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, update a track from main (merge main in) and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, asks to pull main into a track (update from main, catch up, merge main in), or asks to land a track.
 ---
 
 # Start sessions on planned tracks
@@ -106,8 +106,41 @@ node "$CLAUDE_REMOTE_CLI" land
   seconds, then lands, and the result reaches the user as a notification in
   claude-remote.
 - If it would conflict, don't run a plain `git merge` of the base branch here:
-  it deletes this track's specs. Tell the user to use Update from main on the
-  track instead.
+  it deletes this track's specs. Update from main instead (below), or tell
+  the user.
+
+## Updating this session's track from main
+
+`update` merges the base branch (usually `main`) into the track this session is
+working in, exactly as the board's Update from main button does. The session
+stays open.
+
+- **Never run `git merge main`, `git pull` or a rebase onto main in a track
+  worktree yourself.** Main holds the commit that took this track's plan off
+  it, so a plain merge deletes the track's `PROJECT.md` section and specs.
+  `update` puts them back.
+- Use it when the user asks this session to pull main in (update, catch up,
+  merge main in), or when a `land` refused because the track would conflict
+  with main and the conflict is now fixed on one side.
+- First commit your work, staging files **by name**, and check that
+  `git status` is clean. Uncommitted code makes the update refuse.
+
+```bash
+node "$CLAUDE_REMOTE_CLI" update
+```
+
+- It prints what was merged. If main changed the lockfile, it also reinstalls
+  the worktree's dependencies first, which can take several minutes — **pass
+  `timeout: 600000` on the Bash call**. If the reinstall failed, the output
+  says so and the merge is kept: tell the user, and stop anything running in
+  the worktree (a dev server, vitest) before installing again.
+- Then run the tests: the track now has main's code too.
+- A conflict refusal names the files and changes nothing. Make those files
+  agree on the track branch (commit the fix here) and update again, or tell
+  the user. Never resolve it by merging main by hand.
+- `update --track "<name>"` updates a track a session you started works in.
+  Do it only when the user asks, as for `land --track`: it changes files under
+  that session while it may be working.
 
 ## Landing a track a session you started worked on
 

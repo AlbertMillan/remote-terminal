@@ -25,6 +25,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+const { updateAndInstall } = await import('../src/server/projects/track-land.js');
+type InstallResult = import('../src/server/projects/project-deps.js').InstallResult;
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 
 // Two specs: alpha.md is revised in some tests, alpha-notes.md never is —
@@ -323,7 +325,18 @@ describe('updateTrackFromMain', () => {
     const head = git(t.worktreePath, 'rev-parse', 'HEAD');
     const again = await tracks.updateTrackFromMain(project(), 'Alpha');
     expect(again.mergeSha).toBeNull();
+    expect(again.lockfileChanged).toBe(false);
     expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(head);
+  });
+
+  it('says whether the merge changed a lockfile', async () => {
+    commitFile(repo, 'package-lock.json', '{"v":1}\n', 'lockfile');
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'src/main.ts', 'x\n', 'code on main');
+    expect((await tracks.updateTrackFromMain(project(), 'Alpha')).lockfileChanged).toBe(false);
+
+    commitFile(repo, 'package-lock.json', '{"v":2}\n', 'main adds a package');
+    expect((await tracks.updateTrackFromMain(project(), 'Alpha')).lockfileChanged).toBe(true);
   });
 
   it('leaves a Land afterwards clean: the section goes back and every spec is intact on main', async () => {
@@ -348,5 +361,84 @@ describe('updateTrackFromMain', () => {
     expect(read(repo, 'project/alpha-notes.md')).toBe('# Alpha notes\n\nNever touched.\n');
     for (const f of ['src/a.ts', 'src/main.ts', 'src/later.ts']) expect(existsSync(join(repo, f))).toBe(true);
     expect(git(repo, 'status', '--porcelain')).toBe('');
+  });
+});
+
+describe('updateAndInstall', () => {
+
+  /** The fakes: what was installed where, and which projects were announced. */
+  function fakes(result: InstallResult | Error = { ran: true, ok: true, detail: 'dependencies installed (3s)' }) {
+    const installs: string[] = [];
+    const announced: string[] = [];
+    return {
+      installs,
+      announced,
+      deps: {
+        install: async (wt: string) => {
+          installs.push(wt);
+          if (result instanceof Error) throw result;
+          return result;
+        },
+        announce: (cwd: string) => announced.push(cwd),
+      },
+    };
+  }
+
+  it('reinstalls in the worktree when main changed the lockfile, and says so', async () => {
+    commitFile(repo, 'package-lock.json', '{"v":1}\n', 'lockfile');
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'package-lock.json', '{"v":2}\n', 'main adds a package');
+    const f = fakes();
+
+    const result = await updateAndInstall(project(), 'Alpha', f.deps);
+
+    expect(f.installs).toEqual([t.worktreePath]);
+    expect(result.install).toMatchObject({ ran: true, ok: true });
+    expect(result.detail).toContain('dependencies were reinstalled (dependencies installed (3s))');
+    expect(f.announced).toEqual([repo]);
+  });
+
+  it('installs nothing when the lockfile did not change', async () => {
+    commitFile(repo, 'package-lock.json', '{"v":1}\n', 'lockfile');
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'src/main.ts', 'x\n', 'code on main');
+    const f = fakes();
+
+    const result = await updateAndInstall(project(), 'Alpha', f.deps);
+
+    expect(result.mergeSha).not.toBeNull();
+    expect(f.installs).toEqual([]);
+    expect(result.install).toBeNull();
+    expect(result.detail).not.toContain('lockfile');
+  });
+
+  it('keeps the merge when the install fails, and says what to do', async () => {
+    commitFile(repo, 'package-lock.json', '{"v":1}\n', 'lockfile');
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'package-lock.json', '{"v":2}\n', 'main adds a package');
+    const f = fakes({ ran: true, ok: false, detail: 'npm ci failed: EBUSY' });
+
+    const result = await updateAndInstall(project(), 'Alpha', f.deps);
+
+    expect(result.mergeSha).toBe(git(t.worktreePath, 'rev-parse', 'HEAD'));
+    expect(read(t.worktreePath, 'package-lock.json')).toBe('{"v":2}\n');
+    expect(result.detail).toContain('reinstalling dependencies failed: npm ci failed: EBUSY. The merge is kept.');
+    expect(result.detail).toContain('dev server');
+  });
+
+  it('treats an install that throws as a failed one', async () => {
+    commitFile(repo, 'package-lock.json', '{"v":1}\n', 'lockfile');
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'package-lock.json', '{"v":2}\n', 'main adds a package');
+    const result = await updateAndInstall(project(), 'Alpha', fakes(new Error('spawn failed')).deps);
+    expect(result.install).toMatchObject({ ran: true, ok: false, detail: 'spawn failed' });
+  });
+
+  it('announces nothing when already up to date', async () => {
+    await tracks.ensureTrackBranch(project(), 'Alpha');
+    await tracks.updateTrackFromMain(project(), 'Alpha'); // takes in the move commit
+    const f = fakes();
+    expect((await updateAndInstall(project(), 'Alpha', f.deps)).mergeSha).toBeNull();
+    expect(f.announced).toEqual([]);
   });
 });

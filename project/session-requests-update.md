@@ -33,9 +33,9 @@ and specs off it, so the merge deletes the track's plan (or conflicts on a revis
    worktree and conflicts all refuse with `updateTrackFromMain`'s own messages (conflicts
    name the paths, and the merge is aborted). Share one helper between the two routes
    rather than calling `updateTrackFromMain` twice in different ways.
-4. **The board learns about it.** After a successful Update, broadcast the same refresh
-   the board uses after its own Update, so the heading's "N behind" clears without a
-   reload. No notification toast: the agent is alive and reports the result itself.
+4. **The board learns about it.** After a successful Update, the server broadcasts
+   `projects.changed` and open boards refetch, so the heading's "N behind" clears without
+   a reload. No notification toast: the agent is alive and reports the result itself.
 5. **The skill steers away from the trap.** A short "Updating from main" section:
    - use it when the user asks this session to pull main in, or before a `land` that
      refused because the track is behind with conflicts;
@@ -53,12 +53,14 @@ and specs off it, so the merge deletes the track's plan (or conflicts on a revis
 
 7. **An Update that changes the lockfile reinstalls, with nobody asking.** Today
    `needsInstall()` only checks that `node_modules` exists, so after main's lockfile comes
-   in the worktree keeps the old packages and tests fail with "Cannot find module". After
-   a successful merge, if the lockfile differs between the pre-merge HEAD and the merge
-   commit, `updateTrackFromMain` runs `installDependencies(worktree)` (frozen install,
-   one per folder, `isInstalling` guards Land/Delete meanwhile). The orchestrator or
-   session never has to notice or run `npm ci` itself. This lives in
-   `updateTrackFromMain`, so the board's button gets it too.
+   in the worktree keeps the old packages and tests fail with "Cannot find module".
+   `updateTrackFromMain` reports `lockfileChanged` (the lockfile differs between the
+   pre-merge HEAD and the merge commit), and `updateAndInstall`, which both routes call,
+   then runs `installDependencies(worktree, …, { refresh: true })` (frozen install, one per
+   folder, `isInstalling` guards Land/Delete meanwhile). The orchestrator or session never
+   has to notice or run `npm ci` itself, and the board's button gets it too.
+   - The install runs **after** the project lock is released, as Land's build does:
+     holding the try lock for minutes would refuse every Land, Delete and job merge.
    - The reply waits for the install, and `detail` says what happened ("installed
      dependencies: the lockfile changed").
    - The merge stays committed if the install fails. `detail` then names the failure
@@ -73,19 +75,18 @@ and specs off it, so the merge deletes the track's plan (or conflicts on a revis
 - **Other merges into a track branch** (a job merging in, `mergeCwd`) can change the
   lockfile too. Same check there, or a lockfile-hash stamp that `needsInstall()` compares
   (covers every path, but installs only at the next session/job open)? Follow-up.
-- **Should `land` suggest it?** When Land's preflight refuses because the branch is behind
-  with conflicts, its message could say "update from main first". Cheap, but Update would
-  refuse on the same conflict, so it only helps when the conflict is resolvable on the
-  track side.
+- ~~Should `land` suggest it?~~ It already does: `landPreflightForSession`'s conflict
+  refusal says to use Update from main once the files agree.
 
 ## Planned changes
 
 - `src/server/agent/sessions-api.ts`: `POST /api/agent/update` behind `authenticate()`;
   `landableTrack` generalised for both routes.
-- `src/server/projects/track-branches.ts`: in `updateTrackFromMain`, the lockfile check
-  and install after the merge commit (decision 7).
-- `src/server/projects/routes.ts`: the lock + `updateTrackFromMain` + refresh as one helper
-  that both routes call.
+- `src/server/projects/track-branches.ts`: `updateTrackFromMain` reports
+  `lockfileChanged` (decision 7).
+- `src/server/projects/track-land.ts`: `updateAndInstall`, the lock + update + reinstall +
+  announce that both routes call. `project-deps.ts`: `LOCKFILES` and `{ refresh }`.
+- `src/server/websocket/*`, `src/client/session-manager.ts`: `projects.changed`.
 - `scripts/cr-session.mjs`: `update [--track "<name>"]`, printing `detail`.
 - `skills/claude-remote-sessions/SKILL.md`: the section (decision 5) and the description.
 - `docs/session-orchestration.md` and `docs/track-branches.md`: the route.

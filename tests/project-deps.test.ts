@@ -81,6 +81,23 @@ describe('installDependencies', () => {
     return first.then(() => expect(isInstalling(cwd)).toBe(false));
   });
 
+  it('installs over an existing node_modules only when asked to refresh', async () => {
+    const files = { 'package.json': '{"name":"broken","version":"1.0.0"}', 'package-lock.json': '{ not json' };
+    const kept = projectWith(files);
+    mkdirSync(join(kept, 'node_modules'));
+    expect(await installDependencies(kept)).toMatchObject({ ran: false, ok: true });
+    expect(existsSync(join(kept, 'node_modules'))).toBe(true);
+
+    const refreshed = projectWith(files);
+    mkdirSync(join(refreshed, 'node_modules'));
+    expect(await installDependencies(refreshed, undefined, { refresh: true })).toMatchObject({ ran: true, ok: false });
+
+    // Still nothing to install without a lockfile.
+    const unlocked = projectWith({});
+    mkdirSync(join(unlocked, 'node_modules'));
+    expect(await installDependencies(unlocked, undefined, { refresh: true })).toMatchObject({ ran: false, ok: true });
+  });
+
   it('kills the install when aborted', async () => {
     const cwd = projectWith({
       'package.json': '{"name":"broken","version":"1.0.0"}',

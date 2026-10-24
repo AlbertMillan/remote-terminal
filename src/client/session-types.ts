@@ -214,6 +214,7 @@ export type ServerMessage =
   | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload }
   | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
+  | { type: 'projects.changed'; id?: string; payload: { projectCwd: string } }
   | { type: 'error'; id?: string; payload: ErrorPayload }
   | { type: 'pong'; id?: string; payload?: undefined };
 

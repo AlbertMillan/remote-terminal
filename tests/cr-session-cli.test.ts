@@ -156,6 +156,47 @@ describe('land', () => {
   });
 });
 
+describe('update', () => {
+  it("POSTs to the update route with the token and no body, and prints the server's detail", async () => {
+    const detail = 'Merged 2 commits from main into the track. Run the tests in the track’s session.';
+    const fetchImpl = okFetch({ track: 'Split view', mergeSha: 'abc', install: null, detail });
+    const res = await run({ argv: ['update'], stdin: { isTTY: true }, fetchImpl });
+    expect(res.code).toBe(0);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:4399/api/agent/update');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer t0ken');
+    expect(init.body).toBeUndefined();
+    expect(res.stdout).toBe(`${detail}\n`);
+  });
+
+  it('sends --track in the body', async () => {
+    const fetchImpl = okFetch({ track: 'Split view', mergeSha: null, install: null, detail: 'Already up to date with main' });
+    const res = await run({ argv: ['update', '--track', 'Split view'], stdin: { isTTY: true }, fetchImpl });
+    expect(res.code).toBe(0);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body as string)).toEqual({ track: 'Split view' });
+    expect(res.stdout).toBe('Already up to date with main\n');
+  });
+
+  it("prints the server's refusal and exits non-zero", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'Merging main into the track conflicts in a.ts' }), { status: 409 })
+    );
+    const res = await run({ argv: ['update'], fetchImpl });
+    expect(res.code).toBe(1);
+    expect(JSON.parse(res.stderr).error).toBe('409: Merging main into the track conflicts in a.ts');
+  });
+
+  it('takes only --track, and not a blank one', async () => {
+    for (const argv of [['update', '--mode', 'auto'], ['update', '--track', ' ']]) {
+      const fetchImpl = okFetch();
+      const res = await run({ argv, fetchImpl });
+      expect(res.code).toBe(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('as a process, the way the agent runs it', () => {
   let server: Server | null = null;
   afterEach(() => new Promise<void>((r) => (server ? server.close(() => r()) : r())));

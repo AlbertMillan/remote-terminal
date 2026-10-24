@@ -28,6 +28,7 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+const { updateAndInstall } = await import('../src/server/projects/track-land.js');
 const api = await import('../src/server/agent/sessions-api.js');
 const { sessionEnv, sessionForToken } = await import('../src/server/sessions/session-env.js');
 type LandNotificationPayload = import('../src/server/websocket/protocol.js').LandNotificationPayload;
@@ -50,6 +51,8 @@ let landDeps: import('../src/server/agent/sessions-api.js').AgentLandDeps;
 let sessions: Map<string, Partial<SessionMetadata> & { id: string; cwd: string }>;
 let events: string[];
 let notified: LandNotificationPayload[];
+/** Projects an Update announced to open boards. */
+let announced: string[];
 /** Runs inside terminateSession: what is true at the moment a session is closed. */
 let onClose: (id: string) => void;
 
@@ -115,8 +118,22 @@ beforeEach(async () => {
       notified.push(payload);
     },
   };
+  announced = [];
+  // The real Update under the real lock; no reinstall (the repo has no
+  // lockfile) and no WebSocket.
+  const updateDeps: import('../src/server/agent/sessions-api.js').AgentUpdateDeps = {
+    getSession: landDeps.getSession,
+    listSessions: landDeps.listSessions,
+    trackBranchFor: landDeps.trackBranchFor,
+    projectForCwd: landDeps.projectForCwd,
+    update: (project, track) =>
+      updateAndInstall(project, track, {
+        install: async () => ({ ran: false, ok: true, detail: 'nothing to install' }),
+        announce: (cwd) => announced.push(cwd),
+      }),
+  };
   app = Fastify({ logger: false });
-  api.registerAgentSessionRoutes(app, { ...api.defaultDeps, sessionForToken }, landDeps);
+  api.registerAgentSessionRoutes(app, { ...api.defaultDeps, sessionForToken }, landDeps, updateDeps);
   await app.ready();
 });
 
@@ -364,6 +381,105 @@ describe('one Land at a time, and the edges', () => {
     await expect(api.requestLand(deps, CALLER)).rejects.toMatchObject({
       status: 400,
       message: expect.stringMatching(/not in a workspace project/),
+    });
+  });
+});
+
+/**
+ * A track's session asks to Update it from main (POST /api/agent/update):
+ * the same caller scoping as Land, one phase, the outcome as the reply.
+ */
+describe('update from main', () => {
+  async function update(opts: { as?: string; token?: string | null; remoteAddress?: string; track?: unknown } = {}) {
+    const token = opts.token === undefined ? sessionEnv(opts.as ?? CALLER).CLAUDE_REMOTE_TOKEN : opts.token;
+    return app.inject({
+      method: 'POST',
+      url: '/api/agent/update',
+      remoteAddress: opts.remoteAddress ?? '127.0.0.1',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      ...(opts.track === undefined ? {} : { payload: { track: opts.track } }),
+    });
+  }
+
+  it('refuses no token (401), a non-loopback address (403) and a session in main with no track (400)', async () => {
+    await trackSession();
+    expect((await update({ token: null })).statusCode).toBe(401);
+    expect((await update({ remoteAddress: '100.101.102.103' })).statusCode).toBe(403);
+    const res = await update({ as: ORCHESTRATOR });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/isn't in a track's worktree/);
+  });
+
+  it('merges main into the caller’s own track, keeps its plan and session, and tells the boards', async () => {
+    const t = await trackSession();
+    commitFile(repo, 'src/main.ts', 'export const m = 1;\n', 'code on main');
+
+    const res = await update();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ track: 'Alpha', mergeSha: git(t.worktreePath, 'rev-parse', 'HEAD'), install: null });
+    expect(res.json().detail).toContain('Merged 1 commit from main into the track.');
+    expect(git(t.worktreePath, 'log', '-1', '--format=%s')).toBe('Merge main into track: Alpha');
+    expect(readFileSync(join(t.worktreePath, 'PROJECT.md'), 'utf-8')).toContain('## Track: Alpha');
+    expect(existsSync(join(t.worktreePath, 'project', 'alpha.md'))).toBe(true);
+    expect(sessions.has(CALLER)).toBe(true);
+    expect(announced).toEqual([repo]);
+    expect(notified).toEqual([]);
+  });
+
+  it('lets the orchestrator update its child’s track, and refuses a track no session of its works in (403)', async () => {
+    const t = await trackSession();
+    await tracks.ensureTrackBranch({ cwd: repo }, 'Beta');
+    commitFile(repo, 'src/main.ts', 'x\n', 'code on main');
+
+    const denied = await update({ as: ORCHESTRATOR, track: 'Beta' });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error).toMatch(/it can update only those/);
+
+    const res = await update({ as: ORCHESTRATOR, track: 'Alpha' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mergeSha).toBe(git(t.worktreePath, 'rev-parse', 'HEAD'));
+  });
+
+  it('says so when already up to date, and announces nothing', async () => {
+    const t = await trackSession();
+    await tracks.updateTrackFromMain({ cwd: repo }, 'Alpha'); // takes in the move commit
+    const head = git(t.worktreePath, 'rev-parse', 'HEAD');
+
+    const res = await update();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mergeSha: null, detail: 'Already up to date with main' });
+    expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(head);
+    expect(announced).toEqual([]);
+  });
+
+  it('refuses uncommitted code and a conflict (409), naming the files and changing nothing', async () => {
+    const t = await trackSession();
+    writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
+    const dirty = await update();
+    expect(dirty.statusCode).toBe(409);
+    expect(dirty.json().error).toContain('scratch.ts');
+    rmSync(join(t.worktreePath, 'scratch.ts'));
+
+    commitFile(t.worktreePath, 'shared.ts', 'track side\n', 'track edit');
+    commitFile(repo, 'shared.ts', 'main side\n', 'main edit');
+    const head = git(t.worktreePath, 'rev-parse', 'HEAD');
+    const conflict = await update();
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error).toMatch(/conflicts in shared\.ts/);
+    expect(git(t.worktreePath, 'rev-parse', 'HEAD')).toBe(head);
+    expect(git(t.worktreePath, 'status', '--porcelain')).toBe('');
+    expect(announced).toEqual([]);
+  });
+
+  it('refuses at once while another track operation holds the project (409)', async () => {
+    await trackSession();
+    const { withProjectLock } = await import('../src/server/projects/project-lock.js');
+    await withProjectLock(repo, 'landing "Beta"', async () => {
+      const res = await update();
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toMatch(/busy \(landing "Beta"\)/);
     });
   });
 });

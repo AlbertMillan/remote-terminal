@@ -147,6 +147,19 @@ export function broadcastPromptMissing(payload: PromptMissingNotificationPayload
   }
 }
 
+/**
+ * A project's board changed outside any client's own request (a session's
+ * Update from main), so open boards fetch it again instead of showing the
+ * track as still behind.
+ */
+export function broadcastProjectsChanged(projectCwd: string): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('projects.changed', { projectCwd }));
+    }
+  }
+}
+
 export function broadcastSessionKept(sessionId: string, excludeClientId?: string): void {
   for (const conn of connections.values()) {
     if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {

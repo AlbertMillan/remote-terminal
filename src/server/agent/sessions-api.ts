@@ -14,6 +14,7 @@ import { getConfig } from '../config.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
 import {
   broadcastLandResult,
+  broadcastProjectsChanged,
   broadcastPromptMissing,
   broadcastSessionAdded,
   removeWorktreeSessions,
@@ -24,7 +25,13 @@ import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { findWorkspaceProject, listBoardCwds } from '../projects/workspace.js';
 import { readProjectPlan } from '../projects/project-plan.js';
 import { ensureTrackBranch } from '../projects/track-branches.js';
-import { landAndBuild, landPreflightForSession } from '../projects/track-land.js';
+import {
+  defaultUpdateDeps as defaultTrackUpdateDeps,
+  landAndBuild,
+  landPreflightForSession,
+  updateAndInstall,
+} from '../projects/track-land.js';
+import type { UpdateResult } from '../projects/track-branches.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import { listAllTrackBranches, trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
 import { isTrackError } from '../projects/routes.js';
@@ -39,8 +46,9 @@ const logger = createLogger('agent-sessions');
  *
  * A main session's agent calls these through scripts/cr-session.mjs to start a
  * prompted session on one of its planned tracks, and to list the ones it
- * started; a track's session calls the land route to land its own track, and
- * a parent to land a track one of its started sessions worked in.
+ * started; a track's session calls the land and update routes to land its own
+ * track or merge main into it, and a parent to do either for a track one of
+ * its started sessions worked in.
  * They start a shell and type into it, or close sessions, so unlike the rest of /api/*
  * they authenticate: the request must come from loopback AND carry the
  * calling session's in-memory token (sessionEnv()). Either alone is not
@@ -435,6 +443,9 @@ export interface AgentLandDeps {
   notify(payload: LandNotificationPayload): void;
 }
 
+/** What callerTrack needs to tell which track a caller may act on. */
+type CallerTrackDeps = Pick<AgentLandDeps, 'getSession' | 'listSessions' | 'trackBranchFor' | 'projectForCwd'>;
+
 export const defaultLandDeps: AgentLandDeps = {
   getSession: getSessionFromDb,
   listSessions: () => sessionManager.getSessionList(),
@@ -478,16 +489,17 @@ export function dropAcceptedLand(accepted: AcceptedLand): void {
 }
 
 /**
- * The unlanded track a caller may land: with no name, the one whose worktree
- * it is in; with a name, that same one or the track a session IT STARTED
- * works in (spawned_by), finished or not. A request can name a track, but
- * never reach one outside the caller's own family: its token says who asks.
+ * The unlanded track a caller may land or update: with no name, the one whose
+ * worktree it is in; with a name, that same one or the track a session IT
+ * STARTED works in (spawned_by), finished or not. A request can name a track,
+ * but never reach one outside the caller's own family: its token says who asks.
  */
-function landableTrack(
-  deps: AgentLandDeps,
+function callerTrack(
+  deps: CallerTrackDeps,
   caller: SessionMetadata,
   callerId: string,
-  named: string | null
+  named: string | null,
+  verb: 'land' | 'update'
 ): { branch: TrackBranch; closesCaller: boolean } {
   const own = deps.trackBranchFor(caller.cwd);
   if (named === null) {
@@ -505,17 +517,17 @@ function landableTrack(
   }
   throw new AgentSessionError(
     403,
-    `"${named}" is not a track this session or a session it started works in; it can land only those`
+    `"${named}" is not a track this session or a session it started works in; it can ${verb} only those`
   );
 }
 
-/**
- * Phase 1 of a session's Land, inside the request. Without a track in the
- * body, the track is the one whose worktree the caller is in; a parent names
- * a track one of its started sessions works in (landableTrack). Every refusal
- * reaches the agent while it is still running.
- */
-export async function requestLand(deps: AgentLandDeps, callerId: string, body: LandBody = {}): Promise<AcceptedLand> {
+/** The caller, the track its body names (or its own), and that track's project, or the refusal. */
+function resolveCallerTrack(
+  deps: CallerTrackDeps,
+  callerId: string,
+  body: LandBody,
+  verb: 'land' | 'update'
+): { project: RegistryProject; branch: TrackBranch; closesCaller: boolean } {
   const caller = deps.getSession(callerId);
   if (!caller) throw new AgentSessionError(401, 'The calling session no longer exists');
   let named: string | null = null;
@@ -523,11 +535,22 @@ export async function requestLand(deps: AgentLandDeps, callerId: string, body: L
     if (typeof body.track !== 'string' || !body.track.trim()) throw new AgentSessionError(400, 'track must be a non-empty string');
     named = body.track.trim();
   }
-  const { branch, closesCaller } = landableTrack(deps, caller, callerId, named);
+  const { branch, closesCaller } = callerTrack(deps, caller, callerId, named, verb);
   const project = deps.projectForCwd(caller.cwd);
   if (!project || pathKey(project.cwd) !== pathKey(branch.projectCwd)) {
     throw new AgentSessionError(400, `${caller.cwd} is not in a workspace project`);
   }
+  return { project, branch, closesCaller };
+}
+
+/**
+ * Phase 1 of a session's Land, inside the request. Without a track in the
+ * body, the track is the one whose worktree the caller is in; a parent names
+ * a track one of its started sessions works in (callerTrack). Every refusal
+ * reaches the agent while it is still running.
+ */
+export async function requestLand(deps: AgentLandDeps, callerId: string, body: LandBody = {}): Promise<AcceptedLand> {
+  const { project, branch, closesCaller } = resolveCallerTrack(deps, callerId, body, 'land');
   const key = landKey(project, branch.trackName);
   if (landsUnderWay.has(key)) {
     throw new AgentSessionError(409, `A Land of "${branch.trackName}" is already under way; its result comes as a notification`);
@@ -567,6 +590,41 @@ export async function runRequestedLand(deps: AgentLandDeps, accepted: AcceptedLa
   }
 }
 
+// --- Update from main ------------------------------------------------------
+
+/**
+ * What a session's Update from main needs: who may update which track, as for
+ * Land, and the Update the board's button runs. One phase: nothing closes, so
+ * the agent gets the outcome as the reply.
+ */
+export interface AgentUpdateDeps extends CallerTrackDeps {
+  update(project: RegistryProject, trackName: string): Promise<UpdateResult & { install: InstallResult | null }>;
+}
+
+export const defaultUpdateDeps: AgentUpdateDeps = {
+  getSession: defaultLandDeps.getSession,
+  listSessions: defaultLandDeps.listSessions,
+  trackBranchFor: defaultLandDeps.trackBranchFor,
+  projectForCwd,
+  update: (project, trackName) =>
+    updateAndInstall(project, trackName, { ...defaultTrackUpdateDeps, announce: broadcastProjectsChanged }),
+};
+
+export interface UpdateReply {
+  track: string;
+  mergeSha: string | null;
+  install: InstallResult | null;
+  detail: string;
+}
+
+/** A session's Update from main of its own track, or one a session it started works in. */
+export async function requestUpdate(deps: AgentUpdateDeps, callerId: string, body: LandBody = {}): Promise<UpdateReply> {
+  const { project, branch } = resolveCallerTrack(deps, callerId, body, 'update');
+  const result = await deps.update(project, branch.trackName);
+  logger.info({ callerId, track: branch.trackName, mergeSha: result.mergeSha }, 'agent-sessions: session-requested update');
+  return { track: branch.trackName, mergeSha: result.mergeSha, install: result.install, detail: result.detail };
+}
+
 function isKnownError(error: unknown): error is StatusError {
   return error instanceof AgentSessionError || isTrackError(error);
 }
@@ -578,8 +636,18 @@ function sendError(reply: FastifyReply, error: unknown): unknown {
 export function registerAgentSessionRoutes(
   app: FastifyInstance,
   deps: AgentSessionDeps = defaultDeps,
-  landDeps: AgentLandDeps = defaultLandDeps
+  landDeps: AgentLandDeps = defaultLandDeps,
+  updateDeps: AgentUpdateDeps = defaultUpdateDeps
 ): void {
+  app.post<{ Body?: LandBody }>('/api/agent/update', async (request, reply) => {
+    try {
+      const callerId = authenticate(request, deps);
+      return await requestUpdate(updateDeps, callerId, (request.body ?? {}) as LandBody);
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
   // Phase 2 of each accepted Land, run once its 202 has been sent: the Land
   // closes the session that asked, and its agent must have its answer first.
   const acceptedLands = new WeakMap<FastifyRequest, AcceptedLand>();

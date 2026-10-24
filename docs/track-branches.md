@@ -253,8 +253,9 @@ A worktree folder that has gone missing is re-attached to its branch before Land
 ## Update from main
 
 The spec is `project/track-update-from-main.md`. Code: `behindMain` and
-`updateTrackFromMain` in `src/server/projects/track-branches.ts`, the route
-`POST /api/projects/track/update`, and `renderBehind` on the board.
+`updateTrackFromMain` in `src/server/projects/track-branches.ts`, `updateAndInstall` in
+`track-land.ts`, the route `POST /api/projects/track/update`, and `renderBehind` on the
+board.
 
 **The trap.** Branching commits, on **main**, the removal of the track's section and
 specs (`Move "<track>" plan into its track branch`). That commit is on main, not on the
@@ -299,6 +300,24 @@ not just the cwd: a project's `doc` override decides which files are its plan.
    again, never to merge by hand. If the abort itself fails, the refusal says the worktree
    is mid-merge instead of claiming nothing changed.
 6. Commit `Merge <base> into track: <name>`. Never pushed; the tests are not run.
+7. Report whether the merge changed a lockfile (`lockfileChanged`, a `git diff` of
+   `LOCKFILES` between the pre-merge HEAD and the merge).
+
+Both callers, the board's button and a session's `cr-session update`, go through
+`updateAndInstall` (`track-land.ts`): steps 1–7 under the lock, then, when the lockfile
+changed, a reinstall over the worktree's existing `node_modules`
+(`installDependencies(…, { refresh: true })`). `needsInstall()` only asks whether
+`node_modules` exists, so without this nothing would notice it was stale, and the track's
+tests would fail on a package main added. The install runs **after** the lock is
+released, like Land's build: holding the try lock for minutes would refuse every Land,
+Delete and job merge meanwhile. It marks the folder busy (`isInstalling`) with no await
+after the lock, so Land and Delete still refuse while it runs. A failed install keeps the
+merge; `detail` names the failure and says to stop whatever holds the worktree's files
+(a dev server, vitest: `EBUSY` on Windows) and install again. A successful merge then
+broadcasts `projects.changed`, and every open board refetches.
+
+A session's Update (`POST /api/agent/update`) is described in
+`docs/session-orchestration.md`.
 
 A Land after an Update is clean: Land resets the branch's PROJECT.md to the new
 merge-base (main's file at the Update), and the specs main gets back from

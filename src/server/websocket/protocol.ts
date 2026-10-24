@@ -57,6 +57,7 @@ export type ServerMessageType =
   | 'notification.preferences.updated'
   | 'notification'
   | 'jobs.summary'
+  | 'projects.changed'
   | 'error'
   | 'pong';
 

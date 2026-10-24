@@ -25,6 +25,9 @@ function tail(text: string): string {
   return trimmed.length > MAX_OUTPUT_CHARS ? `…${trimmed.slice(-MAX_OUTPUT_CHARS)}` : trimmed;
 }
 
+/** Every lockfile installCommandFor() knows: a change to one means `node_modules` is stale. */
+export const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock'];
+
 /**
  * The install command the project's lockfile asks for, or null with none.
  *
@@ -65,18 +68,28 @@ export function isInstalling(cwd: string): boolean {
  * passes `signal` gets the whole process tree killed on abort, and the
  * promise settles only once it is dead, so a teardown that follows never
  * races npm writing into the folder.
+ *
+ * `refresh` installs over an existing `node_modules` too: after a merge
+ * brought in a new lockfile, the folder exists but no longer matches it, and
+ * needsInstall() only asks whether it exists.
  */
-export function installDependencies(cwd: string, signal?: AbortSignal): Promise<InstallResult> {
+export function installDependencies(
+  cwd: string,
+  signal?: AbortSignal,
+  options: { refresh?: boolean } = {}
+): Promise<InstallResult> {
   const key = pathKey(cwd);
   const running = inFlight.get(key);
   if (running) return running;
-  const started = runInstall(cwd, signal).finally(() => inFlight.delete(key));
+  const started = runInstall(cwd, signal, options.refresh === true).finally(() => inFlight.delete(key));
   inFlight.set(key, started);
   return started;
 }
 
-async function runInstall(cwd: string, signal?: AbortSignal): Promise<InstallResult> {
-  if (!needsInstall(cwd)) return { ran: false, ok: true, detail: 'nothing to install' };
+async function runInstall(cwd: string, signal: AbortSignal | undefined, refresh: boolean): Promise<InstallResult> {
+  if (refresh ? installCommandFor(cwd) === null : !needsInstall(cwd)) {
+    return { ran: false, ok: true, detail: 'nothing to install' };
+  }
   const command = installCommandFor(cwd) as string;
   const startedAt = Date.now();
   logger.info({ cwd, command }, 'installing dependencies');

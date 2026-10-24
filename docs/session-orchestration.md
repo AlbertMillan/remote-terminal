@@ -10,7 +10,7 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 | --- | --- |
 | CLI the agent runs | `scripts/cr-session.mjs` (`start`, `list`, `land [--track]`; JSON out, prompt on stdin) |
 | Skill that tells the agent how | `skills/claude-remote-sessions/SKILL.md` (install below) |
-| Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land` |
+| Routes | `src/server/agent/sessions-api.ts` — `POST`/`GET /api/agent/sessions`, `POST /api/agent/land`, `POST /api/agent/update` |
 | Land's outcome | `notification` with `kind: 'land'` (`broadcastLandResult`), shown by `src/client/land-result.ts` |
 | Did the prompt arrive | `src/server/agent/prompt-delivery.ts`; `kind: 'prompt-missing'` (`broadcastPromptMissing`), same toast |
 | PTY env + token map | `src/server/sessions/session-env.ts` — `sessionEnv(id)` |
@@ -197,6 +197,28 @@ calls it again before creating the session.
 - The skill says: only when the user asks this session to land; commit first, staging by
   name; never on its own initiative. The CLI prints "Land accepted; this session will
   close."
+
+## A session updates its track from main
+
+`node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]` → `POST /api/agent/update`. Spec:
+`project/session-requests-update.md`. It runs the board's Update from main
+(`updateAndInstall`, `docs/track-branches.md`), so an agent asked to "pull main in" never
+runs a plain `git merge main`, which deletes the track's plan.
+
+- **Which track: as for Land.** `resolveCallerTrack()` serves both routes: the caller's
+  own track with no body, or with `{ track }` its own or one a session it started works in;
+  anything else is 400 or 403.
+- **One phase.** Nothing closes, so there is no `202`: the reply is `200 { track,
+  mergeSha, install, detail }`, or the refusal (live job, install, uncommitted code,
+  conflict, a busy project lock) as the CLI's error. The CLI prints `detail`.
+- **Dependencies.** When the merge changed a lockfile, the reply waits for a reinstall in
+  the worktree, so neither the agent nor the user has to notice. The skill tells the agent
+  to pass a 10-minute Bash timeout.
+- **The board** refetches on the `projects.changed` broadcast. No toast: the agent is
+  alive and reports the result itself.
+- The skill says: never `git merge`/`pull` main in a track worktree; commit first; use it
+  when the user asks, or after a `land` refused on a conflict that is now fixed;
+  `--track` on a child only when the user asks.
 
 ## Sidebar
 

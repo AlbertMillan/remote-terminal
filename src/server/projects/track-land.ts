@@ -5,11 +5,15 @@ import { isServerRoot, recheckBuildState, restartHint } from '../server-restart.
 import {
   TrackBranchError,
   behindMain,
+  getActiveTrackBranch,
   landPreflight,
   landTrack,
+  updateTrackFromMain,
   type LandDeps,
   type LandResult,
+  type UpdateResult,
 } from './track-branches.js';
+import { installDependencies, type InstallResult } from './project-deps.js';
 import { mergeTrapAdvice, nameFiles } from './track-plan.js';
 
 /**
@@ -65,4 +69,58 @@ export function landPreflightForSession(project: RegistryProject, trackName: str
       );
     }
   });
+}
+
+// --- Update from main ----------------------------------------------------
+
+export interface UpdateAndInstallDeps {
+  /** Reinstall over the worktree's existing `node_modules`. */
+  install(worktreePath: string): Promise<InstallResult>;
+  /** Tell open boards the track changed. */
+  announce(projectCwd: string): void;
+}
+
+export const defaultUpdateDeps: Omit<UpdateAndInstallDeps, 'announce'> = {
+  install: (worktreePath) => installDependencies(worktreePath, undefined, { refresh: true }),
+};
+
+/**
+ * Update from main as its callers run it: the board's button (POST
+ * /api/projects/track/update) and a track's session (POST /api/agent/update).
+ * The merge runs under the project try lock; a reinstall, when the merge
+ * changed a lockfile, runs after it, as landAndBuild's build does: holding the
+ * lock for minutes would refuse every Land, Delete and job merge meanwhile.
+ * The install marks the folder busy (isInstalling) as soon as it starts, with
+ * no await in between, so a Land or Delete arriving after the lock is free
+ * still refuses while it runs.
+ *
+ * A failed install keeps the merge and says what to do in `detail`.
+ */
+export async function updateAndInstall(
+  project: RegistryProject,
+  track: string,
+  deps: UpdateAndInstallDeps
+): Promise<UpdateResult & { install: InstallResult | null }> {
+  const updated = await withProjectLock(project.cwd, `updating "${track}" from main`, () =>
+    updateTrackFromMain(project, track)
+  );
+  let install: InstallResult | null = null;
+  let note = '';
+  const worktree = updated.lockfileChanged ? getActiveTrackBranch(project.cwd, track)?.worktreePath : undefined;
+  if (worktree) {
+    try {
+      install = await deps.install(worktree);
+    } catch (error) {
+      install = { ran: true, ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+    if (!install.ran) install = null;
+    else if (install.ok) note = ` The lockfile changed, so dependencies were reinstalled (${install.detail}).`;
+    else {
+      note =
+        ` The lockfile changed, but reinstalling dependencies failed: ${install.detail}. The merge is kept. ` +
+        'Stop anything running in the track’s worktree (a dev server, vitest), then run the install there.';
+    }
+  }
+  if (updated.mergeSha) deps.announce(project.cwd);
+  return { ...updated, install, detail: updated.detail + note };
 }

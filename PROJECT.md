@@ -91,4 +91,4 @@ status: active
 - [x] `f-y7mxvl` P2 Dependencies in worktrees — track and job worktrees get their own `node_modules`, never a link into the main checkout's → project/worktree-dependencies.md
 - [x] `f-yjegeg` P2 Behind main, and Update from main — the track heading shows how far behind it is and what would conflict; one click merges main in without losing the track's plan → project/track-update-from-main.md
 - [x] `f-jd0ocw` P3 A track's session can ask to Land it — preflight while the agent is alive, then close and land, outcome as a notification → project/session-requests-land.md
-- [ ] `f-jidoir` P3 A track's session can ask to Update it from main — `cr-session update [--track]`, same lock and refusals as the board, reinstalls when main changed the lockfile, and the skill warns off a plain `git merge main` → project/session-requests-update.md
+- [x] `f-jidoir` P3 A track's session can ask to Update it from main — `cr-session update [--track]`, same lock and refusals as the board, reinstalls when main changed the lockfile, and the skill warns off a plain `git merge main` → project/session-requests-update.md

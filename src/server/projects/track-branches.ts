@@ -39,7 +39,7 @@ import {
   type TrackBranch,
 } from './track-store.js';
 import { readProjectPlan, type ProjectPlan } from './project-plan.js';
-import { isInstalling } from './project-deps.js';
+import { LOCKFILES, isInstalling } from './project-deps.js';
 import { ensureLocalClaudeSettings } from './local-claude-settings.js';
 import { guessTrackWork, type GuessedFile } from './track-attribution.js';
 import {
@@ -537,6 +537,8 @@ export async function addBehindMain(projects: WorkspaceProject[]): Promise<Works
 export interface UpdateResult {
   /** The merge commit on the track branch, or null when it was already up to date. */
   mergeSha: string | null;
+  /** The merge brought in a different lockfile, so the worktree's `node_modules` is stale. */
+  lockfileChanged: boolean;
   detail: string;
 }
 
@@ -565,6 +567,9 @@ export interface UpdateResult {
  * Refuses, like Land, on a live job for the track, a running install, and
  * uncommitted code in the worktree (uncommitted planning is committed
  * first). The caller holds the project lock. Never pushes, never runs tests.
+ *
+ * Says whether the merge changed a lockfile (`lockfileChanged`), and leaves
+ * the reinstall to its caller (updateAndInstall), outside the lock.
  */
 export async function updateTrackFromMain(project: RegistryProject, trackName: string): Promise<UpdateResult> {
   const track = getActiveTrackBranch(project.cwd, trackName);
@@ -605,7 +610,9 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
   if (behindOut === null || !Number.isInteger(behind)) {
     throw new TrackBranchError(`Could not compare the track branch with ${base} in ${wt}`, 500);
   }
-  if (behind === 0) return { mergeSha: null, detail: `Already up to date with ${base}` };
+  if (behind === 0) return { mergeSha: null, lockfileChanged: false, detail: `Already up to date with ${base}` };
+  const preMerge = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
+  if (!preMerge) throw new TrackBranchError(`Could not read the track branch's HEAD in ${wt}`, 500);
   // What the board showed as "N behind", for the message.
   const counted = (await codeCommitsBetween(wt, 'HEAD', baseSha, docRel)) ?? behind;
 
@@ -676,13 +683,18 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
 
   const mergeSha = (await git(wt, ['rev-parse', 'HEAD']))?.trim() || '';
   logger.info({ cwd: project.cwd, track: trackName, base, behind, mergeSha }, 'track updated from main');
+
+  // 7. Whether the worktree's node_modules still matches.
+  const lockDiff = await git(wt, ['diff', '--name-only', preMerge, 'HEAD', '--', ...LOCKFILES]);
+  if (lockDiff === null) logger.warn({ wt }, 'update from main: could not tell whether the lockfile changed');
+
   return {
     mergeSha,
+    lockfileChanged: !!lockDiff?.trim(),
     detail:
       (counted > 0
         ? `Merged ${counted} commit${counted === 1 ? '' : 's'} from ${base} into the track. `
-        : `Merged ${base}'s planning changes into the track. `) +
-      'Run the tests in the track’s session.',
+        : `Merged ${base}'s planning changes into the track. `) + 'Run the tests in the track’s session.',
   };
 }
 
