@@ -67,6 +67,7 @@ vi.mock('../src/server/db/queries.js', () => ({
   countActiveSessions: vi.fn(() => 0),
   logSessionEvent: vi.fn(),
   getMaxSessionSortOrder: vi.fn(() => 0),
+  launchProfileForTranscript: vi.fn(() => null),
   clearForkFlag: vi.fn(),
   getUnloggedSessionsForLog: vi.fn(() => []),
 }));

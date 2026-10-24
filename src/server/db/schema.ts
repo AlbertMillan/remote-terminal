@@ -363,6 +363,17 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN permission_mode TEXT;
       `,
     },
+    {
+      // The MCP servers a started session was launched with, as a JSON array
+      // (project/lean-started-sessions.md). NULL is the full roster — every
+      // session the user opens; '[]' is none. Started sessions before this
+      // column are given none, so a revive of one launches lean too.
+      name: '018_session_mcp_servers',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN mcp_servers TEXT;
+        UPDATE sessions SET mcp_servers = '[]' WHERE spawned_by IS NOT NULL;
+      `,
+    },
   ];
 
   const appliedMigrations = database

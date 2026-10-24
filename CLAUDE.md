@@ -58,6 +58,11 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   re-parsed server-side, 409 on mismatch); a transcript id must be a plain UUID inside
   `~/.claude/projects`, or nothing is unlinked.
 - Fork, Resume, revive and started sessions all type through `injectCommand()`.
+- A started session's `claude` is launched with its stored profile (`launchFlags()`:
+  mode, `--strict-mcp-config`, opted-in servers) at start, revive **and** history Resume,
+  or it reloads the full MCP roster (~21k tokens) on every turn. Its MCP config lives in
+  `<dataDir>/mcp/`, never the worktree (`commitAll`) or the prompt folder (`--add-dir`
+  lets the session read its keys).
 - **Every PTY gets its env from `sessionEnv(id)`**, or its agent can't use the CLI.
 - `/api/agent/*` needs loopback **and** a session token (`authenticate()`, the one guard);
   the rest of `/api/*` is unauthenticated on `0.0.0.0`, so dropping either lets the tailnet

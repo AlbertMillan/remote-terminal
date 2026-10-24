@@ -18,6 +18,7 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 | Worktree's local settings | `src/server/projects/local-claude-settings.ts` — `ensureLocalClaudeSettings()` |
 | Typing the command | `injectCommand()` in `session-open.ts` (shared with resume/fork/revive) |
 | Who started whom | `sessions.spawned_by`, `sessions.permission_mode` (migration 017) |
+| Launch profile (mode + MCP servers) | `src/server/sessions/launch-profile.ts`; `sessions.mcp_servers` (migration 018) |
 | Browsers learn of it | `session.added` broadcast (`broadcastSessionAdded`) — never attaches |
 | Sidebar nesting | `groupStartedSessions()` + `renderSessionGroup()` in `session-list-view.ts` |
 
@@ -59,7 +60,7 @@ session is calling, which is how `spawned_by` and the limit work.
 Status codes: 403 not loopback · 401 missing/unknown/revoked token · 403 a started session
 calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts still
 installing) or the global `sessions.maxSessions` · 409 the caller already has a live
-session on that track, or a start on it still running · 400 bad body, `bypassPermissions` or `dontAsk`, or a
+session on that track, or a start on it still running · 400 bad body, `bypassPermissions` or `dontAsk`, an `mcpServers` name not in the user's Claude config, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
 `land`: 202 accepted · 400 the caller is in no track's worktree (no `track`), or a blank
 `track` · 403 a named track neither the caller's nor a started session's · 409 any Land refusal
@@ -86,7 +87,8 @@ track already under way.
    the next stage's `commitAll` sweeps it into the branch. The folder is the session's own
    and is deleted with the session row.
 7. `injectCommand()` types
-   `claude [--permission-mode <mode>] --add-dir "<dir>" -- "Read <dir>/prompt.md and follow it."`
+   `claude [--permission-mode <mode>] --strict-mcp-config [--mcp-config "<dataDir>/mcp/<id>.json"] --add-dir "<dir>" -- "Read <dir>/prompt.md and follow it."`
+   (the MCP flags are the launch profile, below)
    once the shell is ready. `--add-dir` names that session's prompt folder only, so it reads
    its prompt without asking and can't read another session's. The `--` is required:
    `--add-dir` takes several directories, and without it the prompt is read as one more, so
@@ -134,6 +136,45 @@ fail quietly instead of asking.
 rename still sends it. For `manual` the typed command has **no** `--permission-mode` — Claude
 Code lists `manual` and no longer `default`, and passing nothing gets the default under
 either name. Rows stored as `default` read as `manual` in `list` and the sidebar.
+
+## MCP servers: none unless the start names them
+
+Spec: `project/lean-started-sessions.md`. The user's MCP roster (user-scope servers, plugins,
+claude.ai connectors) was ~21k tokens of every call's prompt on this machine (a trivial
+`claude -p`: 54.5k, against 33.3k with `--strict-mcp-config`), re-read on every turn, and the
+13 sessions the rimworldy planner started called no MCP tool in 1,764 calls. So a started
+session gets `--strict-mcp-config`, as headless job runs do. Skills and built-in tools stay:
+skills are ~3.8k and carry `update`/`land`; trimming built-ins saves ~5.6k and an
+interactive session can't predict which it needs.
+
+- `start --mcp <name>` (body `mcpServers`) opts a server in. It must be in the user's Claude
+  config as Claude Code reads it — local scope (`~/.claude.json` `projects[<dir>]`), the
+  nearest `.mcp.json`, user scope, in that precedence — or the start is refused (400) before
+  anything is created, naming the names that can be passed. Plugin servers and connectors
+  aren't in those files and can't be scoped.
+- `.mcp.json` is read up from the main checkout **and** up from the cwd (the cwd's own
+  folders nearest; a parent both share is read once, in the project's chain). The start
+  checks against the main checkout, before the worktree exists; the launch reads from the
+  worktree, which has other parents and never gets a gitignored or uncommitted `.mcp.json`.
+  One chain alone let a name pass the check and vanish at launch.
+- A launch that still gets fewer servers (the config changed since the check, or the file
+  couldn't be written) starts anyway, like a failed install: the row keeps only what it got,
+  and the response's `mcp: { ok: false, servers, detail }` tells the agent. On revive and
+  Resume a dropped server is only logged and stays on the row, so it loads again once the
+  config has it back.
+- Only the **names** are stored (`sessions.mcp_servers`, JSON; NULL = full roster, `[]` =
+  none). Each launch rewrites `<dataDir>/mcp/<id>.json` from the current config, so an edited
+  key applies and a removed server is dropped with a warning. Never in the worktree
+  (`commitAll` would commit its keys), nor in the prompt folder: `--add-dir` lets the
+  session read that without asking. `deletePromptFile()` removes both.
+- A stored permission mode is typed only if it is `auto`, `acceptEdits` or `plan`
+  (`permissionModeFlag()`): on revive and Resume it reaches the shell line from the DB.
+- **Every launch types the profile** (`launchFlags()`): start, revive, and a history Resume
+  of a started session's transcript (`launchProfileForTranscript()`; the new row copies the
+  profile but not `spawned_by`, so it is the user's). Before this, revive typed a bare
+  `claude --resume`, so a revived child also lost its permission mode. Fork and a `claude`
+  typed by hand get the full roster.
+- Migration 018 backfills `[]` for rows with `spawned_by`.
 
 ## Worktrees get the main checkout's local settings
 

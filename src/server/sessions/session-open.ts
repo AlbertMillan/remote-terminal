@@ -15,7 +15,10 @@ import {
   countActiveSessions,
   logSessionEvent,
   getMaxSessionSortOrder,
+  launchProfileForTranscript,
 } from '../db/queries.js';
+import { launchFlags, type LaunchProfile } from './launch-profile.js';
+import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
 import { revokeSessionToken, sessionEnv } from './session-env.js';
 
@@ -59,11 +62,6 @@ export function injectCommand(session: ActiveSession, line: string): void {
   }, 5000);
 }
 
-// Quotes, `$`/`%`/backtick (PowerShell, cmd, bash expansion), `!` (bash history expansion
-// inside double quotes), a backslash (escapes the closing quote in bash) and control chars.
-const UNSAFE_NAME = /["%$`!\\]/;
-const hasControlChar = (s: string) => [...s].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
-
 /**
  * ` --name "<name>"`, so the session shows in Claude's `ListAgents` under its claude-remote
  * name instead of one derived from its folder (docs/session-orchestration.md). A name no
@@ -72,12 +70,20 @@ const hasControlChar = (s: string) => [...s].some((c) => c.charCodeAt(0) < 0x20 
  */
 export function claudeNameFlag(name: string | null | undefined): string {
   const trimmed = name?.trim();
-  if (!trimmed || UNSAFE_NAME.test(trimmed) || hasControlChar(trimmed)) return '';
+  if (!trimmed || !isSafeQuotedText(trimmed)) return '';
   return ` --name "${trimmed}"`;
 }
 
-function injectResumeCommand(session: ActiveSession, resumeId: string): void {
-  injectCommand(session, `claude --resume ${resumeId}${claudeNameFlag(session.name)}`);
+/**
+ * `profile` is a started session's (launch-profile.ts): its permission mode and the MCP
+ * servers it may load. Without it a revived or resumed started session comes back in the
+ * default mode with the user's whole MCP roster, re-read on every turn.
+ */
+function injectResumeCommand(session: ActiveSession, resumeId: string, profile?: LaunchProfile): void {
+  // A dropped server is logged in launchFlags and stays on the row: it loads again once the
+  // config has it back.
+  const flags = profile ? launchFlags(session.id, session.cwd, profile).flags : '';
+  injectCommand(session, `claude ${flags}--resume ${resumeId}${claudeNameFlag(session.name)}`);
 }
 
 export async function forkSession(
@@ -231,6 +237,10 @@ export async function openClaudeSession(
     isFork = true;
   }
 
+  // A started session's transcript resumes with its profile, on a row of the user's own: no
+  // spawned_by, so it neither counts against the parent's limit nor can be landed by it.
+  const profile = mode === 'resume' ? launchProfileForTranscript(claudeSessionId) : null;
+
   const shortId = claudeSessionId.slice(0, 8);
   const name = options.name || (mode === 'fork' ? `Fork: ${shortId}` : `Resume: ${shortId}`);
 
@@ -251,6 +261,8 @@ export async function openClaudeSession(
     claudeSessionId: resumeId,
     isFork,
     forkJsonlPath,
+    permissionMode: profile?.permissionMode ?? null,
+    mcpServers: profile?.mcpServers ?? null,
   };
   insertSession(metadata);
 
@@ -288,7 +300,7 @@ export async function openClaudeSession(
   registry.activeSessions.set(id, session);
   logSessionEvent(id, mode === 'fork' ? 'forked' : 'resumed', JSON.stringify({ claudeSessionId, resumeId }));
 
-  injectResumeCommand(session, resumeId);
+  injectResumeCommand(session, resumeId, profile ?? undefined);
 
   logger.info({ id, name, pid: ptyProcess.pid }, 'Historical session opened successfully');
   return session;
@@ -393,7 +405,10 @@ export function reviveSession(
   // No claudeSessionId means this row never reported a conversation (a plain shell, or the
   // SessionStart hook never fired). Respawning the shell in the right cwd is the whole job.
   if (metadata.claudeSessionId) {
-    injectResumeCommand(session, metadata.claudeSessionId);
+    injectResumeCommand(session, metadata.claudeSessionId, {
+      permissionMode: metadata.permissionMode ?? null,
+      mcpServers: metadata.mcpServers ?? null,
+    });
   }
 
   logger.info({ id, name: metadata.name, pid: ptyProcess.pid }, 'Session revived successfully');

@@ -53,8 +53,12 @@ const updateSession = vi.fn((id: string, patch: Record<string, unknown>) => {
 });
 const logSessionEvent = vi.fn();
 
+const insertSession = vi.fn();
+const launchProfileForTranscript = vi.fn((_id: string): { permissionMode: string | null; mcpServers: string[] } | null => null);
+
 vi.mock('../src/server/db/queries.js', () => ({
-  insertSession: vi.fn(),
+  insertSession: (...args: unknown[]) => insertSession(...(args as [])),
+  launchProfileForTranscript: (id: string) => launchProfileForTranscript(id),
   updateSession: (...args: unknown[]) => updateSession(...(args as [string, Record<string, unknown>])),
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),
@@ -211,6 +215,20 @@ describe('reviveSession — the conversation', () => {
     expect(writeToPty).toHaveBeenCalledWith(expect.anything(), `claude --resume ${CLAUDE_ID} --name "claude-remote"\r`);
   });
 
+  it("re-applies a started session's profile: its permission mode and no MCP servers", async () => {
+    // Without it a revived child comes back in the default mode with the user's whole MCP
+    // roster, re-read on every turn (project/lean-started-sessions.md).
+    rows.set(STALE_ID, staleRow({ claudeSessionId: CLAUDE_ID, spawnedBy: 'parent', permissionMode: 'auto', mcpServers: [] }));
+
+    manager.reviveSession({ id: STALE_ID });
+
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty).toHaveBeenCalledWith(
+      expect.anything(),
+      `claude --permission-mode auto --strict-mcp-config --resume ${CLAUDE_ID} --name "claude-remote"\r`
+    );
+  });
+
   it('injects nothing for a plain shell row, which just gets its shell back', async () => {
     rows.set(STALE_ID, staleRow({ claudeSessionId: null }));
 
@@ -312,5 +330,31 @@ describe('reviveSession — refusals', () => {
     }
 
     expect(() => manager.reviveSession({ id: '00000003-1111-4111-8111-111111111111' })).not.toThrow();
+  });
+});
+
+describe("openClaudeSession — a started session's transcript", () => {
+  it("resumes with its profile, on a row of the user's own", async () => {
+    launchProfileForTranscript.mockReturnValueOnce({ permissionMode: 'acceptEdits', mcpServers: [] });
+
+    await manager.openClaudeSession({ claudeSessionId: CLAUDE_ID, cwd: '/home/albert/wt', mode: 'resume' });
+
+    expect(launchProfileForTranscript).toHaveBeenCalledWith(CLAUDE_ID);
+    const inserted = insertSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(inserted).toMatchObject({ permissionMode: 'acceptEdits', mcpServers: [] });
+    // Not the parent's: it must not count against its limit or be landable by it.
+    expect(inserted.spawnedBy).toBeUndefined();
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty.mock.calls[0][1]).toMatch(
+      new RegExp(`^claude --permission-mode acceptEdits --strict-mcp-config --resume ${CLAUDE_ID} `)
+    );
+  });
+
+  it('resumes any other transcript with the full profile', async () => {
+    await manager.openClaudeSession({ claudeSessionId: CLAUDE_ID, cwd: '/home/albert/wt', mode: 'resume' });
+
+    expect(insertSession.mock.calls[0][0]).toMatchObject({ permissionMode: null, mcpServers: null });
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty.mock.calls[0][1]).toMatch(new RegExp(`^claude --resume ${CLAUDE_ID} `));
   });
 });

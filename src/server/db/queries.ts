@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode, mcp_servers)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -59,6 +59,7 @@ export function insertSession(session: SessionMetadata): void {
     session.forkJsonlPath ?? null,
     session.spawnedBy ?? null,
     session.permissionMode ?? null,
+    session.mcpServers ? JSON.stringify(session.mcpServers) : null,
   ));
 }
 
@@ -98,18 +99,56 @@ export function updateSession(
   stmt.run(...values);
 }
 
+/** The MCP servers a started session actually got, when its launch dropped some it asked for. */
+export function setSessionMcpServers(id: string, servers: string[]): void {
+  executeStatement('setSessionMcpServers', 'UPDATE sessions SET mcp_servers = ? WHERE id = ?', (stmt) =>
+    stmt.run(JSON.stringify(servers), id)
+  );
+}
+
+/**
+ * The launch profile of the started session that ran this transcript, for a history Resume of
+ * it (project/lean-started-sessions.md). Null when no row with a stored profile ran it — the
+ * user's own sessions, or a started one since deleted.
+ */
+export function launchProfileForTranscript(
+  claudeSessionId: string
+): { permissionMode: string | null; mcpServers: string[] } | null {
+  return executeStatement('launchProfileForTranscript', `
+    SELECT permission_mode as permissionMode, mcp_servers as mcpServers FROM sessions
+    WHERE claude_session_id = ? AND mcp_servers IS NOT NULL
+    ORDER BY created_at DESC LIMIT 1
+  `, (stmt) => {
+    const row = stmt.get(claudeSessionId) as { permissionMode: string | null; mcpServers: string } | undefined;
+    const mcpServers = row ? decodeMcpServers(row.mcpServers) : null;
+    return row && mcpServers ? { permissionMode: row.permissionMode, mcpServers } : null;
+  });
+}
+
+type RawRow = Omit<SessionMetadata, 'isFork' | 'mcpServers'> & { isFork: number; mcpServers: string | null };
+
+/** `mcp_servers` is JSON text; anything unreadable is the full roster, as before the column. */
+function decodeMcpServers(raw: string | null | undefined): string[] | null {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getSession(id: string): SessionMetadata | null {
   return executeStatement('getSession', `
     SELECT id, name, shell, cwd, created_at as createdAt, last_accessed_at as lastAccessedAt,
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
            sort_order as sortOrder, claude_session_id as claudeSessionId,
            is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-           spawned_by as spawnedBy, permission_mode as permissionMode
+           spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers
     FROM sessions WHERE id = ?
   `, (stmt) => {
-    const row = stmt.get(id) as (Omit<SessionMetadata, 'isFork'> & { isFork: number }) | undefined;
-    if (!row) return null;
-    return { ...row, isFork: row.isFork === 1 };
+    const row = stmt.get(id) as RawRow | undefined;
+    return row ? toSessionMetadata(row) : null;
   });
 }
 
@@ -178,12 +217,12 @@ const SESSION_SELECT = `
          owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
          sort_order as sortOrder, claude_session_id as claudeSessionId,
          is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-         spawned_by as spawnedBy, permission_mode as permissionMode
+         spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers
   FROM sessions
 `;
 
-function toSessionMetadata(row: Omit<SessionMetadata, 'isFork'> & { isFork: number }): SessionMetadata {
-  return { ...row, isFork: row.isFork === 1 };
+function toSessionMetadata(row: RawRow): SessionMetadata {
+  return { ...row, isFork: row.isFork === 1, mcpServers: decodeMcpServers(row.mcpServers) };
 }
 
 /**
@@ -202,7 +241,6 @@ export function getRecentCwds(limit = 50): { cwd: string; lastAccessedAt: string
 }
 
 export function getAllSessions(ownerId?: string): SessionMetadata[] {
-  type RawRow = Omit<SessionMetadata, 'isFork'> & { isFork: number };
   if (ownerId) {
     const stmt = getStatement('getAllSessionsByOwner',
       SESSION_SELECT + 'WHERE owner_id = ? OR owner_id IS NULL ORDER BY sort_order ASC'
@@ -217,7 +255,6 @@ export function getAllSessions(ownerId?: string): SessionMetadata[] {
 }
 
 export function getActiveSessions(): SessionMetadata[] {
-  type RawRow = Omit<SessionMetadata, 'isFork'> & { isFork: number };
   const stmt = getStatement('getActiveSessions',
     SESSION_SELECT + "WHERE status != 'terminated' ORDER BY sort_order ASC"
   );

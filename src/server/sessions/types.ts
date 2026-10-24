@@ -34,6 +34,8 @@ export interface SessionCreateOptions {
   spawnedBy?: string;
   /** The `--permission-mode` that session typed into this one. */
   permissionMode?: string;
+  /** MCP servers it may load (launch-profile.ts); unset is the user's full roster. */
+  mcpServers?: string[] | null;
 }
 
 export interface SessionMetadata {
@@ -56,6 +58,8 @@ export interface SessionMetadata {
   /** The session that started this one (docs/session-orchestration.md); null for the user's own. */
   spawnedBy?: string | null;
   permissionMode?: string | null;
+  /** The MCP servers every launch of its `claude` gets (launch-profile.ts); null is the full roster. */
+  mcpServers?: string[] | null;
 }
 
 export interface CategoryMetadata {

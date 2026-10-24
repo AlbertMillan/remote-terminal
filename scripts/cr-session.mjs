@@ -5,7 +5,7 @@
  * Run by an agent through the Bash tool, via the path the server puts in
  * CLAUDE_REMOTE_CLI:
  *
- *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... <<'EOF'
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
@@ -18,6 +18,10 @@
  * reinstalls dependencies when the lockfile changed. For both, `--track` names
  * a track a session this one started works in; the server refuses any other.
  *
+ * A started session loads no MCP servers unless `start` names them with
+ * `--mcp` (repeatable, or comma-separated): the user's whole roster is ~21k
+ * tokens of every call (project/lean-started-sessions.md).
+ *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
  * whole prompt inside the Bash call the user approves. Prints JSON. No
@@ -29,7 +33,7 @@
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `usage:
-  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan]  (prompt on stdin)
+  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]...  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]`;
@@ -46,11 +50,13 @@ export function parseArgs(argv) {
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    const m = /^--(track|name|mode)(?:=(.*))?$/.exec(arg);
+    const m = /^--(track|name|mode|mcp)(?:=(.*))?$/.exec(arg);
     if (!m) throw new UsageError(`unknown argument: ${arg}`);
     const value = m[2] !== undefined ? m[2] : rest[++i];
     if (value === undefined) throw new UsageError(`--${m[1]} needs a value`);
-    flags[m[1]] = value;
+    // The only repeatable flag: `--mcp a --mcp b` and `--mcp a,b` are the same.
+    if (m[1] === 'mcp') flags.mcp = [...(flags.mcp ?? []), ...value.split(',').map((v) => v.trim()).filter(Boolean)];
+    else flags[m[1]] = value;
   }
   return { command, flags };
 }
@@ -110,6 +116,7 @@ export async function main({
     const body = { track: flags.track, prompt };
     if (flags.name !== undefined) body.name = flags.name;
     if (flags.mode !== undefined) body.permissionMode = flags.mode;
+    if (flags.mcp !== undefined) body.mcpServers = flags.mcp;
     request = {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },

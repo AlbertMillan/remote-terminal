@@ -23,6 +23,15 @@ export function promptPathFor(sessionId: string): string {
   return join(promptDirFor(sessionId), 'prompt.md');
 }
 
+/**
+ * A started session's scoped MCP config (launch-profile.ts). Beside the prompt folder, not in
+ * it: `--add-dir` opens that folder to the session without asking, and this file holds the
+ * opted-in servers' keys.
+ */
+export function mcpConfigPathFor(sessionId: string): string {
+  return join(getConfig().persistence.dataDir, 'mcp', `${sessionId}.json`);
+}
+
 export function writePromptFile(sessionId: string, prompt: string): string {
   const path = promptPathFor(sessionId);
   mkdirSync(promptDirFor(sessionId), { recursive: true });
@@ -30,12 +39,13 @@ export function writePromptFile(sessionId: string, prompt: string): string {
   return path;
 }
 
-/** Remove a session's prompt folder, if it has one. Never throws. */
+/** Remove a session's prompt folder and MCP config, if it has them. Never throws. */
 export function deletePromptFile(sessionId: string): void {
   try {
     // Ids are server-generated UUIDs, but never let one walk out of prompts/.
     if (!/^[\w-]+$/.test(sessionId)) return;
     rmSync(promptDirFor(sessionId), { recursive: true, force: true });
+    rmSync(mcpConfigPathFor(sessionId), { force: true });
   } catch {
     /* most sessions never had one */
   }

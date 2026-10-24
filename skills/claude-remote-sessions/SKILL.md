@@ -37,6 +37,11 @@ EOF
   `--mode manual` only when the user asks to approve each step themselves, or another
   mode the user named. `bypassPermissions` and `dontAsk` are refused.
 - `--name "<n>"`: the session's name; defaults to the track name.
+- **Started sessions load no MCP servers.** The user's whole roster is ~21k tokens of
+  every call. Pass `--mcp <server>` (repeatable, or `--mcp a,b`) only when the task needs
+  one, e.g. `--mcp playwright` for a check in a browser. An unknown name is refused with
+  the list of names you can pass; plugin servers and claude.ai connectors can't be passed.
+  The session keeps the same servers when it is revived or resumed.
 - One call per track. It waits while the track's branch is created and its
   dependencies installed, which can take several minutes — **pass `timeout: 600000`
   on the Bash call**. The default 2-minute timeout kills the CLI, but the server
@@ -44,9 +49,10 @@ EOF
 - **After a timeout or any error, run `list` before trying again.** The session
   may already exist. A second `start` on a track you already have a live session
   on, or one still starting, is refused (409) and names the first.
-- It prints `{ sessionId, name, worktreePath, install }`. If `install.ok` is
+- It prints `{ sessionId, name, worktreePath, install, mcp }`. If `install.ok` is
   false, tell the user: the session started, but its dependencies did not
-  install (`install.detail` says why).
+  install (`install.detail` says why). If `mcp.ok` is false, the session started
+  with only the servers in `mcp.servers`: tell the user which it lacks.
 
 ## Write a self-contained prompt
 
@@ -64,7 +70,8 @@ node "$CLAUDE_REMOTE_CLI" list
 ```
 
 Prints each session you started: `id`, `name`, `track`, `status`, `attachable`
-(false once its shell has exited or its terminal is gone), `permissionMode`, and `notification` — the
+(false once its shell has exited or its terminal is gone), `permissionMode`, `mcpServers`
+(`[]` is none, `null` the user's full roster), and `notification` — the
 last `needs-input` or `completed`, with its time. There is no "working" state:
 no notification means it has not stopped since it started, or the user has
 opened it since.

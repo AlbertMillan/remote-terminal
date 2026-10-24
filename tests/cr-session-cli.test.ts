@@ -48,6 +48,23 @@ describe('start', () => {
     expect(JSON.parse(res.stdout)).toEqual({ sessionId: 's1' });
   });
 
+  it('sends --mcp as mcpServers, repeated or comma-separated, and nothing without it', async () => {
+    const fetchImpl = okFetch();
+    await run({ argv: ['start', '--track', 'X', '--mcp', 'playwright', '--mcp=a, b'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body as string).mcpServers).toEqual(['playwright', 'a', 'b']);
+    await run({ argv: ['start', '--track', 'X'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body as string)).not.toHaveProperty('mcpServers');
+  });
+
+  it('refuses --mcp on land and update', async () => {
+    for (const command of ['land', 'update']) {
+      const fetchImpl = okFetch();
+      const res = await run({ argv: [command, '--mcp', 'playwright'], fetchImpl });
+      expect(res.code).toBe(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+
   it('fails before any request when stdin is a terminal', async () => {
     const fetchImpl = okFetch();
     const res = await run({ argv: ['start', '--track', 'Split view'], stdin: { isTTY: true }, fetchImpl });

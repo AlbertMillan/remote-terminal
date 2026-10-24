@@ -194,6 +194,7 @@ class SessionManager {
       forkJsonlPath: null,
       spawnedBy: options.spawnedBy ?? null,
       permissionMode: options.permissionMode ?? null,
+      mcpServers: options.mcpServers ?? null,
     };
 
     try {

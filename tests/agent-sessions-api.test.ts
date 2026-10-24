@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -36,9 +36,14 @@ import {
 import { revokeSessionToken, sessionEnv, sessionForToken } from '../src/server/sessions/session-env.js';
 import { deletePromptFile, promptDirFor, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession, SessionMetadata } from '../src/server/sessions/types.js';
+import { launchFlags, type LaunchProfile } from '../src/server/sessions/launch-profile.js';
 
 const PROJECT = 'C:\\p\\demo';
 const WORKTREE = 'C:\\data\\worktrees\\tracks\\abcd1234';
+// The user's Claude config as launchFlags reads it: the servers mcpServersFor offers.
+const FAKE_HOME = join(dataDir, 'home');
+mkdirSync(FAKE_HOME, { recursive: true });
+writeFileSync(join(FAKE_HOME, '.claude.json'), JSON.stringify({ mcpServers: { playwright: { command: 'npx' }, everhour: { command: 'eh' } } }));
 const MAIN_ID = '11111111-1111-4111-8111-111111111111';
 
 function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetadata & { attachable: boolean } {
@@ -93,6 +98,7 @@ function makeDeps(): AgentSessionDeps {
           cwd: opts.cwd ?? '',
           spawnedBy: opts.spawnedBy ?? null,
           permissionMode: opts.permissionMode ?? null,
+          mcpServers: opts.mcpServers ?? null,
           createdAt: `2026-10-01T10:00:0${created}.000Z`,
         })
       );
@@ -103,6 +109,13 @@ function makeDeps(): AgentSessionDeps {
       rows.delete(id);
     }),
     writePromptFile,
+    mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
+    // The real flags, reading a stand-in for the user's Claude config.
+    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, FAKE_HOME)),
+    setMcpServers: vi.fn((id: string, servers: string[]) => {
+      const r = rows.get(id);
+      if (r) r.mcpServers = servers;
+    }),
     injectCommand: vi.fn(),
     lastNotification: () => undefined,
     broadcastAdded: vi.fn(),
@@ -286,7 +299,7 @@ describe('start', () => {
     expect(res.statusCode).toBe(200);
     expect(rows.get(res.json().sessionId)!.permissionMode).toBe('manual');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(line).toMatch(/^claude --add-dir "/);
+    expect(line).toMatch(/^claude --strict-mcp-config --add-dir "/);
     expect(line).not.toContain('--permission-mode');
   });
 
@@ -341,7 +354,7 @@ describe('start', () => {
     const dir = promptDirFor(body.sessionId).replace(/\\/g, '/');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
     // `--` ends --add-dir's list of directories, or the prompt is read as one more.
-    expect(line).toBe(`claude --permission-mode acceptEdits --add-dir "${dir}" --name "Split view: impl" -- "Read ${path.replace(/\\/g, '/')} and follow it."`);
+    expect(line).toBe(`claude --permission-mode acceptEdits --strict-mcp-config --add-dir "${dir}" --name "Split view: impl" -- "Read ${path.replace(/\\/g, '/')} and follow it."`);
     expect(line).not.toContain('\\');
 
     expect(deps.broadcastAdded).toHaveBeenCalledWith(
@@ -354,8 +367,56 @@ describe('start', () => {
     expect(res.json().name).toBe('Split view');
     expect(rows.get(res.json().sessionId)!.permissionMode).toBe('auto');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(line).toMatch(/^claude --permission-mode auto --add-dir "[^"]+" --name "Split view" -- "Read /);
+    expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --add-dir "[^"]+" --name "Split view" -- "Read /);
   });
+
+  it('loads no MCP servers by default, and stores that on the row', async () => {
+    const res = await start(GOOD);
+    expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [] }));
+    expect(rows.get(res.json().sessionId)!.mcpServers).toEqual([]);
+    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] });
+    expect(deps.mcpServersFor).not.toHaveBeenCalled();
+  });
+
+  it('scopes in the MCP servers the start names', async () => {
+    const res = await start({ ...GOOD, mcpServers: ['playwright', 'playwright'] });
+    expect(res.statusCode).toBe(200);
+    expect(deps.mcpServersFor).toHaveBeenCalledWith(PROJECT);
+    expect(rows.get(res.json().sessionId)!.mcpServers).toEqual(['playwright']);
+    const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --mcp-config "[^"]+" --add-dir /);
+    expect(res.json().mcp).toEqual({ ok: true, servers: ['playwright'] });
+    expect(deps.setMcpServers).not.toHaveBeenCalled();
+  });
+
+  it('still starts when the launch drops a server, but stores and reports what it got', async () => {
+    // The check passed, then the config lost the server (or its file couldn't be written).
+    (deps.launchFlags as ReturnType<typeof vi.fn>).mockImplementationOnce((id: string, cwd: string, p: LaunchProfile) =>
+      launchFlags(id, cwd, { ...p, mcpServers: ['everhour'] }, FAKE_HOME)
+    );
+    const res = await start({ ...GOOD, mcpServers: ['playwright', 'everhour'] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mcp).toMatchObject({ ok: false, servers: ['everhour'] });
+    expect(res.json().mcp.detail).toContain('playwright');
+    expect(rows.get(res.json().sessionId)!.mcpServers).toEqual(['everhour']);
+  });
+
+  it('refuses an MCP server the config does not define, naming the ones it does, before creating anything', async () => {
+    const res = await start({ ...GOOD, mcpServers: ['playwright', 'slack'] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('"slack"');
+    expect(res.json().error).toContain('playwright, everhour');
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([['playwright'], [['a b']], [[1]], [Array.from({ length: 9 }, (_, i) => `s${i}`)]])(
+    'refuses malformed mcpServers %j with 400',
+    async (mcpServers) => {
+      expect((await start({ ...GOOD, mcpServers })).statusCode).toBe(400);
+      expect(deps.createSession).not.toHaveBeenCalled();
+    }
+  );
 
   it('installs a worktree that needs it, and still starts the session when the install fails', async () => {
     (deps.needsInstall as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -379,7 +440,7 @@ describe('list', () => {
   it("returns only the caller's started sessions, with track, mode and last notification", async () => {
     const at = new Date('2026-10-01T12:00:00.000Z');
     deps.lastNotification = (id) => (id === 'c1' ? { type: 'needs-input', timestamp: at } : undefined);
-    rows.set('c1', row('c1', { spawnedBy: MAIN_ID, cwd: WORKTREE, permissionMode: 'plan', createdAt: '2026-10-01T11:00:00.000Z' }));
+    rows.set('c1', row('c1', { spawnedBy: MAIN_ID, cwd: WORKTREE, permissionMode: 'plan', mcpServers: ['playwright'], createdAt: '2026-10-01T11:00:00.000Z' }));
     // c2's shell exited: its PTY entry remains (attachable in the sidebar), but list reports it done.
     rows.set('c2', row('c2', { spawnedBy: MAIN_ID, cwd: WORKTREE, attachable: true, status: 'terminated', createdAt: '2026-10-01T11:30:00.000Z' }));
     rows.set('other', row('other', { spawnedBy: '99999999-9999-4999-8999-999999999999' }));
@@ -387,8 +448,8 @@ describe('list', () => {
     const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions).toEqual([
-      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
-      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, notification: null, prompt: { state: 'pending' } },
+      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
+      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, notification: null, prompt: { state: 'pending' } },
     ]);
   });
 });

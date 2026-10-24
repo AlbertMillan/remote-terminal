@@ -8,8 +8,16 @@ import { sessionManager } from '../sessions/manager.js';
 import { sessionForToken } from '../sessions/session-env.js';
 import { writePromptFile } from '../sessions/prompt-file.js';
 import { claudeNameFlag, injectCommand } from '../sessions/session-open.js';
+import {
+  availableMcpServers,
+  launchFlags,
+  parseMcpServers,
+  type LaunchFlags,
+  type LaunchProfile,
+} from '../sessions/launch-profile.js';
+import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
-import { getSession as getSessionFromDb } from '../db/queries.js';
+import { getSession as getSessionFromDb, setSessionMcpServers } from '../db/queries.js';
 import { getConfig } from '../config.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
 import {
@@ -65,17 +73,19 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
 const MODE_ALIASES: Record<string, PermissionMode> = { default: 'manual' };
 
 /**
- * The typed command. `manual` passes no `--permission-mode`: Claude Code has
- * renamed its default (it lists `manual`, no longer `default`), and leaving the
- * flag out gets the default under either name. `--add-dir` is the session's own
+ * The typed command. `flags` is the launch profile's (`launchFlags()`): the
+ * permission mode — `manual` passes none, since Claude Code has renamed its
+ * default (it lists `manual`, no longer `default`) and leaving the flag out gets
+ * the default under either name — then `--strict-mcp-config` and any scoped
+ * `--mcp-config`, so the session loads only the MCP servers its start named
+ * (project/lean-started-sessions.md). `--add-dir` is the session's own
  * prompt folder only, so it reads its prompt without asking and no other's.
  * `--` before the prompt is required: `--add-dir` takes several directories,
  * and without it the prompt is read as one more, so the session starts idle.
  * `--name` makes the session show in `ListAgents` under its claude-remote name.
  */
-export function startCommand(mode: PermissionMode, promptDir: string, promptPath: string, name?: string): string {
-  const flag = mode === 'manual' ? '' : `--permission-mode ${mode} `;
-  return `claude ${flag}--add-dir "${promptDir}"${claudeNameFlag(name)} -- "Read ${promptPath} and follow it."`;
+export function startCommand(flags: string, promptDir: string, promptPath: string, name?: string): string {
+  return `claude ${flags}--add-dir "${promptDir}"${claudeNameFlag(name)} -- "Read ${promptPath} and follow it."`;
 }
 
 export const MAX_PROMPT_BYTES = 100 * 1024;
@@ -108,6 +118,12 @@ export interface AgentSessionDeps {
   createSession(options: SessionCreateOptions): Promise<ActiveSession>;
   deleteSession(id: string): Promise<unknown>;
   writePromptFile(sessionId: string, prompt: string): string;
+  /** MCP servers a session in `cwd` can be given by name (launch-profile.ts). */
+  mcpServersFor(cwd: string): string[];
+  /** The profile's flags for a launch; writes the scoped MCP config (launch-profile.ts). */
+  launchFlags(sessionId: string, cwd: string, profile: LaunchProfile): LaunchFlags;
+  /** Record the MCP servers a session actually got, when its launch dropped some. */
+  setMcpServers(id: string, servers: string[]): void;
   injectCommand(session: ActiveSession, line: string): void;
   lastNotification(id: string): { type: NotificationType; timestamp: Date } | undefined;
   broadcastAdded(session: SessionInfo): void;
@@ -149,9 +165,6 @@ export function projectForCwd(cwd: string): RegistryProject | null {
   return null;
 }
 
-/** Characters a double-quoted argument does not survive in cmd (`%`), PowerShell (`$`, backtick) or any shell (`"`). */
-const UNSAFE_IN_QUOTES = /["%$`]/;
-
 /** Still running: a PTY exists and its shell has not exited. */
 function isLive(s: { attachable: boolean; status: string }): boolean {
   return s.attachable && s.status !== 'terminated';
@@ -175,6 +188,9 @@ export const defaultDeps: AgentSessionDeps = {
   createSession: (options) => sessionManager.createSession(options),
   deleteSession: (id) => sessionManager.deleteSession(id),
   writePromptFile,
+  mcpServersFor: (cwd) => [...availableMcpServers(cwd).keys()],
+  launchFlags: (sessionId, cwd, profile) => launchFlags(sessionId, cwd, profile),
+  setMcpServers: setSessionMcpServers,
   injectCommand,
   lastNotification: (id) => notificationService.getSessionNotification(id),
   broadcastAdded: broadcastSessionAdded,
@@ -207,6 +223,7 @@ export interface StartBody {
   prompt?: unknown;
   name?: unknown;
   permissionMode?: unknown;
+  mcpServers?: unknown;
 }
 
 export interface StartResult {
@@ -214,6 +231,8 @@ export interface StartResult {
   name: string;
   worktreePath: string;
   install: InstallResult;
+  /** The MCP servers it got; `ok` false when the launch couldn't give it every one asked for. */
+  mcp: { ok: boolean; servers: string[]; detail?: string };
 }
 
 // Starts that have passed the limit check but not yet created their session
@@ -264,12 +283,28 @@ export async function startAgentSession(
     if (typeof body.name !== 'string' || !body.name.trim()) throw new AgentSessionError(400, 'name must be a non-empty string');
     name = body.name.trim().slice(0, MAX_NAME_LENGTH);
   }
+  const mcpServers = parseMcpServers(body.mcpServers);
+  if (typeof mcpServers === 'string') throw new AgentSessionError(400, mcpServers);
 
   const project = deps.projectForCwd(caller.cwd);
   if (!project) throw new AgentSessionError(400, `${caller.cwd} is not in a workspace project`);
   // The agent can only start work on a track somebody planned, never invent one.
   if (!deps.trackExists(project, track)) {
     throw new AgentSessionError(404, `No track "${track}" in ${project.cwd}'s PROJECT.md`);
+  }
+  if (mcpServers.length > 0) {
+    // Before anything is created: a session missing the server its task needs
+    // would fail halfway through. Looked up from the project, where its worktree
+    // will be; plugin servers and claude.ai connectors can't be scoped.
+    const available = deps.mcpServersFor(project.cwd);
+    const unknown = mcpServers.filter((n) => !available.includes(n));
+    if (unknown.length > 0) {
+      throw new AgentSessionError(
+        400,
+        `No MCP server ${unknown.map((n) => `"${n}"`).join(', ')} in your Claude config. ` +
+          (available.length ? `Servers you can pass: ${available.join(', ')}` : 'It defines none that can be passed.')
+      );
+    }
   }
 
   // One live session per caller and track. Nothing between the limit check and
@@ -310,6 +345,7 @@ export async function startAgentSession(
         ownerId: caller.ownerId ?? undefined,
         spawnedBy: callerId,
         permissionMode,
+        mcpServers,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -332,7 +368,17 @@ export async function startAgentSession(
       throw error;
     }
 
-    deps.injectCommand(session, startCommand(permissionMode, promptDir, promptPath, session.name));
+    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode, mcpServers });
+    deps.injectCommand(session, startCommand(launch.flags, promptDir, promptPath, session.name));
+    // The check above passed, so this is a config edited since, or a file that couldn't be
+    // written. Started anyway, like a failed install: the row and `list` say what it really
+    // has, and the response tells the agent, which would otherwise count on the server.
+    const loaded = launch.mcpServers ?? [];
+    const missing = mcpServers.filter((n) => !loaded.includes(n));
+    if (missing.length > 0) deps.setMcpServers(session.id, loaded);
+    const mcp = missing.length
+      ? { ok: false, servers: loaded, detail: `Started without ${missing.join(', ')}: see the server log` }
+      : { ok: true, servers: loaded };
 
     const metadata = deps.getSession(session.id);
     deps.broadcastAdded(
@@ -347,8 +393,8 @@ export async function startAgentSession(
 
     deps.schedule(() => checkPromptArrived(deps, session.id), PROMPT_GRACE_MS);
 
-    logger.info({ callerId, sessionId: session.id, track, mode: permissionMode }, 'agent-sessions: started a session');
-    return { sessionId: session.id, name, worktreePath, install };
+    logger.info({ callerId, sessionId: session.id, track, mode: permissionMode, mcpServers }, 'agent-sessions: started a session');
+    return { sessionId: session.id, name, worktreePath, install, mcp };
   } finally {
     const left = (pendingStarts.get(callerId) ?? 1) - 1;
     if (left > 0) pendingStarts.set(callerId, left);
@@ -389,6 +435,8 @@ export interface StartedSessionState {
   status: string;
   attachable: boolean;
   permissionMode: string | null;
+  /** The MCP servers it loads: `[]` is none, null the user's full roster. */
+  mcpServers: string[] | null;
   notification: { type: NotificationType; at: string } | null;
   /** `pending` until the grace period ends; `not-received` is a session that will never start on its own. */
   prompt: PromptDelivery;
@@ -412,6 +460,7 @@ export function listAgentSessions(deps: AgentSessionDeps, callerId: string): Sta
         attachable: isLive(s),
         // Rows started before `manual` existed are stored as `default`.
         permissionMode: s.permissionMode ? (MODE_ALIASES[s.permissionMode] ?? s.permissionMode) : null,
+        mcpServers: s.mcpServers ?? null,
         notification: n ? { type: n.type, at: n.timestamp.toISOString() } : null,
         prompt: deps.promptDelivery(s),
       };

@@ -86,6 +86,7 @@ status: active
 - [x] `f-s3w8qd` P1 Sessions that start sessions — a main session starts prompted sessions on its planned tracks and lists their state; the sidebar nests them under it → project/session-orchestration.md
 - [x] `f-u7nq2k` P1 Started sessions run without the user — `auto` by default, the prompt file readable via `--add-dir`, worktrees get a copy of the main checkout's `.claude/settings.local.json` → project/unattended-started-sessions.md
 - [x] `f-cbq80b` P2 Sessions are addressable by their claude-remote name — every typed `claude` gets `--name`, so `ListAgents` shows `planner`; the sidebar shows Claude's name where it differs → project/peer-session-names.md
+- [x] `f-rkppyr` P2 Started sessions load no MCP servers unless asked — `--strict-mcp-config` by default, `start --mcp <name>` scopes one in, and revive and history Resume re-apply the profile → project/lean-started-sessions.md
 
 ## Track: Track workflow polish
 - [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
