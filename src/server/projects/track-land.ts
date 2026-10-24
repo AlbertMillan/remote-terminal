@@ -13,7 +13,8 @@ import {
   type LandResult,
   type UpdateResult,
 } from './track-branches.js';
-import { installDependencies, type InstallResult } from './project-deps.js';
+import { installDependencies, needsInstall, type InstallResult } from './project-deps.js';
+import { broadcastProjectsChanged } from '../websocket/connections.js';
 import { mergeTrapAdvice, nameFiles } from './track-plan.js';
 
 /**
@@ -71,56 +72,85 @@ export function landPreflightForSession(project: RegistryProject, trackName: str
   });
 }
 
+
 // --- Update from main ----------------------------------------------------
 
 export interface UpdateAndInstallDeps {
-  /** Reinstall over the worktree's existing `node_modules`. */
+  /** Reinstall over the worktree's `node_modules`, whether or not it exists. */
   install(worktreePath: string): Promise<InstallResult>;
   /** Tell open boards the track changed. */
   announce(projectCwd: string): void;
 }
 
-export const defaultUpdateDeps: Omit<UpdateAndInstallDeps, 'announce'> = {
+const defaultUpdateDeps: UpdateAndInstallDeps = {
   install: (worktreePath) => installDependencies(worktreePath, undefined, { refresh: true }),
+  announce: broadcastProjectsChanged,
 };
 
 /**
  * Update from main as its callers run it: the board's button (POST
  * /api/projects/track/update) and a track's session (POST /api/agent/update).
- * The merge runs under the project try lock; a reinstall, when the merge
- * changed a lockfile, runs after it, as landAndBuild's build does: holding the
- * lock for minutes would refuse every Land, Delete and job merge meanwhile.
- * The install marks the folder busy (isInstalling) as soon as it starts, with
- * no await in between, so a Land or Delete arriving after the lock is free
- * still refuses while it runs.
  *
+ * The merge runs under the project try lock. A reinstall follows when the
+ * merge changed a lockfile, or when the worktree's dependencies are missing
+ * or were left incomplete (needsInstall), so an Update run again after a
+ * failed or interrupted install retries it even when nothing is left to merge.
+ * The install is STARTED inside the lock, which marks the folder busy
+ * (isInstalling) before the lock is free, so a Land or Delete that takes it
+ * next refuses; and AWAITED outside it, as landAndBuild's build is: holding
+ * the lock for minutes would refuse every Land, Delete and job merge.
+ *
+ * Boards hear of a merge as soon as it is committed, not after the install.
  * A failed install keeps the merge and says what to do in `detail`.
  */
 export async function updateAndInstall(
   project: RegistryProject,
   track: string,
-  deps: UpdateAndInstallDeps
+  deps: UpdateAndInstallDeps = defaultUpdateDeps
 ): Promise<UpdateResult & { install: InstallResult | null }> {
-  const updated = await withProjectLock(project.cwd, `updating "${track}" from main`, () =>
-    updateTrackFromMain(project, track)
-  );
-  let install: InstallResult | null = null;
-  let note = '';
-  const worktree = updated.lockfileChanged ? getActiveTrackBranch(project.cwd, track)?.worktreePath : undefined;
-  if (worktree) {
-    try {
-      install = await deps.install(worktree);
-    } catch (error) {
-      install = { ran: true, ok: false, detail: error instanceof Error ? error.message : String(error) };
-    }
-    if (!install.ran) install = null;
-    else if (install.ok) note = ` The lockfile changed, so dependencies were reinstalled (${install.detail}).`;
-    else {
-      note =
-        ` The lockfile changed, but reinstalling dependencies failed: ${install.detail}. The merge is kept. ` +
-        'Stop anything running in the track’s worktree (a dev server, vitest), then run the install there.';
-    }
-  }
+  const { updated, why, pending } = await withProjectLock(project.cwd, `updating "${track}" from main`, async () => {
+    const updated = await updateTrackFromMain(project, track);
+    const worktree = getActiveTrackBranch(project.cwd, track)?.worktreePath;
+    const why: 'lockfile' | 'incomplete' | null = !worktree
+      ? null
+      : updated.lockfileChanged
+        ? 'lockfile'
+        : needsInstall(worktree)
+          ? 'incomplete'
+          : null;
+    const pending = worktree && why ? installSafely(deps, worktree) : null;
+    return { updated, why, pending };
+  });
   if (updated.mergeSha) deps.announce(project.cwd);
-  return { ...updated, install, detail: updated.detail + note };
+
+  const install = pending ? await pending : null;
+  let note = '';
+  if (install?.ran) {
+    const cause =
+      why === 'lockfile' ? 'The lockfile changed' : 'The worktree’s dependencies were missing or incomplete';
+    note = install.ok
+      ? ` ${cause}, so they were reinstalled (${install.detail}).`
+      : ` ${cause}, but reinstalling them failed: ${install.detail}. The merge is kept. ` +
+        'Stop anything running in the track’s worktree (a dev server, vitest), then Update again: it retries the install.';
+  } else if (updated.lockfileChanged === null) {
+    note =
+      ' Could not tell whether the lockfile changed: if the tests fail on a missing package, ' +
+      'install the dependencies in the track’s worktree.';
+  }
+  // "Already up to date with main" has no full stop of its own.
+  const detail = note && !/[.!?]$/.test(updated.detail) ? `${updated.detail}.${note}` : updated.detail + note;
+  return { ...updated, install: install?.ran ? install : null, detail };
+}
+
+/** deps.install, with a throw reported as a failed install: the merge is already committed. */
+function installSafely(deps: UpdateAndInstallDeps, worktree: string): Promise<InstallResult> {
+  try {
+    return deps.install(worktree).catch((error: unknown) => failedInstall(error));
+  } catch (error) {
+    return Promise.resolve(failedInstall(error));
+  }
+}
+
+function failedInstall(error: unknown): InstallResult {
+  return { ran: true, ok: false, detail: error instanceof Error ? error.message : String(error) };
 }

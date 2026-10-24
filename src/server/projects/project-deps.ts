@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { killTree } from '../agent/claude-run.js';
 import { createLogger } from '../utils/logger.js';
 import { pathKey } from '../sessions/project-discovery.js';
@@ -14,7 +14,7 @@ const MAX_OUTPUT_CHARS = 600;
 const KEEP_CHARS = 64 * 1024;
 
 export interface InstallResult {
-  /** False when the project has no lockfile, or `node_modules` was already there. */
+  /** False when the project has no lockfile, or `node_modules` was already there and complete. */
   ran: boolean;
   ok: boolean;
   detail: string;
@@ -41,9 +41,37 @@ export function installCommandFor(cwd: string): string | null {
   return null;
 }
 
-/** True when the project locks dependencies and `node_modules` is missing. */
+const INCOMPLETE_MARKER = 'claude-remote-install-incomplete';
+
+/**
+ * Where an install that never finished is recorded: in the checkout's git
+ * directory (`.git`, or `.git/worktrees/<name>` for a worktree), so it never
+ * shows in `git status`, and outside `node_modules`, which `npm ci` deletes
+ * first. Null outside a git checkout: there, a partial folder goes unnoticed,
+ * as before.
+ */
+function incompleteMarker(cwd: string): string | null {
+  const dotGit = join(cwd, '.git');
+  try {
+    if (statSync(dotGit).isDirectory()) return join(dotGit, INCOMPLETE_MARKER);
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, 'utf-8'))?.[1]?.trim();
+    return gitdir ? join(resolve(cwd, gitdir), INCOMPLETE_MARKER) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the project locks dependencies and `node_modules` is missing, or
+ * is what an install left when it failed. A failed install over a folder in
+ * use (a dev server or vitest holding files: EBUSY on Windows) can delete only
+ * part of it, and a folder that merely exists would read as installed.
+ */
 export function needsInstall(cwd: string): boolean {
-  return installCommandFor(cwd) !== null && !existsSync(join(cwd, 'node_modules'));
+  if (installCommandFor(cwd) === null) return false;
+  if (!existsSync(join(cwd, 'node_modules'))) return true;
+  const marker = incompleteMarker(cwd);
+  return marker !== null && existsSync(marker);
 }
 
 // One install per folder at a time. Two into one node_modules corrupt it, and
@@ -93,6 +121,16 @@ async function runInstall(cwd: string, signal: AbortSignal | undefined, refresh:
   const command = installCommandFor(cwd) as string;
   const startedAt = Date.now();
   logger.info({ cwd, command }, 'installing dependencies');
+  // Removed only once the install succeeds: anything else (a failure, a
+  // timeout, the server dying mid-install) leaves needsInstall() true.
+  const marker = incompleteMarker(cwd);
+  if (marker) {
+    try {
+      writeFileSync(marker, `${new Date().toISOString()} ${command}\n`);
+    } catch (error) {
+      logger.warn({ cwd, code: (error as NodeJS.ErrnoException).code }, 'could not mark the install as under way');
+    }
+  }
 
   let output = '';
   let stopped: 'timeout' | 'aborted' | null = null;
@@ -137,12 +175,14 @@ async function runInstall(cwd: string, signal: AbortSignal | undefined, refresh:
 
   const seconds = Math.round((Date.now() - startedAt) / 1000);
   if (code === 0 && !stopped) {
+    if (marker) rmSync(marker, { force: true });
     logger.info({ cwd, command, seconds }, 'dependencies installed');
     return { ran: true, ok: true, detail: `dependencies installed (${seconds}s)` };
   }
 
   // A half-written node_modules would read as installed to the next session
   // opened here, which then skips the install and fails its tests instead.
+  // The marker covers a removal that fails partway (files held open).
   // rm removes a link itself, never what it points at; async, since a
   // partial install can be thousands of files and this runs on the event loop.
   try {

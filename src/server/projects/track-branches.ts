@@ -537,8 +537,11 @@ export async function addBehindMain(projects: WorkspaceProject[]): Promise<Works
 export interface UpdateResult {
   /** The merge commit on the track branch, or null when it was already up to date. */
   mergeSha: string | null;
-  /** The merge brought in a different lockfile, so the worktree's `node_modules` is stale. */
-  lockfileChanged: boolean;
+  /**
+   * The merge brought in a different lockfile, so the worktree's
+   * `node_modules` is stale; null when git could not tell.
+   */
+  lockfileChanged: boolean | null;
   detail: string;
 }
 
@@ -690,7 +693,7 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
 
   return {
     mergeSha,
-    lockfileChanged: !!lockDiff?.trim(),
+    lockfileChanged: lockDiff === null ? null : lockDiff.trim() !== '',
     detail:
       (counted > 0
         ? `Merged ${counted} commit${counted === 1 ? '' : 's'} from ${base} into the track. `

@@ -180,6 +180,8 @@ export function isLastFavorite(ordered: { favorite: boolean }[], i: number): boo
 export class ProjectWorkspace {
   private board: WorkspaceProject[] = [];
   private selectedCwd: string | null = null;
+  /** Track requests (Update, Land, …) awaiting their answer; each reloads the board when it comes. */
+  private trackRequestsInFlight = 0;
   /** Projects whose migration run produced nothing, so the button offers Retry. */
   private failedMigrations = new Map<string, string>();
   private busy = new Set<string>();
@@ -738,7 +740,7 @@ export class ProjectWorkspace {
 
   /** Merge the track's base branch into its worktree (the server keeps the plan). */
   async updateTrack(cwd: string, track: string): Promise<void> {
-    this.flash(`Updating "${track}" from main…`, 0);
+    this.flash(`Updating "${track}" from main… If main changed the dependencies, they are reinstalled too, which can take minutes.`, 0);
     const data = await this.trackRequest<{ detail: string }>('/api/projects/track/update', { cwd, track });
     await this.reload();
     if (data) this.flash(data.detail);
@@ -764,6 +766,7 @@ export class ProjectWorkspace {
    * own reason (a live job, a dirty worktree), not a stale PROJECT.md.
    */
   private async trackRequest<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
+    this.trackRequestsInFlight++;
     try {
       const res = await fetch(path, {
         method: 'POST',
@@ -779,7 +782,19 @@ export class ProjectWorkspace {
     } catch (error) {
       this.flash(error instanceof Error ? error.message : 'Request failed');
       return null;
+    } finally {
+      this.trackRequestsInFlight--;
     }
+  }
+
+  /**
+   * A track changed outside this client's requests (a session's Update from
+   * main). Skipped while one of this client's own track requests is out: it
+   * reloads once it answers, and the server announces before that.
+   */
+  onProjectsChanged(): void {
+    if (this.trackRequestsInFlight > 0) return;
+    void this.refresh();
   }
 
   async deleteFeature(cwd: string, id: string): Promise<boolean> {

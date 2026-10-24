@@ -14,7 +14,6 @@ import { getConfig } from '../config.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
 import {
   broadcastLandResult,
-  broadcastProjectsChanged,
   broadcastPromptMissing,
   broadcastSessionAdded,
   removeWorktreeSessions,
@@ -25,12 +24,7 @@ import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { findWorkspaceProject, listBoardCwds } from '../projects/workspace.js';
 import { readProjectPlan } from '../projects/project-plan.js';
 import { ensureTrackBranch } from '../projects/track-branches.js';
-import {
-  defaultUpdateDeps as defaultTrackUpdateDeps,
-  landAndBuild,
-  landPreflightForSession,
-  updateAndInstall,
-} from '../projects/track-land.js';
+import { landAndBuild, landPreflightForSession, updateAndInstall } from '../projects/track-land.js';
 import type { UpdateResult } from '../projects/track-branches.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import { listAllTrackBranches, trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
@@ -471,7 +465,8 @@ export interface AcceptedLand {
   closesCaller: boolean;
 }
 
-export interface LandBody {
+/** A land or update request: no track for the caller's own, or one its started session works in. */
+export interface TrackBody {
   track?: unknown;
 }
 
@@ -525,7 +520,7 @@ function callerTrack(
 function resolveCallerTrack(
   deps: CallerTrackDeps,
   callerId: string,
-  body: LandBody,
+  body: TrackBody,
   verb: 'land' | 'update'
 ): { project: RegistryProject; branch: TrackBranch; closesCaller: boolean } {
   const caller = deps.getSession(callerId);
@@ -549,7 +544,7 @@ function resolveCallerTrack(
  * a track one of its started sessions works in (callerTrack). Every refusal
  * reaches the agent while it is still running.
  */
-export async function requestLand(deps: AgentLandDeps, callerId: string, body: LandBody = {}): Promise<AcceptedLand> {
+export async function requestLand(deps: AgentLandDeps, callerId: string, body: TrackBody = {}): Promise<AcceptedLand> {
   const { project, branch, closesCaller } = resolveCallerTrack(deps, callerId, body, 'land');
   const key = landKey(project, branch.trackName);
   if (landsUnderWay.has(key)) {
@@ -606,8 +601,7 @@ export const defaultUpdateDeps: AgentUpdateDeps = {
   listSessions: defaultLandDeps.listSessions,
   trackBranchFor: defaultLandDeps.trackBranchFor,
   projectForCwd,
-  update: (project, trackName) =>
-    updateAndInstall(project, trackName, { ...defaultTrackUpdateDeps, announce: broadcastProjectsChanged }),
+  update: (project, trackName) => updateAndInstall(project, trackName),
 };
 
 export interface UpdateReply {
@@ -618,7 +612,7 @@ export interface UpdateReply {
 }
 
 /** A session's Update from main of its own track, or one a session it started works in. */
-export async function requestUpdate(deps: AgentUpdateDeps, callerId: string, body: LandBody = {}): Promise<UpdateReply> {
+export async function requestUpdate(deps: AgentUpdateDeps, callerId: string, body: TrackBody = {}): Promise<UpdateReply> {
   const { project, branch } = resolveCallerTrack(deps, callerId, body, 'update');
   const result = await deps.update(project, branch.trackName);
   logger.info({ callerId, track: branch.trackName, mergeSha: result.mergeSha }, 'agent-sessions: session-requested update');
@@ -639,10 +633,10 @@ export function registerAgentSessionRoutes(
   landDeps: AgentLandDeps = defaultLandDeps,
   updateDeps: AgentUpdateDeps = defaultUpdateDeps
 ): void {
-  app.post<{ Body?: LandBody }>('/api/agent/update', async (request, reply) => {
+  app.post<{ Body?: TrackBody }>('/api/agent/update', async (request, reply) => {
     try {
       const callerId = authenticate(request, deps);
-      return await requestUpdate(updateDeps, callerId, (request.body ?? {}) as LandBody);
+      return await requestUpdate(updateDeps, callerId, (request.body ?? {}) as TrackBody);
     } catch (error) {
       return sendError(reply, error);
     }
@@ -651,7 +645,7 @@ export function registerAgentSessionRoutes(
   // Phase 2 of each accepted Land, run once its 202 has been sent: the Land
   // closes the session that asked, and its agent must have its answer first.
   const acceptedLands = new WeakMap<FastifyRequest, AcceptedLand>();
-  app.post<{ Body?: LandBody }>(
+  app.post<{ Body?: TrackBody }>(
     '/api/agent/land',
     {
       onResponse: async (request) => {
@@ -672,7 +666,7 @@ export function registerAgentSessionRoutes(
     async (request, reply) => {
       try {
         const callerId = authenticate(request, deps);
-        const accepted = await requestLand(landDeps, callerId, (request.body ?? {}) as LandBody);
+        const accepted = await requestLand(landDeps, callerId, (request.body ?? {}) as TrackBody);
         acceptedLands.set(request, accepted);
         const closing = accepted.closesCaller ? 'this session will close' : "the track's sessions will close";
         return reply.code(202).send({

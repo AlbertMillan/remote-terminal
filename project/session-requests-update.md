@@ -59,8 +59,13 @@ and specs off it, so the merge deletes the track's plan (or conflicts on a revis
    then runs `installDependencies(worktree, …, { refresh: true })` (frozen install, one per
    folder, `isInstalling` guards Land/Delete meanwhile). The orchestrator or session never
    has to notice or run `npm ci` itself, and the board's button gets it too.
-   - The install runs **after** the project lock is released, as Land's build does:
-     holding the try lock for minutes would refuse every Land, Delete and job merge.
+   - The install is started inside the project lock (so `isInstalling` is set before the
+     lock is free) and awaited after it, as Land's build is: holding the try lock for
+     minutes would refuse every Land, Delete and job merge.
+   - It also reinstalls when `needsInstall()` says the install is missing or incomplete,
+     even with nothing to merge, so running Update again retries a failed or timed-out
+     install. A failed install leaves a marker in the git directory, so a partly deleted
+     `node_modules` still counts as needing an install.
    - The reply waits for the install, and `detail` says what happened ("installed
      dependencies: the lockfile changed").
    - The merge stays committed if the install fails. `detail` then names the failure

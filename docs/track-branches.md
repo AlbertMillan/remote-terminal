@@ -301,20 +301,23 @@ not just the cwd: a project's `doc` override decides which files are its plan.
    is mid-merge instead of claiming nothing changed.
 6. Commit `Merge <base> into track: <name>`. Never pushed; the tests are not run.
 7. Report whether the merge changed a lockfile (`lockfileChanged`, a `git diff` of
-   `LOCKFILES` between the pre-merge HEAD and the merge).
+   `LOCKFILES` between the pre-merge HEAD and the merge; `null` when git can't tell, and
+   `detail` then says to install by hand if tests fail on a missing package).
 
 Both callers, the board's button and a session's `cr-session update`, go through
-`updateAndInstall` (`track-land.ts`): steps 1–7 under the lock, then, when the lockfile
-changed, a reinstall over the worktree's existing `node_modules`
-(`installDependencies(…, { refresh: true })`). `needsInstall()` only asks whether
-`node_modules` exists, so without this nothing would notice it was stale, and the track's
-tests would fail on a package main added. The install runs **after** the lock is
-released, like Land's build: holding the try lock for minutes would refuse every Land,
-Delete and job merge meanwhile. It marks the folder busy (`isInstalling`) with no await
-after the lock, so Land and Delete still refuse while it runs. A failed install keeps the
-merge; `detail` names the failure and says to stop whatever holds the worktree's files
-(a dev server, vitest: `EBUSY` on Windows) and install again. A successful merge then
-broadcasts `projects.changed`, and every open board refetches.
+`updateAndInstall` (`track-land.ts`): steps 1–7 under the lock, then a reinstall over the
+worktree's `node_modules` (`installDependencies(…, { refresh: true })`) when the lockfile
+changed, or when `needsInstall()` says the install is missing or incomplete, even with
+nothing left to merge. So running Update again retries a failed or interrupted install.
+- The install is **started** inside the lock, which sets `isInstalling` before the lock is
+  free, so a Land or Delete that takes it next refuses. It is **awaited** outside the lock,
+  like Land's build: holding the try lock for minutes would refuse every Land, Delete and
+  job merge meanwhile.
+- A merge broadcasts `projects.changed` as soon as it is committed, not after the install,
+  and open boards refetch. A board whose own track request is still out skips it, since
+  that request reloads when it answers.
+- A failed install keeps the merge. `detail` names the failure and says to stop whatever
+  holds the worktree's files (a dev server, vitest: `EBUSY` on Windows), then Update again.
 
 A session's Update (`POST /api/agent/update`) is described in
 `docs/session-orchestration.md`.
@@ -361,7 +364,12 @@ Discard emptied main's `node_modules`.
   install. Not at branch creation: dispatch creates track branches too, and its job never
   uses them. A failed install still opens the session, with the failure written at the
   top of its terminal (client-side, never sent to the PTY). A failed install removes its
-  partial `node_modules`, so the next session opened there tries again.
+  partial `node_modules`, so the next session opened there tries again. That removal can
+  itself fail partway when files are held open, so every install also writes
+  `claude-remote-install-incomplete` into the checkout's git directory (`.git`, or
+  `.git/worktrees/<name>`: never in `git status`, and outside `node_modules`, which
+  `npm ci` deletes first), and removes it only on success. `needsInstall()` is true while
+  it exists, even if a `node_modules` folder is there.
 - **Job worktrees:** in the design stage, right after the worktree exists, and on every
   design pass that finds `node_modules` missing (a retried job's worktree is already
   recorded). It counts against `jobs.stageTimeoutMs`. A failure fails the stage with

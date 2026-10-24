@@ -211,9 +211,12 @@ runs a plain `git merge main`, which deletes the track's plan.
 - **One phase.** Nothing closes, so there is no `202`: the reply is `200 { track,
   mergeSha, install, detail }`, or the refusal (live job, install, uncommitted code,
   conflict, a busy project lock) as the CLI's error. The CLI prints `detail`.
-- **Dependencies.** When the merge changed a lockfile, the reply waits for a reinstall in
-  the worktree, so neither the agent nor the user has to notice. The skill tells the agent
-  to pass a 10-minute Bash timeout.
+- **Dependencies.** When the merge changed a lockfile, or the worktree's install is
+  missing or incomplete, the reply waits for a reinstall, so neither the agent nor the user
+  has to notice. The skill tells the agent to pass a 10-minute Bash timeout. The install
+  has the same 10-minute limit, so a call can still time out first. The skill then has
+  the agent run `update` again: 409 "still installing" while the install runs, and
+  afterwards a retry of a failed install even with nothing to merge.
 - **The board** refetches on the `projects.changed` broadcast. No toast: the agent is
   alive and reports the result itself.
 - The skill says: never `git merge`/`pull` main in a track worktree; commit first; use it

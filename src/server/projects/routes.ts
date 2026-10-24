@@ -27,10 +27,10 @@ import {
 import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
-import { defaultUpdateDeps, landAndBuild, updateAndInstall } from './track-land.js';
+import { landAndBuild, updateAndInstall } from './track-land.js';
 import { installDependencies, needsInstall } from './project-deps.js';
 import { sessionManager } from '../sessions/manager.js';
-import { broadcastProjectsChanged, removeWorktreeSessions } from '../websocket/connections.js';
+import { removeWorktreeSessions } from '../websocket/connections.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
 import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
@@ -431,7 +431,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       const project = findWorkspaceProject(body.cwd);
       if (!project) return reply.status(404).send({ error: 'Unknown project' });
       return withErrors(reply, () =>
-        updateAndInstall(project, body.track as string, { ...defaultUpdateDeps, announce: broadcastProjectsChanged })
+        updateAndInstall(project, body.track as string)
       );
     }
   );

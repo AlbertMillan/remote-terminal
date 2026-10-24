@@ -129,11 +129,16 @@ stays open.
 node "$CLAUDE_REMOTE_CLI" update
 ```
 
-- It prints what was merged. If main changed the lockfile, it also reinstalls
-  the worktree's dependencies first, which can take several minutes — **pass
-  `timeout: 600000` on the Bash call**. If the reinstall failed, the output
-  says so and the merge is kept: tell the user, and stop anything running in
-  the worktree (a dev server, vitest) before installing again.
+- It prints what was merged. If main changed the lockfile, or the worktree's
+  dependencies are missing or incomplete, it also reinstalls them first, which
+  can take several minutes — **pass `timeout: 600000` on the Bash call**.
+- If the reinstall failed, the output says so and the merge is kept. Stop
+  anything running in the worktree (a dev server, vitest), then run `update`
+  again: with nothing left to merge it still retries the install. Tell the
+  user if it fails twice.
+- **After a timeout, run `update` again.** While the install is still running
+  it refuses with "still installing" (wait a minute and retry); once it has
+  finished it reports, and retries an install that failed.
 - Then run the tests: the track now has main's code too.
 - A conflict refusal names the files and changes nothing. Make those files
   agree on the track branch (commit the fix here) and update again, or tell

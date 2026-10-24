@@ -98,6 +98,43 @@ describe('installDependencies', () => {
     expect(await installDependencies(unlocked, undefined, { refresh: true })).toMatchObject({ ran: false, ok: true });
   });
 
+  it('marks a failed install in the git directory, so a folder left behind still needs one', async () => {
+    const cwd = projectWith({
+      'package.json': '{"name":"broken","version":"1.0.0"}',
+      'package-lock.json': '{ not json',
+    });
+    mkdirSync(join(cwd, '.git'));
+    expect(await installDependencies(cwd)).toMatchObject({ ran: true, ok: false });
+    expect(existsSync(join(cwd, '.git', 'claude-remote-install-incomplete'))).toBe(true);
+    // What a removal that failed partway (files held open) leaves.
+    mkdirSync(join(cwd, 'node_modules'));
+    expect(needsInstall(cwd)).toBe(true);
+  });
+
+  it('finds a worktree’s git directory through its .git file, and clears the mark once an install succeeds', async () => {
+    const gitDir = mkdtempSync(join(tmpdir(), 'cr-deps-gitdir-'));
+    dirs.push(gitDir);
+    const cwd = projectWith({
+      '.git': `gitdir: ${gitDir}\n`,
+      'package.json': '{"name":"ok","version":"1.0.0"}',
+      'package-lock.json': JSON.stringify({
+        name: 'ok',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: { '': { name: 'ok', version: '1.0.0' } },
+      }),
+    });
+    writeFileSync(join(gitDir, 'claude-remote-install-incomplete'), 'earlier failure\n');
+    mkdirSync(join(cwd, 'node_modules'));
+    expect(needsInstall(cwd)).toBe(true);
+
+    expect(await installDependencies(cwd)).toMatchObject({ ran: true, ok: true });
+    expect(existsSync(join(gitDir, 'claude-remote-install-incomplete'))).toBe(false);
+    mkdirSync(join(cwd, 'node_modules'), { recursive: true });
+    expect(needsInstall(cwd)).toBe(false);
+  });
+
   it('kills the install when aborted', async () => {
     const cwd = projectWith({
       'package.json': '{"name":"broken","version":"1.0.0"}',

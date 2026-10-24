@@ -260,6 +260,22 @@ describe('board', () => {
     }
   });
 
+  it('Update from main merges through updateAndInstall: plan kept, and the reply carries the install', async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    commitFile(repo, 'src/main.ts', 'x\n', 'code on main');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/track/update',
+      payload: { cwd: repo, track: 'Alpha' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mergeSha: git(t.worktreePath, 'rev-parse', 'HEAD'), lockfileChanged: false, install: null });
+    expect(read(t.worktreePath)).toContain('## Track: Alpha');
+    expect(existsSync(join(t.worktreePath, 'src', 'main.ts'))).toBe(true);
+  });
+
   it('counts the running sessions inside a branched track’s worktree, for the Land confirm', async () => {
     const t = await tracks.ensureTrackBranch(project(), 'Alpha');
     const board = getWorkspaceBoard({
