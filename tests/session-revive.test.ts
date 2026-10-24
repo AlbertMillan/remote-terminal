@@ -207,7 +207,8 @@ describe('reviveSession — the conversation', () => {
 
     // The injection is debounced 100ms behind the shell's first output.
     await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
-    expect(writeToPty).toHaveBeenCalledWith(expect.anything(), `claude --resume ${CLAUDE_ID}\r`);
+    // Under its claude-remote name, so `ListAgents` still shows it after the restart.
+    expect(writeToPty).toHaveBeenCalledWith(expect.anything(), `claude --resume ${CLAUDE_ID} --name "claude-remote"\r`);
   });
 
   it('injects nothing for a plain shell row, which just gets its shell back', async () => {

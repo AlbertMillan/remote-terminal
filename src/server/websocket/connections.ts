@@ -7,8 +7,10 @@ import {
   type CategoryInfo,
   type LandNotificationPayload,
   type PromptMissingNotificationPayload,
+  type SessionClaudeNamesPayload,
 } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
+import { claudeNameFor } from '../sessions/claude-registry.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -98,7 +100,17 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     claudeSessionId: session.claudeSessionId ?? null,
     spawnedBy: session.spawnedBy ?? null,
     permissionMode: session.permissionMode ?? null,
+    claudeName: claudeNameFor(session.claudeSessionId),
   };
+}
+
+export function broadcastClaudeNames(names: Record<string, string>): void {
+  const payload: SessionClaudeNamesPayload = { names };
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.claudeNames', payload));
+    }
+  }
 }
 
 /**

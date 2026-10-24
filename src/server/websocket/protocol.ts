@@ -44,6 +44,7 @@ export type ServerMessageType =
   | 'session.list'
   | 'session.forked'
   | 'session.kept'
+  | 'session.claudeNames'
   | 'session.error'
   | 'terminal.data'
   | 'terminal.exit'
@@ -174,6 +175,14 @@ export interface SessionInfo {
   spawnedBy: string | null;
   /** The `--permission-mode` a started session's `claude` runs with. */
   permissionMode: string | null;
+  /** What Claude calls the conversation running here (`ListAgents`' name), or null when
+   *  none is running. Kept current by `session.claudeNames`. */
+  claudeName: string | null;
+}
+
+/** Every session with a running Claude, by session id → Claude's name; sent on change. */
+export interface SessionClaudeNamesPayload {
+  names: Record<string, string>;
 }
 
 export interface SessionForkPayload {

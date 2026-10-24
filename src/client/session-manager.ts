@@ -25,6 +25,7 @@ import type {
   SessionInfo,
   CategoryInfo,
   SessionMovedPayload,
+  SessionClaudeNamesPayload,
   SessionReorderedPayload,
   CategoryCreatedPayload,
   CategoryRenamedPayload,
@@ -630,6 +631,9 @@ class SessionManager {
       case 'session.renamed':
         this.handleSessionRenamed(message.payload);
         break;
+      case 'session.claudeNames':
+        this.handleClaudeNames(message.payload);
+        break;
       case 'session.moved':
         this.handleSessionMoved(message.payload);
         break;
@@ -849,6 +853,14 @@ class SessionManager {
       const nameEl = document.getElementById('session-name');
       if (nameEl) nameEl.textContent = payload.name;
     }
+  }
+
+  // The full set each time: a session missing from it has no Claude running.
+  private handleClaudeNames(payload: SessionClaudeNamesPayload): void {
+    for (const [id, session] of this.sessions) {
+      session.claudeName = payload.names[id] ?? null;
+    }
+    this.renderSessionList();
   }
 
   private handleSessionMoved(payload: SessionMovedPayload): void {

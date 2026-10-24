@@ -7,7 +7,7 @@ import { replyWithError, type StatusError } from '../utils/http-errors.js';
 import { sessionManager } from '../sessions/manager.js';
 import { sessionForToken } from '../sessions/session-env.js';
 import { writePromptFile } from '../sessions/prompt-file.js';
-import { injectCommand } from '../sessions/session-open.js';
+import { claudeNameFlag, injectCommand } from '../sessions/session-open.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb } from '../db/queries.js';
 import { getConfig } from '../config.js';
@@ -71,10 +71,11 @@ const MODE_ALIASES: Record<string, PermissionMode> = { default: 'manual' };
  * prompt folder only, so it reads its prompt without asking and no other's.
  * `--` before the prompt is required: `--add-dir` takes several directories,
  * and without it the prompt is read as one more, so the session starts idle.
+ * `--name` makes the session show in `ListAgents` under its claude-remote name.
  */
-export function startCommand(mode: PermissionMode, promptDir: string, promptPath: string): string {
+export function startCommand(mode: PermissionMode, promptDir: string, promptPath: string, name?: string): string {
   const flag = mode === 'manual' ? '' : `--permission-mode ${mode} `;
-  return `claude ${flag}--add-dir "${promptDir}" -- "Read ${promptPath} and follow it."`;
+  return `claude ${flag}--add-dir "${promptDir}"${claudeNameFlag(name)} -- "Read ${promptPath} and follow it."`;
 }
 
 export const MAX_PROMPT_BYTES = 100 * 1024;
@@ -331,7 +332,7 @@ export async function startAgentSession(
       throw error;
     }
 
-    deps.injectCommand(session, startCommand(permissionMode, promptDir, promptPath));
+    deps.injectCommand(session, startCommand(permissionMode, promptDir, promptPath, session.name));
 
     const metadata = deps.getSession(session.id);
     deps.broadcastAdded(

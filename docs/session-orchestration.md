@@ -238,6 +238,36 @@ runs a plain `git merge main`, which deletes the track's plan.
 - A child whose `permissionMode` is not `auto` shows a chip (`default` reads as `manual`).
 - Children are not draggable; a drop on one falls through to its category's list.
 
+## Names agents message each other by
+
+Agents talk through Claude Code's own `ListAgents`/`SendMessage`, which list every running
+Claude on the machine (any project) by **Claude's** name, not ours. A `claude` started without
+a name gets one derived from its folder (`rimworldy-ae`, `8b4cd966-0a` for a track worktree),
+so an agent asked to message "the planner" can't find it. Spec: `project/peer-session-names.md`.
+
+- **Every `claude` the server types carries `--name "<session name>"`** (`claudeNameFlag()` in
+  `session-open.ts`): agent start, revive, history resume and fork. A revive re-applies it, so
+  the name survives a restart. A name holding `"`, `%`, `$`, a backtick, `!`, a backslash or a
+  control character gets no flag (Claude falls back to its own name) rather than a broken
+  quote that would run the rest of the line as shell.
+- **The sidebar shows Claude's name** in the status line (`active · @rimworldy-ae`) when it
+  differs from ours, which happens for a `claude` typed by hand. `sessions/claude-registry.ts`
+  reads Claude's live registry, `~/.claude/sessions/<pid>.json` (`{ pid, sessionId, name,
+  nameSource }`; `name` is exactly what `ListAgents` shows), matches `sessionId` to the
+  session's `claudeSessionId` from the claude-session hook, and skips files whose `pid` is
+  dead (a killed Claude leaves its file). It's Claude Code's internal format: every read
+  degrades to no name, and nothing writes it.
+- The client fetches the list only on connect, and Claude starts, exits and `/rename`s
+  without telling us, so the server polls the registry every 5 s and broadcasts
+  `session.claudeNames` (the full map) whenever it changes. `sessionToInfo` fills
+  `claudeName` from the last poll.
+- There is no claude-remote directory or mailbox. `SendMessage` already reaches every running
+  session regardless of project, so a directory would gate nothing, and typing a message into
+  another session's terminal could answer a dialog or run in the shell. A session with no
+  Claude running can't be messaged until it is revived.
+- Renaming a session doesn't rename a running Claude; the new name applies at the next typed
+  `claude`, and the sidebar shows the mismatch meanwhile.
+
 ## Installing the skill
 
 The skill is what makes an agent in **any** project's session know the CLI exists. It goes

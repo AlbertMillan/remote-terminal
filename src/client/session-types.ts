@@ -24,6 +24,15 @@ export interface SessionInfo {
   spawnedBy?: string | null;
   /** The `--permission-mode` a started session runs with; a chip when not `default`. */
   permissionMode?: string | null;
+  /** Claude's name for the conversation running here (what `ListAgents` shows and agents
+   *  message), or null when none runs. The status line shows it when it differs from
+   *  `name`. Kept current by `session.claudeNames`. */
+  claudeName?: string | null;
+}
+
+/** Every session with a running Claude, by session id → Claude's name. */
+export interface SessionClaudeNamesPayload {
+  names: Record<string, string>;
 }
 
 export interface CategoryInfo {
@@ -197,6 +206,7 @@ export type ServerMessage =
   | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
+  | { type: 'session.claudeNames'; id?: string; payload: SessionClaudeNamesPayload }
   | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
   | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
   | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }

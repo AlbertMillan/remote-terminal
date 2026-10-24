@@ -341,7 +341,7 @@ describe('start', () => {
     const dir = promptDirFor(body.sessionId).replace(/\\/g, '/');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
     // `--` ends --add-dir's list of directories, or the prompt is read as one more.
-    expect(line).toBe(`claude --permission-mode acceptEdits --add-dir "${dir}" -- "Read ${path.replace(/\\/g, '/')} and follow it."`);
+    expect(line).toBe(`claude --permission-mode acceptEdits --add-dir "${dir}" --name "Split view: impl" -- "Read ${path.replace(/\\/g, '/')} and follow it."`);
     expect(line).not.toContain('\\');
 
     expect(deps.broadcastAdded).toHaveBeenCalledWith(
@@ -354,7 +354,7 @@ describe('start', () => {
     expect(res.json().name).toBe('Split view');
     expect(rows.get(res.json().sessionId)!.permissionMode).toBe('auto');
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(line).toMatch(/^claude --permission-mode auto --add-dir "[^"]+" -- "Read /);
+    expect(line).toMatch(/^claude --permission-mode auto --add-dir "[^"]+" --name "Split view" -- "Read /);
   });
 
   it('installs a worktree that needs it, and still starts the session when the install fails', async () => {

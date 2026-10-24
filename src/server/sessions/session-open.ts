@@ -59,8 +59,25 @@ export function injectCommand(session: ActiveSession, line: string): void {
   }, 5000);
 }
 
+// Quotes, `$`/`%`/backtick (PowerShell, cmd, bash expansion), `!` (bash history expansion
+// inside double quotes), a backslash (escapes the closing quote in bash) and control chars.
+const UNSAFE_NAME = /["%$`!\\]/;
+const hasControlChar = (s: string) => [...s].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
+
+/**
+ * ` --name "<name>"`, so the session shows in Claude's `ListAgents` under its claude-remote
+ * name instead of one derived from its folder (docs/session-orchestration.md). A name no
+ * shell quotes safely gets no flag: Claude falls back to its own name, which is harmless,
+ * where a broken quote would run the rest of the line as shell.
+ */
+export function claudeNameFlag(name: string | null | undefined): string {
+  const trimmed = name?.trim();
+  if (!trimmed || UNSAFE_NAME.test(trimmed) || hasControlChar(trimmed)) return '';
+  return ` --name "${trimmed}"`;
+}
+
 function injectResumeCommand(session: ActiveSession, resumeId: string): void {
-  injectCommand(session, `claude --resume ${resumeId}`);
+  injectCommand(session, `claude --resume ${resumeId}${claudeNameFlag(session.name)}`);
 }
 
 export async function forkSession(

@@ -81,6 +81,9 @@ About two minutes after starting sessions, run `list`. For any `not-received`
 session, tell the user, and if you can message it (it shows in `ListAgents`),
 send it the task yourself. The user also gets a warning in claude-remote.
 
+Sessions you start show in `ListAgents` under the `name` that `list` prints,
+so message them by that name.
+
 ## Landing this session's track
 
 `land` merges the track this session is working in into its base branch,

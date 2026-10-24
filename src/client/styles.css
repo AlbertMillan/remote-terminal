@@ -435,6 +435,16 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* Claude's name for the session when it differs (docs/session-orchestration.md) */
+.session-item .session-claude-name {
+  color: var(--accent);
+}
+
+.session-item.active .session-claude-name {
+  color: inherit;
+  font-weight: 600;
+}
+
 .session-item.terminated {
   opacity: 0.5;
 }

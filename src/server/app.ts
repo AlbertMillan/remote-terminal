@@ -11,6 +11,8 @@ import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
+import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-registry.js';
+import { broadcastClaudeNames } from './websocket/connections.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
@@ -61,6 +63,8 @@ export async function createApp(): Promise<FastifyInstance> {
   // Import transcript usage (all history on first boot), then keep up. Runs in
   // the background; the board shows what has been read so far.
   startUsageLedger();
+  // Claude's own name for each running conversation, for the sidebar.
+  startClaudeNameWatch(() => sessionManager.getSessionList(), broadcastClaudeNames);
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -368,6 +372,7 @@ export async function createApp(): Promise<FastifyInstance> {
     await sessionManager.shutdown();
 
     stopUsageLedger();
+    stopClaudeNameWatch();
 
     // Close database
     closeDatabase();

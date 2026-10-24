@@ -397,6 +397,12 @@ export class SessionListView {
       ? `<span class="session-mode-chip" title="Started in ${escapeAttr(mode)} permission mode">${escapeHtml(mode)}</span>`
       : '';
     const summaryHtml = children.length > 0 ? `<div class="session-summary">${this.childSummary(children)}</div>` : '';
+    // What other agents call this session (`ListAgents`), when it isn't the name shown above:
+    // a `claude` typed by hand gets a folder-derived name. Nothing when no Claude runs here.
+    const claudeName = session.claudeName && session.claudeName !== session.name ? session.claudeName : null;
+    const claudeNameHtml = claudeName
+      ? ` · <span class="session-claude-name" title="Claude's name for this session: agents message it as ${escapeAttr(claudeName)}">@${escapeHtml(claudeName)}</span>`
+      : '';
 
     li.innerHTML = `
       ${dragHandleHtml}
@@ -410,7 +416,7 @@ export class SessionListView {
       </span>
       <div class="session-info">
         <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-status">${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}</div>
+        <div class="session-status">${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}${claudeNameHtml}</div>
         ${summaryHtml}
       </div>
       ${reviveHtml}

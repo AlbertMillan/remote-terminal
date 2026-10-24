@@ -212,9 +212,9 @@ describe('injectCommand', () => {
     );
   });
 
-  it('still types `claude --resume <id>` for a history resume', async () => {
+  it('still types `claude --resume <id>` for a history resume, under the session name', async () => {
     const s = await manager.openClaudeSession({ claudeSessionId: CLAUDE_ID, cwd: dataDir, mode: 'resume' });
-    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalledWith(s.pty, `claude --resume ${CLAUDE_ID}\r`));
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalledWith(s.pty, `claude --resume ${CLAUDE_ID} --name "${s.name}"\r`));
   });
 });
 
