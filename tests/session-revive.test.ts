@@ -59,6 +59,7 @@ const launchProfileForTranscript = vi.fn((_id: string): { permissionMode: string
 vi.mock('../src/server/db/queries.js', () => ({
   insertSession: (...args: unknown[]) => insertSession(...(args as [])),
   launchProfileForTranscript: (id: string) => launchProfileForTranscript(id),
+  accountForTranscript: vi.fn(() => null),
   updateSession: (...args: unknown[]) => updateSession(...(args as [string, Record<string, unknown>])),
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),

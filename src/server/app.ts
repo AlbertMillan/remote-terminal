@@ -6,6 +6,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
+import { accountProblems } from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
@@ -41,6 +42,9 @@ const logger = createLogger('app');
 export async function createApp(): Promise<FastifyInstance> {
   // Load configuration
   loadConfig();
+  for (const problem of accountProblems()) {
+    logger.error({ problem }, 'Invalid account configuration (docs/accounts.md)');
+  }
   const config = getConfig();
 
   // Initialize database

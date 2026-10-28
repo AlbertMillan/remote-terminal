@@ -28,6 +28,8 @@ export interface SessionInfo {
    *  message), or null when none runs. The status line shows it when it differs from
    *  `name`. Kept current by `session.claudeNames`. */
   claudeName?: string | null;
+  /** The Claude login it runs under (server `accounts.ts`). */
+  account?: string;
 }
 
 /** Every session with a running Claude, by session id → Claude's name. */

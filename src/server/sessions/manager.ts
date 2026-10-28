@@ -33,6 +33,7 @@ import {
 } from './session-open.js';
 import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './session-env.js';
 import { deletePromptFile } from './prompt-file.js';
+import { resolveStartAccount } from '../accounts.js';
 
 const logger = createLogger('session-manager');
 
@@ -124,8 +125,9 @@ class SessionManager {
     const cols = options.cols || 80;
     const rows = options.rows || 24;
     const now = new Date();
+    const account = resolveStartAccount(options.account, cwd);
 
-    logger.info({ id, name, shell, cwd }, 'Creating new session');
+    logger.info({ id, name, shell, cwd, account }, 'Creating new session');
 
     // sessionEnv: the session id for the notification hooks, and the token and
     // URLs the agent-sessions CLI uses (docs/session-orchestration.md).
@@ -163,6 +165,7 @@ class SessionManager {
       status: 'active',
       cols,
       rows,
+      account,
       pty,
       tmuxSession,
       scrollback: [], // Will be populated from buffer when needed
@@ -195,6 +198,7 @@ class SessionManager {
       spawnedBy: options.spawnedBy ?? null,
       permissionMode: options.permissionMode ?? null,
       mcpServers: options.mcpServers ?? null,
+      account,
     };
 
     try {
@@ -560,6 +564,7 @@ class SessionManager {
     ownerId?: string;
     cols?: number;
     rows?: number;
+    account?: string;
   }): Promise<ActiveSession> {
     return openClaudeSessionImpl(this._registry(), options);
   }

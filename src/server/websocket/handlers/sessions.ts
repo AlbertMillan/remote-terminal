@@ -50,6 +50,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
   cwd?: string;
   cols?: number;
   rows?: number;
+  account?: string;
 } {
   const validated: {
     name?: string;
@@ -57,6 +58,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
     cwd?: string;
     cols?: number;
     rows?: number;
+    account?: string;
   } = {};
 
   // Validate and sanitize name
@@ -91,6 +93,14 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
       throw new Error('Invalid working directory path');
     }
     validated.cwd = payload.cwd;
+  }
+
+  // An unknown name is refused by createSession (resolveStartAccount), never swapped for another.
+  if (payload?.account !== undefined) {
+    if (typeof payload.account !== 'string') {
+      throw new Error('Account must be a string');
+    }
+    validated.account = payload.account;
   }
 
   // Validate terminal dimensions

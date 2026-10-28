@@ -16,7 +16,9 @@ import {
   logSessionEvent,
   getMaxSessionSortOrder,
   launchProfileForTranscript,
+  accountForTranscript,
 } from '../db/queries.js';
+import { resolveStartAccount } from '../accounts.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -146,6 +148,7 @@ export async function forkSession(
     claudeSessionId: newClaudeSessionId,
     isFork: true,
     forkJsonlPath: destJsonlPath,
+    account: sourceMetadata.account,
   };
   insertSession(metadata);
 
@@ -174,6 +177,7 @@ export async function forkSession(
     ownerId: options.ownerId,
     status: 'active',
     cols, rows,
+    account: metadata.account,
     pty: ptyProcess,
     scrollback: [],
     connectedClients: new Set(),
@@ -206,6 +210,7 @@ export async function openClaudeSession(
     ownerId?: string;
     cols?: number;
     rows?: number;
+    account?: string;
   }
 ): Promise<ActiveSession> {
   const { claudeSessionId, cwd, mode } = options;
@@ -240,6 +245,9 @@ export async function openClaudeSession(
   // A started session's transcript resumes with its profile, on a row of the user's own: no
   // spawned_by, so it neither counts against the parent's limit nor can be landed by it.
   const profile = mode === 'resume' ? launchProfileForTranscript(claudeSessionId) : null;
+  // A transcript can only be resumed from the folder it lives in: the account of the row
+  // that ran it. One claude-remote never ran falls back to the start's account.
+  const account = accountForTranscript(claudeSessionId) ?? resolveStartAccount(options.account, cwd);
 
   const shortId = claudeSessionId.slice(0, 8);
   const name = options.name || (mode === 'fork' ? `Fork: ${shortId}` : `Resume: ${shortId}`);
@@ -263,6 +271,7 @@ export async function openClaudeSession(
     forkJsonlPath,
     permissionMode: profile?.permissionMode ?? null,
     mcpServers: profile?.mcpServers ?? null,
+    account,
   };
   insertSession(metadata);
 
@@ -291,6 +300,7 @@ export async function openClaudeSession(
     ownerId: options.ownerId,
     status: 'active',
     cols, rows,
+    account: metadata.account,
     pty: ptyProcess,
     scrollback: [],
     connectedClients: new Set(),
@@ -366,6 +376,7 @@ export function reviveSession(
     status: 'active',
     cols,
     rows,
+    account: metadata.account,
     pty: ptyProcess,
     tmuxSession: metadata.tmuxSession ?? undefined,
     scrollback: [],

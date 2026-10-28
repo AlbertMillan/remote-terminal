@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode, mcp_servers)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode, mcp_servers, account)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -60,6 +60,7 @@ export function insertSession(session: SessionMetadata): void {
     session.spawnedBy ?? null,
     session.permissionMode ?? null,
     session.mcpServers ? JSON.stringify(session.mcpServers) : null,
+    session.account,
   ));
 }
 
@@ -125,6 +126,18 @@ export function launchProfileForTranscript(
   });
 }
 
+/**
+ * The account of the newest session row that ran this transcript, for a history Resume
+ * or Fork of it: a transcript can only be resumed from the folder it lives in. Null when
+ * no row ran it (a session claude-remote never started).
+ */
+export function accountForTranscript(claudeSessionId: string): string | null {
+  return executeStatement('accountForTranscript', `
+    SELECT account FROM sessions WHERE claude_session_id = ?
+    ORDER BY created_at DESC LIMIT 1
+  `, (stmt) => (stmt.get(claudeSessionId) as { account: string } | undefined)?.account ?? null);
+}
+
 type RawRow = Omit<SessionMetadata, 'isFork' | 'mcpServers'> & { isFork: number; mcpServers: string | null };
 
 /** `mcp_servers` is JSON text; anything unreadable is the full roster, as before the column. */
@@ -144,7 +157,8 @@ export function getSession(id: string): SessionMetadata | null {
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
            sort_order as sortOrder, claude_session_id as claudeSessionId,
            is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-           spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers
+           spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers,
+           account
     FROM sessions WHERE id = ?
   `, (stmt) => {
     const row = stmt.get(id) as RawRow | undefined;
@@ -217,7 +231,8 @@ const SESSION_SELECT = `
          owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
          sort_order as sortOrder, claude_session_id as claudeSessionId,
          is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-         spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers
+         spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers,
+           account
   FROM sessions
 `;
 

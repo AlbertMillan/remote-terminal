@@ -85,6 +85,8 @@ export interface SessionCreatePayload {
   cwd?: string;
   cols?: number;
   rows?: number;
+  /** The Claude login to run under (accounts.ts); unset is the project's or configured default. */
+  account?: string;
 }
 
 export interface SessionAttachPayload {
@@ -178,6 +180,8 @@ export interface SessionInfo {
   /** What Claude calls the conversation running here (`ListAgents`' name), or null when
    *  none is running. Kept current by `session.claudeNames`. */
   claudeName: string | null;
+  /** The Claude login it runs under (accounts.ts). */
+  account: string;
 }
 
 /** Every session with a running Claude, by session id → Claude's name; sent on change. */

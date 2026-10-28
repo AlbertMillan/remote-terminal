@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -66,6 +66,7 @@ function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetad
     forkJsonlPath: null,
     spawnedBy: null,
     permissionMode: null,
+    account: 'personal',
     attachable: true,
     ...overrides,
   };
@@ -99,6 +100,7 @@ function makeDeps(): AgentSessionDeps {
           spawnedBy: opts.spawnedBy ?? null,
           permissionMode: opts.permissionMode ?? null,
           mcpServers: opts.mcpServers ?? null,
+          account: opts.account ?? 'personal',
           createdAt: `2026-10-01T10:00:0${created}.000Z`,
         })
       );
@@ -370,6 +372,44 @@ describe('start', () => {
     expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --add-dir "[^"]+" --name "Split view" -- "Read /);
   });
 
+  it('runs under the default account, or the project default, when the start names none', async () => {
+    const res = await start(GOOD);
+    expect(res.json().account).toBe('personal');
+    expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ account: 'personal' }));
+    // projects.json can name a project's default account; a start without one gets it.
+    const registry = join(dataDir, 'projects.json');
+    writeFileSync(registry, JSON.stringify({ projects: [{ cwd: PROJECT, account: 'work' }] }));
+    try {
+      rows = new Map([[MAIN_ID, row(MAIN_ID)]]);
+      const res2 = await start(GOOD);
+      expect(res2.json().account).toBe('work');
+    } finally {
+      rmSync(registry, { force: true });
+    }
+  });
+
+  it('runs under the account the start names, and list shows it', async () => {
+    const res = await start({ ...GOOD, account: 'work' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().account).toBe('work');
+    expect(rows.get(res.json().sessionId)!.account).toBe('work');
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/agent/sessions',
+      remoteAddress: '127.0.0.1',
+      headers: { authorization: `Bearer ${mainToken}` },
+    });
+    expect(list.json().sessions[0].account).toBe('work');
+  });
+
+  it('refuses an account the config does not define, before creating anything', async () => {
+    const res = await start({ ...GOOD, account: 'nobody' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('personal, work');
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
   it('loads no MCP servers by default, and stores that on the row', async () => {
     const res = await start(GOOD);
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [] }));
@@ -448,8 +488,8 @@ describe('list', () => {
     const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions).toEqual([
-      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
-      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, notification: null, prompt: { state: 'pending' } },
+      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], account: 'personal', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
+      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, account: 'personal', notification: null, prompt: { state: 'pending' } },
     ]);
   });
 });

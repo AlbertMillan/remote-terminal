@@ -56,6 +56,14 @@ describe('start', () => {
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body as string)).not.toHaveProperty('mcpServers');
   });
 
+  it('sends --account as account, and nothing without it', async () => {
+    const fetchImpl = okFetch();
+    await run({ argv: ['start', '--track', 'X', '--account', 'work'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body as string).account).toBe('work');
+    await run({ argv: ['start', '--track', 'X'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body as string)).not.toHaveProperty('account');
+  });
+
   it('refuses --mcp on land and update', async () => {
     for (const command of ['land', 'update']) {
       const fetchImpl = okFetch();

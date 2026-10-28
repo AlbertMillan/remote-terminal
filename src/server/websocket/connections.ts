@@ -11,6 +11,7 @@ import {
 } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
+import { defaultAccount } from '../accounts.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -82,7 +83,7 @@ export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 
   }
 }
 
-export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null }): SessionInfo {
+export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null; account?: string }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -101,6 +102,7 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     spawnedBy: session.spawnedBy ?? null,
     permissionMode: session.permissionMode ?? null,
     claudeName: claudeNameFor(session.claudeSessionId),
+    account: session.account ?? defaultAccount(),
   };
 }
 

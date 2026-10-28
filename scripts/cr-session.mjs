@@ -5,7 +5,7 @@
  * Run by an agent through the Bash tool, via the path the server puts in
  * CLAUDE_REMOTE_CLI:
  *
- *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>] <<'EOF'
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
@@ -22,6 +22,9 @@
  * `--mcp` (repeatable, or comma-separated): the user's whole roster is ~21k
  * tokens of every call (project/lean-started-sessions.md).
  *
+ * `--account` picks the Claude login it runs under (docs/accounts.md); without
+ * it the project's default account, else the configured one. `list` shows each.
+ *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the
  * whole prompt inside the Bash call the user approves. Prints JSON. No
@@ -33,7 +36,7 @@
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `usage:
-  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]...  (prompt on stdin)
+  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]`;
@@ -50,7 +53,7 @@ export function parseArgs(argv) {
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    const m = /^--(track|name|mode|mcp)(?:=(.*))?$/.exec(arg);
+    const m = /^--(track|name|mode|mcp|account)(?:=(.*))?$/.exec(arg);
     if (!m) throw new UsageError(`unknown argument: ${arg}`);
     const value = m[2] !== undefined ? m[2] : rest[++i];
     if (value === undefined) throw new UsageError(`--${m[1]} needs a value`);
@@ -117,6 +120,7 @@ export async function main({
     if (flags.name !== undefined) body.name = flags.name;
     if (flags.mode !== undefined) body.permissionMode = flags.mode;
     if (flags.mcp !== undefined) body.mcpServers = flags.mcp;
+    if (flags.account !== undefined) body.account = flags.account;
     request = {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
