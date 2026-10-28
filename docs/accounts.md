@@ -139,3 +139,12 @@ entries from before accounts have none. The generator runs under the session's a
 (its transcript is there); history Resume / Fork pass the entry's account for a transcript
 no session row ran, and history delete looks in that account's folder first. Track
 attribution reads every account's transcripts for the project, the session's included.
+
+## Usage ledger and moved transcripts
+
+At the end of every ingest pass the ledger drops the `usage_files` rows of transcripts that
+no longer exist (deleted, moved to another account's folder, a folder renamed). Only the
+file bookkeeping goes — `usage_messages`, the spend, is never deleted — and a moved file is
+read again under its new path without double counting (rows are keyed by message id). A
+row whose file this pass didn't list is checked on disk first, and a parent's row stays
+while one of its subagent files survives (their attribution is read from it).

@@ -54,6 +54,8 @@ export interface IngestStats {
   read: number;
   /** Rows written: new responses, plus copies re-homed to the session that made them. */
   inserted: number;
+  /** `usage_files` rows dropped because their transcript no longer exists. */
+  pruned: number;
 }
 
 interface FileRow {
@@ -465,7 +467,7 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
   }
   candidates.sort((a, b) => passOf(a) - passOf(b) || a.mtimeMs - b.mtimeMs);
 
-  const stats: IngestStats = { files: candidates.length, read: 0, inserted: 0 };
+  const stats: IngestStats = { files: candidates.length, read: 0, inserted: 0, pruned: 0 };
   let jobRows = false;
   for (const c of candidates) {
     // Attribution is settled once found. A file left out-of-scope is resolved
@@ -511,10 +513,43 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
     });
     await tick();
   }
+  stats.pruned = pruneMissingFiles(db, known, new Set(candidates.map((c) => c.path)));
   if (stats.inserted > 0) invalidateUsageCache();
   // The job board and overlay read usage off job payloads; nudge them.
   if (jobRows) jobEvents.emitChange();
   return stats;
+}
+
+/**
+ * Drop the `usage_files` rows of transcripts that no longer exist — deleted from
+ * history, moved to another account's folder, or a folder renamed
+ * (project/rename-claude-work.md). Left alone they would be kept forever, and a
+ * moved file is read again under its new path anyway (no double count:
+ * `usage_messages` is keyed by message id).
+ *
+ * Only the file bookkeeping goes: `usage_messages` — the spend — is never
+ * deleted here. A row this pass listed is never missing, and one it did not list
+ * is checked on disk, so an unreadable folder doesn't wipe its rows. A parent's
+ * row stays while a subagent file of it survives: the subagent's attribution is
+ * looked up from it.
+ */
+function pruneMissingFiles(db: Database.Database, known: Map<string, FileRow>, listed: Set<string>): number {
+  const missing = [...known.keys()].filter((path) => !listed.has(path) && !existsSync(path));
+  if (missing.length === 0) return 0;
+  const gone = new Set(missing);
+  const neededParents = new Set(
+    [...known.values()].filter((r) => !gone.has(r.path) && r.parent_session_id).map((r) => r.parent_session_id as string)
+  );
+  const prunable = missing.filter((path) => {
+    const row = known.get(path)!;
+    return row.parent_session_id !== null || !neededParents.has(row.session_id);
+  });
+  const del = db.prepare('DELETE FROM usage_files WHERE path = ?');
+  db.transaction(() => {
+    for (const path of prunable) del.run(path);
+  })();
+  if (prunable.length > 0) logger.info({ pruned: prunable.length }, 'usage: dropped rows of transcripts that no longer exist');
+  return prunable.length;
 }
 
 // --- Scheduling ----------------------------------------------------------------
@@ -535,7 +570,7 @@ export function ingestUsage(opts: IngestOptions = {}): Promise<IngestStats> {
   running = ingestOnce(opts)
     .catch((error) => {
       logger.warn({ error }, 'usage: ingest pass failed');
-      return { files: 0, read: 0, inserted: 0 };
+      return { files: 0, read: 0, inserted: 0, pruned: 0 };
     })
     .finally(() => {
       running = null;
