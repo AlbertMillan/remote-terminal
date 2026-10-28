@@ -19,7 +19,7 @@ import {
   planLabel,
   projectAccount,
   projectsDir,
-  readIdentity,
+  expectedLoginCreatedAt,
   settingsPath,
 } from '../accounts.js';
 import { accountLogin, accountWarningFor } from '../sessions/account-watch.js';
@@ -84,13 +84,23 @@ function sessionAccount(id: string): string | null {
  * Verified: the account's folder holds its expected login now (account-watch's
  * cached preflight, never one per post) and, for a session, account-watch has
  * not flagged it — a `claude` started before a `/login` swap keeps the old login.
+ *
+ * A session's reading must also come from the session's own folder.
+ * CLAUDE_REMOTE_SESSION_ID reaches everything started in its terminal, so a
+ * `CLAUDE_CONFIG_DIR=… claude` run inside a personal session posts another
+ * login's limits with the personal session's id; verifying personal's folder
+ * would pass, and file them as personal's.
  */
 export function classifyRelayPost(body: unknown, now = Date.now()): { account: string | null; verdict: Verdict } {
   const b = (body && typeof body === 'object' ? body : {}) as { config_dir?: unknown; session_id?: unknown };
   const sessionId = typeof b.session_id === 'string' && b.session_id.length <= 128 ? b.session_id : null;
   const fromSession = sessionId ? sessionAccount(sessionId) : null;
-  const account = fromSession ?? accountForConfigDir(typeof b.config_dir === 'string' ? b.config_dir : null);
+  const fromFolder = accountForConfigDir(typeof b.config_dir === 'string' ? b.config_dir : null);
+  const account = fromSession ?? fromFolder;
   if (!account) return { account: null, verdict: { verified: false, reason: 'unknown-folder' } };
+  if (fromSession && fromFolder !== fromSession) {
+    return { account, verdict: { verified: false, reason: fromFolder ? 'login-mismatch' : 'unknown-folder' } };
+  }
   const login = accountLogin(account, now);
   if (!login) return { account, verdict: { verified: false, reason: 'no-login' } };
   if (!login.ok) {
@@ -139,25 +149,34 @@ export interface AccountPlanUsage {
 
 const WINDOW_S = { fiveHour: 5 * 3600, sevenDay: 7 * 24 * 3600 } as const;
 
-/** The login's creation time (ISO), or null: where "this week" starts for a login younger than the week. */
-function loginCreatedAt(account: string): string | null {
-  try {
-    const raw = readIdentity(account)?.accountCreatedAt;
-    const ms = raw ? Date.parse(raw) : NaN;
-    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-  } catch {
-    return null;
-  }
-}
-
 function windowTokens(account: string, reading: WindowReading | null, length: number, now: number): WindowTokens | null {
   if (!reading || reading.resetsAt * 1000 <= now) return null; // closed: nothing current to count
   const start = new Date((reading.resetsAt - length) * 1000).toISOString();
-  const created = loginCreatedAt(account);
+  // Where "this week" starts for a login younger than the week: its own creation
+  // only, never that of another login swapped into its folder.
+  const created = expectedLoginCreatedAt(account);
   const sinceLogin = created !== null && created > start;
   const since = sinceLogin ? created : start;
   const usage = usageByAccount(account, since, projectsDir(account));
   return usage ? { ...usage, since, sinceLogin } : null;
+}
+
+/**
+ * projectAccount(cwd), remembered per folder for a minute: it reads projects.json,
+ * and every open tab asks on every poll. A changed project account shows within
+ * a minute, as everything else on the chip does.
+ */
+const jobsAccounts = new Map<string, { at: number; account: string }>();
+const JOBS_ACCOUNT_TTL_MS = 60_000;
+
+function jobsAccountFor(cwd: string | undefined, now: number): string {
+  if (!cwd) return projectAccount(undefined); // no folder: the configured default, no file read
+  const cached = jobsAccounts.get(cwd);
+  if (cached && now - cached.at < JOBS_ACCOUNT_TTL_MS) return cached.account;
+  const account = projectAccount(cwd);
+  if (jobsAccounts.size > 100) jobsAccounts.clear(); // tabs on many folders: start over rather than grow
+  jobsAccounts.set(cwd, { at: now, account });
+  return account;
 }
 
 /**
@@ -171,7 +190,7 @@ export function planUsageSummary(
   cwd: string | undefined,
   now = Date.now()
 ): AccountPlanUsage[] {
-  const jobsAccount = projectAccount(cwd);
+  const jobsAccount = jobsAccountFor(cwd, now);
   return accountNames().map((account) => {
     const snapshot = getSnapshot(account);
     return {

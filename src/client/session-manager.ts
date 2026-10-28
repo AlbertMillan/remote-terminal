@@ -182,6 +182,7 @@ class SessionManager {
     this.setupPipButton();
     this.jobOverlay.attach();
     this.planUsage.openBreakdown = () => void this.accountUsage.open(this.planUsage.latest());
+    this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
     this.planUsage.attach();
     this.buildChip.start();
     this.initBrowserNotifications();

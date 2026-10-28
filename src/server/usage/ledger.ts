@@ -9,7 +9,7 @@ import { worktreeRoot } from '../jobs/worktree.js';
 import { jobEvents } from '../jobs/events.js';
 import { onRunSettled } from '../agent/run-events.js';
 import { invalidateUsageCache } from './store.js';
-import { accountForConfigDir, accountNames, allProjectsDirs, projectsDir as accountProjectsDir, readIdentity } from '../accounts.js';
+import { accountForConfigDir, accountNames, allProjectsDirs, expectedLoginCreatedAt, projectsDir as accountProjectsDir } from '../accounts.js';
 
 const logger = createLogger('usage-ledger');
 
@@ -362,22 +362,25 @@ function passOf(c: { parentSessionId: string | null; cwd: string | null }): numb
 
 /**
  * The login behind the messages of one transcript, from the folder it lives in
- * (docs/token-usage-feature.md). A message older than `cutoff` — the folder's
- * login's `accountCreatedAt` — can't have run under that login: before it
- * existed, its folder could only hold transcripts moved in from the default
+ * (docs/token-usage-feature.md). A message older than `cutoffMs` — the folder's
+ * expected login's `accountCreatedAt` — can't have run under that login: before
+ * it existed, its folder could only hold transcripts moved in from the default
  * folder (`f-ilxxdj`), so it is `before`'s, the default folder's account.
  */
 interface FolderLogin {
   account: string;
-  cutoff: string | null;
+  /** Epoch ms; null for the default folder, whose older messages are its own. */
+  cutoffMs: number | null;
   before: string | null;
 }
 
 /**
  * Where each account's transcripts live and from when its login holds. Read
- * once per pass. An account whose login's creation time is unknown is left out
- * — its messages stay unattributed rather than guessed — except the default
- * folder's, which needs none: everything older is its own anyway.
+ * once per pass. An account whose creation time is unknown — including another
+ * login than the expected one sitting in its folder after a `/login` swap — is
+ * left out: its messages stay unattributed rather than guessed, and a later pass
+ * that knows fills them in (backfillMessageAccounts). The default folder's
+ * account needs no date: everything older is its own anyway.
  */
 function folderLogins(home?: string): { key: string; login: FolderLogin }[] {
   const defaultFolder = accountForConfigDir(null, home);
@@ -386,18 +389,12 @@ function folderLogins(home?: string): { key: string; login: FolderLogin }[] {
     const key = pathKey(accountProjectsDir(account, home));
     if (out.some((f) => f.key === key)) continue; // two accounts on one folder: the first owns it
     if (account === defaultFolder) {
-      out.push({ key, login: { account, cutoff: null, before: null } });
+      out.push({ key, login: { account, cutoffMs: null, before: null } });
       continue;
     }
-    let created: string | undefined;
-    try {
-      created = readIdentity(account, home)?.accountCreatedAt;
-    } catch {
-      created = undefined; // caught mid-write with no earlier reading: unknown this pass
-    }
-    const ms = created ? Date.parse(created) : NaN;
-    if (Number.isNaN(ms)) continue;
-    out.push({ key, login: { account, cutoff: new Date(ms).toISOString(), before: defaultFolder } });
+    const created = expectedLoginCreatedAt(account, home);
+    if (!created) continue;
+    out.push({ key, login: { account, cutoffMs: Date.parse(created), before: defaultFolder } });
   }
   return out;
 }
@@ -411,44 +408,49 @@ function loginOfPath(path: string, folders: { key: string; login: FolderLogin }[
   return best?.login ?? null;
 }
 
-/** The account a message at `ts` ran under, or null (unattributed). */
+/**
+ * The account a message at `ts` ran under, or null (unattributed). The one
+ * comparison both ingest and the backfill use, in epoch ms: transcript times
+ * vary in precision, so comparing them as text could split one second's
+ * messages differently in the two.
+ */
 function accountOfMessage(login: FolderLogin | null, ts: string): string | null {
   if (!login) return null;
-  if (login.cutoff && Date.parse(ts) < Date.parse(login.cutoff)) return login.before;
+  if (login.cutoffMs !== null) {
+    const ms = Date.parse(ts);
+    if (Number.isNaN(ms)) return null;
+    if (ms < login.cutoffMs) return login.before;
+  }
   return login.account;
 }
 
 /**
  * Give every unattributed message its account, by the same rule as ingest,
- * keyed by the `usage_files` path its session was read from. Idempotent: only
- * NULL rows are touched, so it never flips an attribution, and a message whose
- * login is unknown stays NULL. Run on the ledger's first pass after boot.
- * Returns how many rows it set.
+ * keyed by the `usage_files` path its session was read from (a subagent file
+ * through its parent's session id). Run at the start of every pass, not once:
+ * a message stored while its login was unknown — `.claude.json` caught
+ * mid-write, a `/login` swap — is attributed as soon as a pass knows. Only NULL
+ * rows are touched, so it never flips an attribution; the session index keeps a
+ * pass with nothing to do to one lookup per file. Returns how many rows it set.
  */
-export function backfillMessageAccounts(home?: string): number {
-  const db = getDatabase();
-  const folders = folderLogins(home);
+export function backfillMessageAccounts(home?: string, folders = folderLogins(home)): number {
   if (folders.length === 0) return 0;
+  const db = getDatabase();
   const files = db
     .prepare('SELECT path, session_id, parent_session_id FROM usage_files')
     .all() as { path: string; session_id: string; parent_session_id: string | null }[];
-  // Messages carry the parent's session id for a subagent file.
-  const update = db.prepare(
-    `UPDATE usage_messages
-        SET account = CASE WHEN @cutoff IS NOT NULL AND ts < @cutoff THEN @before ELSE @account END
-      WHERE account IS NULL AND session_id = @session`
-  );
+  const unattributed = db.prepare('SELECT message_id, ts FROM usage_messages WHERE session_id = ? AND account IS NULL');
+  const update = db.prepare('UPDATE usage_messages SET account = ? WHERE message_id = ? AND account IS NULL');
   let changed = 0;
   db.transaction(() => {
     for (const f of files) {
       const login = loginOfPath(f.path, folders);
       if (!login) continue;
-      changed += update.run({
-        cutoff: login.cutoff,
-        before: login.before,
-        account: login.account,
-        session: f.parent_session_id ?? f.session_id,
-      }).changes;
+      const rows = unattributed.all(f.parent_session_id ?? f.session_id) as { message_id: string; ts: string }[];
+      for (const row of rows) {
+        const account = accountOfMessage(login, row.ts);
+        if (account) changed += update.run(account, row.message_id).changes;
+      }
     }
   })();
   if (changed > 0) {
@@ -457,9 +459,6 @@ export function backfillMessageAccounts(home?: string): number {
   }
   return changed;
 }
-
-/** Whether this process has backfilled yet: once per boot is enough, new rows are attributed at insert. */
-let backfilled = false;
 
 // --- Reading -------------------------------------------------------------------
 
@@ -561,11 +560,8 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
   const docList = opts.docProjects ?? (await defaultDocProjects());
   const docs = new Map(docList.map((cwd) => [pathKey(cwd), cwd]));
 
-  if (!backfilled) {
-    backfillMessageAccounts(opts.home);
-    backfilled = true;
-  }
   const folders = folderLogins(opts.home);
+  backfillMessageAccounts(opts.home, folders);
 
   const known = new Map(
     (db.prepare('SELECT * FROM usage_files').all() as FileRow[]).map((r) => [r.path, r])

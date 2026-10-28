@@ -180,6 +180,22 @@ export class AccountUsageModal {
     this.root?.classList.add('hidden');
   }
 
+  private isOpen(): boolean {
+    const root = this.root;
+    return !!root && !root.classList.contains('hidden');
+  }
+
+  /**
+   * The chip's latest answer (every poll) or a countdown tick: refresh the cards
+   * of an open page. The held-back table is left alone — it has its own source,
+   * and rebuilding it under the pointer would swallow a Discard click.
+   */
+  update(data: PlanUsage, now = Date.now()): void {
+    if (!this.isOpen()) return;
+    this.data = data;
+    this.renderCards(now);
+  }
+
   private async loadHeld(): Promise<void> {
     try {
       const res = await fetch('/api/plan-usage/held');
@@ -209,11 +225,15 @@ export class AccountUsageModal {
   render(now = Date.now()): void {
     const root = this.root;
     if (!root) return;
-    const cards = root.querySelector('.account-usage-cards');
-    if (cards) cards.innerHTML = this.data ? renderAccountCards(this.data, now) : '<p class="pu-detail">Loading…</p>';
+    this.renderCards(now);
     const section = root.querySelector('.account-usage-held') as HTMLElement | null;
     const body = root.querySelector('.account-usage-held tbody');
     if (body) body.innerHTML = renderHeldRows(this.held);
     if (section) section.hidden = this.held.length === 0;
+  }
+
+  private renderCards(now: number): void {
+    const cards = this.root?.querySelector('.account-usage-cards');
+    if (cards) cards.innerHTML = this.data ? renderAccountCards(this.data, now) : '<p class="pu-detail">Loading…</p>';
   }
 }

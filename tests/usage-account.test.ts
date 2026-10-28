@@ -116,7 +116,42 @@ describe('attribution at ingest', () => {
   });
 });
 
+describe('the cut-off', () => {
+  it("ignores another login's creation date after a /login swap in the folder", async () => {
+    // Someone else, created long ago, now sits in personal's folder: their date would
+    // pull moved transcripts back to personal.
+    personalLogin({ accountUuid: 'acc-intruder', accountCreatedAt: '2020-01-01T00:00:00Z' });
+    transcript(personalProjects, S1, [line('msg_old', BEFORE), line('msg_new', AFTER)]);
+    await ingest();
+    expect(accountOf('msg_old')).toBeNull();
+    expect(accountOf('msg_new')).toBeNull();
+  });
+
+  it('compares times the same way at ingest and in the backfill, whatever their precision', async () => {
+    // 46s without milliseconds is before the 46.454s cut-off; as text, "46Z" sorts after "46.454Z".
+    const sameSecond = '2026-10-28T16:20:46Z';
+    transcript(personalProjects, S1, [line('msg_edge', sameSecond)]);
+    await ingest();
+    expect(accountOf('msg_edge')).toBe('work');
+    getDatabase().exec('UPDATE usage_messages SET account = NULL');
+    backfillMessageAccounts(home);
+    expect(accountOf('msg_edge')).toBe('work');
+  });
+});
+
 describe('backfill', () => {
+  it('attributes on a later pass what was stored while the login was unknown, without a restart', async () => {
+    personalLogin({ accountUuid: 'acc-personal' }); // no accountCreatedAt yet
+    transcript(personalProjects, S1, [line('msg_old', BEFORE), line('msg_new', AFTER)]);
+    await ingest();
+    expect(accountOf('msg_new')).toBeNull();
+
+    personalLogin({ accountUuid: 'acc-personal', accountCreatedAt: CREATED });
+    await ingest(); // nothing new to read: the backfill alone attributes them
+    expect(accountOf('msg_old')).toBe('work');
+    expect(accountOf('msg_new')).toBe('personal');
+  });
+
   it('attributes earlier rows by the same rule, idempotently, and re-ingest keeps it', async () => {
     const path = transcript(personalProjects, S1, [line('msg_old', BEFORE), line('msg_new', AFTER)]);
     await ingest();

@@ -87,6 +87,14 @@ describe('plan labels', () => {
     expect(planLabel('personal')).toBe('Max 5x');
     expect(planLabel('work')).toBe('Team');
   });
+
+  it('serves the label from memory until the file changes', () => {
+    expect(planLabel('personal')).toBe('Max 5x');
+    credentials(personalDir, 'max', 'default_claude_max_20x'); // a different size: the cache key moves
+    expect(planLabel('personal')).toBe('Max 20x');
+    credentials(personalDir, 'max', 'default_claude_max_5x');
+    expect(planLabel('personal')).toBe('Max 5x');
+  });
 });
 
 describe('GET /api/plan-usage', () => {

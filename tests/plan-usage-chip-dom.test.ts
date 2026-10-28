@@ -293,6 +293,17 @@ describe('the chip in the sidebar', () => {
     expect(document.querySelector('.plan-usage-summary')?.textContent).toContain('5h 30%');
   });
 
+  it('tells its listener after every render, so an open usage page keeps up', async () => {
+    const chip = new PlanUsageChip();
+    const rendered = vi.fn();
+    chip.onRender = rendered;
+    await chip.refresh();
+    chip.render(NOW + 30_000); // a countdown tick
+    expect(rendered).toHaveBeenCalledTimes(2);
+    expect(rendered.mock.calls[1][0].accounts[0].account).toBe('work');
+    expect(rendered.mock.calls[1][1]).toBe(NOW + 30_000);
+  });
+
   it('stays hidden when the server cannot answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })));
     await new PlanUsageChip().refresh();

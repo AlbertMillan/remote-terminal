@@ -322,6 +322,8 @@ export class PlanUsageChip {
 
   /** Opens the per-account usage page; set by the owner (session-manager). */
   openBreakdown: (() => void) | null = null;
+  /** Called after every render — a poll or a countdown tick — so an open usage page keeps up. */
+  onRender: ((data: PlanUsage, now: number) => void) | null = null;
 
   /** Wire up the static markup and start polling. Safe to call once. */
   attach(): void {
@@ -396,5 +398,6 @@ export class PlanUsageChip {
     root.dataset.level = view.level;
     root.classList.toggle('stale', view.stale);
     root.hidden = false;
+    this.onRender?.(this.data, now);
   }
 }

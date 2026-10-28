@@ -65,6 +65,14 @@ with a later reset pinned the window until it expired. So `classifyRelayPost`
   `GET /api/plan-usage/held` for the usage page, dropped with
   `POST /api/plan-usage/held/discard` (`{ id }` or `{ account }`). They never feed the chip.
   Relay contact (`relaySeenAt`) still counts for a held reading's account.
+- A session's reading must come from the session's own folder: `CLAUDE_REMOTE_SESSION_ID`
+  reaches everything started in its terminal, so a `CLAUDE_CONFIG_DIR=… claude` run inside
+  a personal session would otherwise be filed (and verified) as personal's. A folder of
+  another account is held back as `login-mismatch`, one of no account as `unknown-folder`.
+- **What verification does not do**: it checks that the *folder* holds the expected login,
+  not who sent the post. Anyone on the tailnet can still post invented figures for a folder
+  that verifies, and a reset up to 8 days out wins its window until it passes. It stops
+  misfiling between logins, not forgery; the endpoint stays unauthenticated by design.
 - **Upgrade**: a window restored from disk without `loginUuid` (any file written before
   this) comes back held back as `unverified-legacy` — exactly the data that was wrong. The
   chip says "waiting" until the next verified reading, seconds away for any open session.

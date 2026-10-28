@@ -352,16 +352,46 @@ describe('routes', () => {
     await a.close();
   });
 
-  it("files a session's reading under the session's account, whatever its folder says", async () => {
+  it("files a session's reading under the session's account when it comes from that account's folder", async () => {
     const a = await app();
     sessionRows.set('s-personal', { account: 'personal' });
     const res = await a.inject({
       method: 'POST',
       url: '/api/plan-usage',
-      payload: { ...payload(10, 5), session_id: 's-personal' }, // no config_dir: the default (work) folder
+      payload: { ...payload(10, 5), session_id: 's-personal', config_dir: '~/.claude-personal' },
     });
     expect(res.json()).toEqual({ stored: true, held: false, account: 'personal' });
+    expect(plan.getSnapshot('personal')!.fiveHour!.usedPercentage).toBe(10);
+    await a.close();
+  });
+
+  it("holds back a session's reading sent from another folder: a nested claude on another login", async () => {
+    // CLAUDE_REMOTE_SESSION_ID reaches everything in the session's terminal, so
+    // `CLAUDE_CONFIG_DIR=~/.claude claude` inside a personal session posts work's
+    // limits with the personal session's id. Personal's folder verifies; the
+    // reading is still not personal's.
+    const a = await app();
+    sessionRows.set('s-personal', { account: 'personal' });
+    const other = await a.inject({
+      method: 'POST',
+      url: '/api/plan-usage',
+      payload: { ...payload(90, 50), session_id: 's-personal' }, // no config_dir: the default (work) folder
+    });
+    expect(other.json()).toEqual({ stored: false, held: true, account: 'personal' });
+    const nowhere = await a.inject({
+      method: 'POST',
+      url: '/api/plan-usage',
+      payload: { ...payload(91, 51), session_id: 's-personal', config_dir: 'C:/nowhere' },
+    });
+    expect(nowhere.json()).toEqual({ stored: false, held: true, account: 'personal' });
+    expect(plan.getSnapshot('personal')).toBeNull();
     expect(plan.getSnapshot('work')).toBeNull();
+    expect(plan.getHeld('personal').map((h) => h.reason)).toEqual([
+      'unknown-folder',
+      'unknown-folder',
+      'login-mismatch',
+      'login-mismatch',
+    ]);
     await a.close();
   });
 

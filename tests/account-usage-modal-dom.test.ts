@@ -162,6 +162,20 @@ describe('the page', () => {
     await vi.waitFor(() => expect(section.hidden).toBe(true));
   });
 
+  it("keeps an open page's cards current from the chip, and leaves a closed one alone", async () => {
+    const modal = new AccountUsageModal();
+    const root = document.getElementById('account-usage-modal')!;
+    modal.update({ accounts: [account('later')] }, NOW);
+    expect(root.querySelectorAll('.au-card')).toHaveLength(0); // closed: nothing rendered
+
+    await modal.open(DATA);
+    const heldRow = root.querySelector('.account-usage-held tbody tr');
+    modal.update({ accounts: [account('only')] }, NOW);
+    expect([...root.querySelectorAll('.au-card')].map((c) => (c as HTMLElement).dataset.account)).toEqual(['only']);
+    // The held-back table is not rebuilt under the pointer.
+    expect(root.querySelector('.account-usage-held tbody tr')).toBe(heldRow);
+  });
+
   it('closes from its button and on Escape', async () => {
     const modal = new AccountUsageModal();
     const root = document.getElementById('account-usage-modal')!;

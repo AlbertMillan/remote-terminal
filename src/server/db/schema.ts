@@ -387,9 +387,9 @@ function runMigrations(database: Database.Database): void {
       // The login that ran each message (docs/token-usage-feature.md). Not the
       // folder its transcript lives in: transcripts moved into an account's
       // folder ran under the default folder's login. NULL is unattributed.
-      // Older rows are backfilled by the ledger's first pass after boot
-      // (backfillMessageAccounts), which needs the accounts config and each
-      // login's creation time — neither available to SQL.
+      // Older rows, and rows stored while their login was unknown, are backfilled
+      // by every ledger pass (backfillMessageAccounts): it needs the accounts config
+      // and each login's creation time, neither available to SQL.
       name: '020_usage_message_account',
       sql: `
         ALTER TABLE usage_messages ADD COLUMN account TEXT;
