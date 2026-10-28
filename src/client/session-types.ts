@@ -30,6 +30,39 @@ export interface SessionInfo {
   claudeName?: string | null;
   /** The Claude login it runs under (server `accounts.ts`). */
   account?: string;
+  /** Why its account no longer holds the expected login, or null. Kept current by `session.accountWarnings`. */
+  accountWarning?: string | null;
+}
+
+/** Who a preflight found logged in, and what it refused (server `accounts.ts` PreflightRefusal). */
+export interface AccountIdentity {
+  accountUuid?: string;
+  organizationUuid?: string;
+  emailAddress?: string;
+  organizationName?: string;
+}
+
+export interface AccountRefusal {
+  ok: false;
+  account: string;
+  configDir: string;
+  reason: 'no-expected-identity' | 'no-login' | 'mismatch' | 'org-settings';
+  found: AccountIdentity | null;
+  expected: { accountUuid?: string; organizationUuid?: string };
+  remoteSettings?: string[];
+  message: string;
+}
+
+export interface SessionAccountWarningsPayload {
+  warnings: Record<string, string>;
+}
+
+export interface AccountChangedNotificationPayload {
+  kind: 'account-changed';
+  sessionId: string;
+  name: string;
+  detail: string;
+  timestamp: string;
 }
 
 /** Every session with a running Claude, by session id → Claude's name. */
@@ -164,6 +197,8 @@ export interface TerminalExitPayload {
 
 export interface ErrorPayload {
   message: string;
+  /** A launch refused by the account preflight: offer Log in / Clean up (account-refusal-modal.ts). */
+  refusal?: AccountRefusal;
 }
 
 export interface NotificationPreferencesPayload {
@@ -209,6 +244,7 @@ export type ServerMessage =
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
   | { type: 'session.claudeNames'; id?: string; payload: SessionClaudeNamesPayload }
+  | { type: 'session.accountWarnings'; id?: string; payload: SessionAccountWarningsPayload }
   | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
   | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
   | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }
@@ -224,7 +260,7 @@ export type ServerMessage =
   | { type: 'category.list'; id?: string; payload: CategoryListPayload }
   | { type: 'notification.preferences'; id?: string; payload: NotificationPreferencesPayload }
   | { type: 'notification.preferences.updated'; id?: string; payload: NotificationPreferencesPayload }
-  | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload }
+  | { type: 'notification'; id?: string; payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload | AccountChangedNotificationPayload }
   | { type: 'jobs.summary'; id?: string; payload: JobsSummary }
   | { type: 'projects.changed'; id?: string; payload: { projectCwd: string } }
   | { type: 'error'; id?: string; payload: ErrorPayload }

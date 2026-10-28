@@ -98,7 +98,7 @@ status: active
 ## Track: Claude accounts
 - [x] `f-dfgnx2` P1 Accounts in config — named accounts with a config folder and expected identity; sessions store their account; default and existing sessions are `personal` → project/accounts.md
 - [x] `f-ygg1cl` P1 Per-account paths — one helper replaces every hardcoded `~/.claude`; a session's data uses its account, scans cover all accounts → project/accounts.md
-- [ ] `f-pd3yag` P1 Launch under the right login — `CLAUDE_CONFIG_DIR`, stripped auth/telemetry env, identity preflight, Log in and Clean up from claude-remote → project/accounts.md
+- [x] `f-pd3yag` P1 Launch under the right login — `CLAUDE_CONFIG_DIR`, stripped auth/telemetry env, identity preflight, Log in and Clean up from claude-remote → project/accounts.md
 - [ ] `f-ilxxdj` P2 Existing sessions move to personal — their transcripts move to `~/.claude-personal` and `usage_files` is repointed, after one canary resume → project/accounts.md
 - [ ] `f-zig3f6` P2 Per-account setup — hooks, statusLine, skills and plan usage per account folder → project/accounts.md
 - [ ] `f-fsx3z3` P2 SESSION-LOG records the account — marker and entry carry it; track attribution reads the account's transcripts → project/accounts.md

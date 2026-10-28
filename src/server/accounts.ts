@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { accountConfigProblems, getConfig, type AccountConfig } from './config.js';
@@ -218,4 +218,192 @@ export function isDefaultConfigDir(account: string, home: string = homedir()): b
  */
 export function claudeJsonPath(account: string, home: string = homedir()): string {
   return isDefaultConfigDir(account, home) ? join(home, '.claude.json') : join(configDir(account, home), '.claude.json');
+}
+
+// --- Launch: environment, identity, preflight --------------------------------
+
+/**
+ * Inherited variables that override a config folder's login or settings: an API
+ * key or OAuth token logs `claude` in as whoever owns it, and the telemetry
+ * switches report to whatever collector they name. Every launch drops them
+ * (plus every `OTEL_*`), so the account's folder alone decides.
+ */
+export const STRIPPED_LAUNCH_ENV = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_ENABLE_TELEMETRY',
+] as const;
+
+function stripped(key: string): boolean {
+  const upper = key.toUpperCase();
+  return (STRIPPED_LAUNCH_ENV as readonly string[]).includes(upper) || upper.startsWith('OTEL_') || upper === 'CLAUDE_CONFIG_DIR';
+}
+
+/**
+ * `env` as a launch under `account` gets it: the auth/telemetry overrides gone and
+ * `CLAUDE_CONFIG_DIR` set to the account's folder — or removed for the default
+ * `~/.claude`, so Claude Code keeps reading `~/.claude.json` (claudeJsonPath).
+ * Keys are matched case-insensitively (Windows env). Never mutates its input.
+ */
+export function accountEnv<T extends Record<string, string | undefined>>(
+  env: T,
+  account: string,
+  home?: string
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) if (!stripped(key)) out[key] = value;
+  if (!isDefaultConfigDir(account, home)) out.CLAUDE_CONFIG_DIR = configDir(account, home);
+  return out;
+}
+
+/** Who is logged in to a config folder: its `.claude.json` `oauthAccount`. */
+export interface Identity {
+  accountUuid?: string;
+  organizationUuid?: string;
+  emailAddress?: string;
+  organizationName?: string;
+}
+
+/** The account's login, or null when nobody is logged in there (or the file is unreadable). */
+export function readIdentity(account: string, home?: string): Identity | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(claudeJsonPath(account, home), 'utf-8'));
+  } catch {
+    return null;
+  }
+  const oauth = (parsed as { oauthAccount?: unknown } | null)?.oauthAccount;
+  if (!oauth || typeof oauth !== 'object') return null;
+  const o = oauth as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const identity: Identity = {
+    accountUuid: str(o.accountUuid),
+    organizationUuid: str(o.organizationUuid),
+    emailAddress: str(o.emailAddress),
+    organizationName: str(o.organizationName),
+  };
+  return identity.accountUuid || identity.organizationUuid ? identity : null;
+}
+
+/** `remote-settings*.json` in the account's folder: settings an org login pushed there. */
+export function remoteSettingsFiles(account: string, home?: string): string[] {
+  const dir = configDir(account, home);
+  try {
+    return readdirSync(dir)
+      .filter((f) => /^remote-settings.*\.json$/i.test(f))
+      .map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
+}
+
+export type RefusalReason = 'no-expected-identity' | 'no-login' | 'mismatch' | 'org-settings';
+
+export interface PreflightRefusal {
+  ok: false;
+  account: string;
+  configDir: string;
+  reason: RefusalReason;
+  /** Who is logged in there, or null for nobody. */
+  found: Identity | null;
+  expected: { accountUuid?: string; organizationUuid?: string };
+  /** For `org-settings`: the files an org login left behind (Clean up deletes them). */
+  remoteSettings?: string[];
+  message: string;
+}
+
+export type PreflightResult = { ok: true; account: string; configDir: string; found: Identity } | PreflightRefusal;
+
+function describe(identity: Identity | null): string {
+  if (!identity) return 'nobody';
+  const who = identity.emailAddress ?? identity.accountUuid ?? 'an unknown login';
+  return identity.organizationName ? `${who} (${identity.organizationName})` : who;
+}
+
+/**
+ * Is the expected login in the account's folder? Run before every launch: a
+ * mismatch or no login refuses it. An account that expects no organization
+ * (personal) is also refused while `remote-settings*.json` sits in its folder —
+ * an org login happened there, and its pushed settings (telemetry) still apply.
+ */
+export function preflight(account: string, home?: string): PreflightResult {
+  const dir = configDir(account, home);
+  const cfg = accountConfigs()[account];
+  const expected = {
+    ...(cfg.accountUuid ? { accountUuid: cfg.accountUuid } : {}),
+    ...(cfg.organizationUuid ? { organizationUuid: cfg.organizationUuid } : {}),
+  };
+  const found = readIdentity(account, home);
+  const refuse = (reason: RefusalReason, message: string, extra: Partial<PreflightRefusal> = {}): PreflightRefusal => ({
+    ok: false,
+    account,
+    configDir: dir,
+    reason,
+    found,
+    expected,
+    message,
+    ...extra,
+  });
+
+  if (!expected.accountUuid && !expected.organizationUuid) {
+    return refuse(
+      'no-expected-identity',
+      `Account "${account}" has no expected identity: set accountUuid or organizationUuid for it in config.json (docs/accounts.md)`
+    );
+  }
+  if (!found) return refuse('no-login', `Nobody is logged in to account "${account}" (${dir}): log in there first`);
+  const matches =
+    (!expected.accountUuid || found.accountUuid === expected.accountUuid) &&
+    (!expected.organizationUuid || found.organizationUuid === expected.organizationUuid);
+  if (!matches) {
+    const want = expected.accountUuid ? `account ${expected.accountUuid}` : `organization ${expected.organizationUuid}`;
+    return refuse('mismatch', `Account "${account}" (${dir}) is logged in as ${describe(found)}, but expects ${want}`);
+  }
+  if (!expected.organizationUuid) {
+    const files = remoteSettingsFiles(account, home);
+    if (files.length > 0) {
+      return refuse(
+        'org-settings',
+        `Account "${account}" (${dir}) holds org-pushed settings (${files.map((f) => f.slice(dir.length + 1)).join(', ')}): ` +
+          'an organization login happened there. Clean up, then log in again.',
+        { remoteSettings: files }
+      );
+    }
+  }
+  return { ok: true, account, configDir: dir, found };
+}
+
+/** A launch refused by preflight. Carries the refusal, for the Log in / Clean up dialog. */
+export class AccountRefusedError extends Error {
+  readonly status = 409;
+  constructor(readonly refusal: PreflightRefusal) {
+    super(refusal.message);
+    this.name = 'AccountRefusedError';
+  }
+}
+
+/** Throw AccountRefusedError unless the account's folder holds its expected login. */
+export function assertAccountReady(account: string, home?: string): void {
+  const result = preflight(account, home);
+  if (!result.ok) throw new AccountRefusedError(result);
+}
+
+/**
+ * Clean up: delete the org-pushed `remote-settings*.json` from an account that
+ * expects no organization, before its Log in session (`/logout`, then `/login`
+ * with the right login). Refused for an org account: those files are its own.
+ * Returns the files deleted.
+ */
+export function cleanupAccount(account: string, home?: string): string[] {
+  if (!isAccount(account)) throw new UnknownAccountError(account);
+  if (accountConfigs()[account].organizationUuid) {
+    throw new Error(`Account "${account}" is an organization login: its remote settings are its own`);
+  }
+  const deleted: string[] = [];
+  for (const file of remoteSettingsFiles(account, home)) {
+    unlinkSync(file);
+    deleted.push(file);
+  }
+  return deleted;
 }

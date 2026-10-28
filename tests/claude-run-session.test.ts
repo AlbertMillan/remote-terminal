@@ -25,6 +25,8 @@ const spawned = vi.hoisted(() => ({
   /** Never exit, so the test can abort a live run. */
   hang: false,
   args: [] as string[][],
+  /** The env each spawn got. */
+  envs: [] as (Record<string, string | undefined> | undefined)[],
   /** agent_runs as seen from inside spawn(), i.e. before the process exists. */
   rowsAtSpawn: [] as unknown[],
   readRows: null as null | (() => unknown[]),
@@ -49,10 +51,17 @@ function fakeChild(): EventEmitter & Record<string, unknown> {
   return child;
 }
 
+// Preflight reads the account's real login; these tests launch nothing real.
+vi.mock('../src/server/accounts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
+  assertAccountReady: vi.fn(),
+}));
+
 vi.mock('child_process', () => ({
-  spawn: vi.fn((cmd: string, args: string[]) => {
+  spawn: vi.fn((cmd: string, args: string[], opts?: { env?: Record<string, string | undefined> }) => {
     if (cmd === 'taskkill') return new EventEmitter();
     spawned.args.push(args);
+    spawned.envs.push(opts?.env);
     spawned.rowsAtSpawn = spawned.readRows ? spawned.readRows() : [];
     const id = args[args.indexOf('--session-id') + 1];
     if (spawned.transcriptDir && id) {
@@ -120,6 +129,34 @@ beforeEach(() => {
   spawned.exitCode = 0;
   spawned.hang = false;
   spawned.args = [];
+});
+
+describe('the login a headless run gets', () => {
+  it("preflights its project's account and launches with that account's env", async () => {
+    const { assertAccountReady, configDir } = await import('../src/server/accounts.js');
+    const saved = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'inherited';
+    try {
+      await runClaude('C:/wt', 'prompt', ['**'], { tag: TAG });
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = saved;
+    }
+    expect(assertAccountReady).toHaveBeenCalledWith('personal');
+    const env = spawned.envs[spawned.envs.length - 1]!;
+    expect(env.CLAUDE_CONFIG_DIR).toBe(configDir('personal'));
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it('runs under the account it names, and spawns nothing when that account is refused', async () => {
+    const accounts = await import('../src/server/accounts.js');
+    (accounts.assertAccountReady as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error('Account "work" is logged in as someone else');
+    });
+    const before = spawned.args.length;
+    await expect(runClaude('C:/wt', 'prompt', ['**'], { tag: TAG, account: 'work' })).rejects.toThrow(/logged in as someone else/);
+    expect(spawned.args.length).toBe(before);
+  });
 });
 
 describe('naming the session', () => {

@@ -1,4 +1,9 @@
-import type { LandNotificationPayload, NotificationPayload, PromptMissingNotificationPayload } from './session-types.js';
+import type {
+  AccountChangedNotificationPayload,
+  LandNotificationPayload,
+  NotificationPayload,
+  PromptMissingNotificationPayload,
+} from './session-types.js';
 
 /**
  * The outcome of a Land a session asked for (POST /api/agent/land), and the
@@ -11,7 +16,11 @@ import type { LandNotificationPayload, NotificationPayload, PromptMissingNotific
  * place either is reported.
  */
 
-type AnyNotification = NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload;
+type AnyNotification =
+  | NotificationPayload
+  | LandNotificationPayload
+  | PromptMissingNotificationPayload
+  | AccountChangedNotificationPayload;
 
 export function isLandNotification(payload: AnyNotification): payload is LandNotificationPayload {
   return (payload as LandNotificationPayload).kind === 'land';
@@ -24,6 +33,19 @@ export function isPromptMissingNotification(payload: AnyNotification): payload i
 /** The toast's heading: what happened, to which track. */
 export function landResultTitle(payload: LandNotificationPayload): string {
   return payload.ok ? `Landed "${payload.track}"` : `Land of "${payload.track}" failed`;
+}
+
+export function isAccountChangedNotification(payload: AnyNotification): payload is AccountChangedNotificationPayload {
+  return (payload as AccountChangedNotificationPayload).kind === 'account-changed';
+}
+
+export function accountChangedTitle(payload: AccountChangedNotificationPayload): string {
+  return `Session "${payload.name}" is on the wrong Claude login`;
+}
+
+/** Its account's folder was logged in to someone else under it (a `/login` in some session). */
+export function showAccountChanged(payload: AccountChangedNotificationPayload, doc: Document = document): void {
+  showResultToast(accountChangedTitle(payload), payload.detail, true, doc);
 }
 
 export function promptMissingTitle(payload: PromptMissingNotificationPayload): string {

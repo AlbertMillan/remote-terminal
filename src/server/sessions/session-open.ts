@@ -17,7 +17,7 @@ import {
   launchProfileForTranscript,
   accountForTranscript,
 } from '../db/queries.js';
-import { claudeJsonPath, findTranscript, projectsDir, resolveStartAccount } from '../accounts.js';
+import { assertAccountReady, claudeJsonPath, findTranscript, projectsDir, resolveStartAccount } from '../accounts.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -105,6 +105,7 @@ export async function forkSession(
 
   const sourceMetadata = getSessionMetadata(sourceId);
   if (!sourceMetadata) throw new Error('Source session not found');
+  assertAccountReady(sourceMetadata.account);
 
   const { claudeSessionId } = sourceMetadata;
   if (!claudeSessionId) {
@@ -163,7 +164,7 @@ export async function forkSession(
   // Create PTY
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
+    ptyProcess = createPty({ shell, cwd, cols, rows, account: metadata.account, env: sessionEnv(id) });
   } catch (error) {
     revokeSessionToken(id);
     try { unlinkSync(destJsonlPath); } catch { /* best-effort cleanup */ }
@@ -236,6 +237,7 @@ export async function openClaudeSession(
     accountForTranscript(claudeSessionId) ??
     findTranscript(cwd, claudeSessionId)?.account ??
     resolveStartAccount(options.account, cwd);
+  assertAccountReady(account);
 
   let resumeId = claudeSessionId;
   let isFork = false;
@@ -290,7 +292,7 @@ export async function openClaudeSession(
 
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
+    ptyProcess = createPty({ shell, cwd, cols, rows, account: metadata.account, env: sessionEnv(id) });
   } catch (error) {
     revokeSessionToken(id);
     if (forkJsonlPath) { try { unlinkSync(forkJsonlPath); } catch { /* best-effort cleanup */ } }
@@ -346,11 +348,15 @@ export function reviveSession(
   // would resume a conversation whose JSONL no longer exists.
   if (metadata.isFork) throw new Error('Forked sessions cannot be revived; their transcript is removed on restart');
 
+  // Its own account, whatever the start of a new session would pick: the conversation
+  // only resumes from the folder it lives in.
+  assertAccountReady(metadata.account);
+
   const cols = options.cols || metadata.cols || 80;
   const rows = options.rows || metadata.rows || 24;
   const now = new Date();
 
-  logger.info({ id, cwd: metadata.cwd, claudeSessionId: metadata.claudeSessionId }, 'Reviving stale session');
+  logger.info({ id, cwd: metadata.cwd, claudeSessionId: metadata.claudeSessionId, account: metadata.account }, 'Reviving stale session');
 
   let ptyProcess;
   try {
@@ -359,6 +365,7 @@ export function reviveSession(
       cwd: metadata.cwd,
       cols,
       rows,
+      account: metadata.account,
       env: sessionEnv(id),
     });
   } catch (error) {

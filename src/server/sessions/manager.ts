@@ -33,7 +33,7 @@ import {
 } from './session-open.js';
 import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './session-env.js';
 import { deletePromptFile } from './prompt-file.js';
-import { resolveStartAccount } from '../accounts.js';
+import { assertAccountReady, resolveStartAccount } from '../accounts.js';
 
 const logger = createLogger('session-manager');
 
@@ -126,6 +126,9 @@ class SessionManager {
     const rows = options.rows || 24;
     const now = new Date();
     const account = resolveStartAccount(options.account, cwd);
+    // Before anything exists: a refused start leaves no row and no PTY. A Log in session
+    // skips it — it is how the login gets there.
+    if (!options.skipPreflight) assertAccountReady(account);
 
     logger.info({ id, name, shell, cwd, account }, 'Creating new session');
 
@@ -136,6 +139,7 @@ class SessionManager {
       cwd,
       cols,
       rows,
+      account,
       env: {
         ...options.env,
         ...sessionEnv(id),

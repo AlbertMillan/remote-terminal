@@ -59,3 +59,50 @@ login's folder for a personal session.
   `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.
 - Jobs and other headless runs with no session use `projectAccount(cwd)`: the project's
   default, else the configured one. The review stage reads that account's `/code-review`.
+
+## Launch
+
+Every `claude` claude-remote launches — a session's PTY (`createPty`, `account` required)
+and a headless run (`spawnClaude`) — gets `accountEnv(env, account)`:
+
+- `CLAUDE_CONFIG_DIR` = the account's folder, or **removed** for the default `~/.claude`;
+- no `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `CLAUDE_CODE_ENABLE_TELEMETRY` or `OTEL_*` (case-insensitive): inherited, they override
+  the folder's login and settings.
+
+**Preflight** (`preflight(account)`) runs before every launch: create, Fork, history
+Resume, revive, an agent start (before its branch and worktree), and every `runClaude`
+(a job stage or session log runs under `projectAccount(cwd)`). It reads `oauthAccount`
+from `claudeJsonPath(account)` and refuses (`AccountRefusedError`, 409):
+
+| reason | when |
+| --- | --- |
+| `no-expected-identity` | the account has neither `accountUuid` nor `organizationUuid` |
+| `no-login` | no `oauthAccount` in its `.claude.json` |
+| `mismatch` | the logged-in uuid isn't the expected one |
+| `org-settings` | an account expecting no organization has `remote-settings*.json` in its folder |
+
+A refused WebSocket launch answers `session.error` with `refusal`; the client shows who is
+logged in vs who is expected (`account-refusal-modal.ts`):
+
+- **Log in** — `session.create { account, login: true }`: `claude` in `~` with the
+  account's env and no preflight. The user runs `/login` and exits; the client then sends
+  the refused launch again, and the server preflights it again.
+- **Clean up** (accounts with no `organizationUuid`) — the same with `cleanup: true`,
+  which first deletes `remote-settings*.json` there (`cleanupAccount`). Run `/logout`,
+  then `/login` with the right account.
+
+## A login that changes under a running session
+
+`/login` inside a session swaps the login of its whole folder. `account-watch.ts` re-runs
+preflight for every running session's account every 60s and whenever a claude-session hook
+reports in. A session whose account fails is flagged: its row's account chip turns into a
+warning (`session.accountWarnings`) and a toast/notification (`account-changed`) fires once.
+
+## Before landing
+
+- Fill in `accounts.*.accountUuid` / `organizationUuid` in `config.json`, or every launch
+  is refused (`no-expected-identity`).
+- Existing sessions are `personal`, but their transcripts are still in the work folder
+  until `f-ilxxdj` moves them: reads fall back to other folders, but a revive or Resume of
+  one runs `claude --resume` in `~/.claude-personal`, which doesn't have it.

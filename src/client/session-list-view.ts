@@ -396,6 +396,12 @@ export class SessionListView {
     const modeChipHtml = isChild && mode && mode !== 'auto'
       ? `<span class="session-mode-chip" title="Started in ${escapeAttr(mode)} permission mode">${escapeHtml(mode)}</span>`
       : '';
+    // Which login it runs under (docs/accounts.md); a warning when that folder's login changed.
+    const accountChipHtml = session.account
+      ? `<span class="session-account-chip${session.accountWarning ? ' session-account-warning' : ''}" title="${escapeAttr(
+          session.accountWarning ?? `Runs under the ${session.account} Claude account`
+        )}">${session.accountWarning ? '⚠ ' : ''}${escapeHtml(session.account)}</span>`
+      : '';
     const summaryHtml = children.length > 0 ? `<div class="session-summary">${this.childSummary(children)}</div>` : '';
     // What other agents call this session (`ListAgents`), when it isn't the name shown above:
     // a `claude` typed by hand gets a folder-derived name. Nothing when no Claude runs here.
@@ -416,7 +422,7 @@ export class SessionListView {
       </span>
       <div class="session-info">
         <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-status">${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}${claudeNameHtml}</div>
+        <div class="session-status">${accountChipHtml}${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}${claudeNameHtml}</div>
         ${summaryHtml}
       </div>
       ${reviveHtml}

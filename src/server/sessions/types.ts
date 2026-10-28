@@ -40,6 +40,8 @@ export interface SessionCreateOptions {
   mcpServers?: string[] | null;
   /** The account it runs under; unset is its project's default, else the configured one. */
   account?: string;
+  /** Only for a Log in session (accounts-routes.ts): it runs so the login can be fixed. */
+  skipPreflight?: boolean;
 }
 
 export interface SessionMetadata {

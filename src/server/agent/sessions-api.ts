@@ -19,7 +19,15 @@ import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb, setSessionMcpServers } from '../db/queries.js';
 import { getConfig } from '../config.js';
-import { accountNames, claudeJsonPath, isAccount, resolveStartAccount } from '../accounts.js';
+import {
+  AccountRefusedError,
+  accountNames,
+  claudeJsonPath,
+  isAccount,
+  preflight,
+  resolveStartAccount,
+  type PreflightResult,
+} from '../accounts.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
 import {
   broadcastLandResult,
@@ -124,6 +132,8 @@ export interface AgentSessionDeps {
   mcpServersFor(cwd: string, account: string): string[];
   /** The profile's flags for a launch; writes the scoped MCP config (launch-profile.ts). */
   launchFlags(sessionId: string, cwd: string, profile: LaunchProfile, account: string): LaunchFlags;
+  /** Is the account's expected login in its folder (accounts.ts preflight)? */
+  preflight(account: string): PreflightResult;
   /** Record the MCP servers a session actually got, when its launch dropped some. */
   setMcpServers(id: string, servers: string[]): void;
   injectCommand(session: ActiveSession, line: string): void;
@@ -192,6 +202,7 @@ export const defaultDeps: AgentSessionDeps = {
   writePromptFile,
   mcpServersFor: (cwd, account) => [...availableMcpServers(cwd, claudeJsonPath(account)).keys()],
   launchFlags: (sessionId, cwd, profile, account) => launchFlags(sessionId, cwd, profile, claudeJsonPath(account)),
+  preflight: (account) => preflight(account),
   setMcpServers: setSessionMcpServers,
   injectCommand,
   lastNotification: (id) => notificationService.getSessionNotification(id),
@@ -298,6 +309,10 @@ export async function startAgentSession(
   const project = deps.projectForCwd(caller.cwd);
   if (!project) throw new AgentSessionError(400, `${caller.cwd} is not in a workspace project`);
   const account = resolveStartAccount(body.account as string | undefined, project.cwd);
+  // Before the branch, worktree and install: a start on the wrong login creates nothing.
+  // The message names who is logged in and who is expected.
+  const ready = deps.preflight(account);
+  if (!ready.ok) throw new AccountRefusedError(ready);
   // The agent can only start work on a track somebody planned, never invent one.
   if (!deps.trackExists(project, track)) {
     throw new AgentSessionError(404, `No track "${track}" in ${project.cwd}'s PROJECT.md`);
@@ -684,7 +699,7 @@ export async function requestUpdate(deps: AgentUpdateDeps, callerId: string, bod
 }
 
 function isKnownError(error: unknown): error is StatusError {
-  return error instanceof AgentSessionError || isTrackError(error);
+  return error instanceof AgentSessionError || error instanceof AccountRefusedError || isTrackError(error);
 }
 
 function sendError(reply: FastifyReply, error: unknown): unknown {

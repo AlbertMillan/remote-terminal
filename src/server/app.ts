@@ -6,14 +6,15 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
-import { accountProblems } from './accounts.js';
+import { accountNames, accountProblems, defaultAccount, preflight } from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
 import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-registry.js';
-import { broadcastClaudeNames } from './websocket/connections.js';
+import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames } from './websocket/connections.js';
+import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
@@ -69,6 +70,11 @@ export async function createApp(): Promise<FastifyInstance> {
   startUsageLedger();
   // Claude's own name for each running conversation, for the sidebar.
   startClaudeNameWatch(() => sessionManager.getSessionList(), broadcastClaudeNames);
+  startAccountWatch(
+    () => sessionManager.getRunningSessions(),
+    broadcastAccountWarnings,
+    (s) => broadcastAccountChanged({ kind: 'account-changed', sessionId: s.id, name: s.name, detail: s.detail, timestamp: new Date().toISOString() })
+  );
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -159,6 +165,16 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   // Recent working directories (for the new-session path dropdown)
+  // The accounts a new session can run under, for the New Session picker. Readiness only:
+  // who is logged in where is said by a refusal, to the client that asked to launch.
+  app.get('/api/accounts', async () => ({
+    defaultAccount: defaultAccount(),
+    accounts: accountNames().map((name) => {
+      const result = preflight(name);
+      return { name, configDir: result.configDir, ready: result.ok };
+    }),
+  }));
+
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };
   });
@@ -287,6 +303,8 @@ export async function createApp(): Promise<FastifyInstance> {
       cwd = cwd.replace(/^\/([a-zA-Z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, '\\');
     }
     setClaudeSessionId(sessionId, claudeSessionId, cwd);
+    // A Claude just started or stopped here, possibly right after a `/login`.
+    recheckAccounts();
     return { success: true };
   });
 
@@ -378,6 +396,7 @@ export async function createApp(): Promise<FastifyInstance> {
 
     stopUsageLedger();
     stopClaudeNameWatch();
+    stopAccountWatch();
 
     // Close database
     closeDatabase();

@@ -114,6 +114,7 @@ function makeDeps(): AgentSessionDeps {
     mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
     // The real flags, reading a stand-in for the user's Claude config.
     launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'))),
+    preflight: vi.fn((account: string) => ({ ok: true as const, account, configDir: 'C:\cfg', found: { accountUuid: 'a' } })),
     setMcpServers: vi.fn((id: string, servers: string[]) => {
       const r = rows.get(id);
       if (r) r.mcpServers = servers;
@@ -400,6 +401,25 @@ describe('start', () => {
       headers: { authorization: `Bearer ${mainToken}` },
     });
     expect(list.json().sessions[0].account).toBe('work');
+  });
+
+  it('refuses a start on the wrong login with 409, naming found and expected, before creating anything', async () => {
+    (deps.preflight as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      ok: false,
+      account: 'work',
+      configDir: 'C:\cfg',
+      reason: 'mismatch',
+      found: { accountUuid: 'b', emailAddress: 'me@home.example' },
+      expected: { organizationUuid: 'org-1' },
+      message: 'Account "work" (C:\cfg) is logged in as me@home.example, but expects organization org-1',
+    });
+    const res = await start({ ...GOOD, account: 'work' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain('me@home.example');
+    expect(res.json().error).toContain('org-1');
+    expect(deps.preflight).toHaveBeenCalledWith('work');
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
   });
 
   it('refuses an account the config does not define, before creating anything', async () => {

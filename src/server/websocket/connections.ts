@@ -8,10 +8,13 @@ import {
   type LandNotificationPayload,
   type PromptMissingNotificationPayload,
   type SessionClaudeNamesPayload,
+  type SessionAccountWarningsPayload,
+  type AccountChangedNotificationPayload,
 } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
 import { defaultAccount } from '../accounts.js';
+import { accountWarningFor } from '../sessions/account-watch.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -103,6 +106,7 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     permissionMode: session.permissionMode ?? null,
     claudeName: claudeNameFor(session.claudeSessionId),
     account: session.account ?? defaultAccount(),
+    accountWarning: accountWarningFor(session.id),
   };
 }
 
@@ -145,6 +149,24 @@ export function broadcastSessionAdded(session: SessionInfo): void {
  * this is the only place the result of that Land is ever reported.
  */
 export function broadcastLandResult(payload: LandNotificationPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('notification', payload));
+    }
+  }
+}
+
+export function broadcastAccountWarnings(warnings: Record<string, string>): void {
+  const payload: SessionAccountWarningsPayload = { warnings };
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.accountWarnings', payload));
+    }
+  }
+}
+
+/** A running session's account changed login. Unfiltered, like a Land result: it is a warning about whose login runs it. */
+export function broadcastAccountChanged(payload: AccountChangedNotificationPayload): void {
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage('notification', payload));

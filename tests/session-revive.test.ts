@@ -32,6 +32,12 @@ const createPty = vi.fn(() => {
 
 const writeToPty = vi.fn();
 
+// Preflight reads the account's real login; these tests launch nothing real.
+vi.mock('../src/server/accounts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
+  assertAccountReady: vi.fn(),
+}));
+
 vi.mock('../src/server/sessions/pty-handler.js', async () => {
   // ScrollbackBuffer is real: the seeding assertion is only meaningful against the real one.
   const actual = await vi.importActual<typeof import('../src/server/sessions/pty-handler.js')>(
