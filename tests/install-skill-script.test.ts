@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { appendFileSync, readFileSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { makeTmpDataDir } from './helpers/tmp-data-dir.js';
 
@@ -31,5 +31,17 @@ describe('install-skill', () => {
     appendFileSync(installed, '\nlocal drift\n');
     expect(install()).toMatch(/claude-remote-sessions: updated/);
     expect(readFileSync(installed, 'utf-8')).toBe(readFileSync(SOURCE, 'utf-8'));
+  });
+
+  it("with no --dest, installs into every account in claude-remote's config", () => {
+    const dir = makeTmpDataDir('skill-accounts');
+    const config = join(dir, 'config.json');
+    const personal = join(dir, 'personal');
+    const work = join(dir, 'work');
+    writeFileSync(config, JSON.stringify({ accounts: { personal: { configDir: personal }, work: { configDir: work } } }));
+    const out = execFileSync(process.execPath, [SCRIPT], { encoding: 'utf-8', env: { ...process.env, CLAUDE_REMOTE_CONFIG: config } });
+    expect(out).toContain(join(personal, 'skills', 'claude-remote-sessions'));
+    expect(out).toContain(join(work, 'skills', 'claude-remote-sessions'));
+    expect(readFileSync(join(work, 'skills', 'claude-remote-sessions', 'SKILL.md'), 'utf-8')).toBe(readFileSync(SOURCE, 'utf-8'));
   });
 });

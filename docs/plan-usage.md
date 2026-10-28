@@ -6,8 +6,10 @@ the rolling **5-hour** window and the **weekly** window, each with its reset tim
 
 ## Setup
 
-Add a status line to `~/.claude/settings.json` (the chip, while no reading has arrived,
-shows this exact snippet with the real path):
+Add a status line to each Claude account's `settings.json` (`~/.claude/settings.json` for
+the default folder; `scripts/install-account-setup.mjs` copies it between accounts, see
+`docs/accounts.md`). The chip, while no reading has arrived, shows this exact snippet with
+the real path and the attached session's account's file:
 
 ```json
 {

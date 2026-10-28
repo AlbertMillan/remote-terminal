@@ -173,6 +173,11 @@ export function allProjectsDirs(home?: string): string[] {
   return distinctPaths((a) => projectsDir(a, home));
 }
 
+/** Every account's skills folder: the repo's skills are installed into each. */
+export function allSkillsDirs(home?: string): string[] {
+  return distinctPaths((a) => skillsDir(a, home));
+}
+
 /** Every account's live-session registry folder. */
 export function allSessionsDirs(home?: string): string[] {
   return distinctPaths((a) => sessionsDir(a, home));
@@ -406,4 +411,43 @@ export function cleanupAccount(account: string, home?: string): string[] {
     deleted.push(file);
   }
   return deleted;
+}
+
+/**
+ * The account whose folder is `dir` — a `CLAUDE_CONFIG_DIR` as a process saw it.
+ * Empty means Claude Code's default `~/.claude`. Null when no account uses it.
+ */
+export function accountForConfigDir(dir: string | null | undefined, home: string = homedir()): string | null {
+  const target = pathKey(dir ? expandHome(dir, home) : join(home, '.claude'));
+  return accountNames().find((a) => pathKey(configDir(a, home)) === target) ?? null;
+}
+
+/**
+ * What of claude-remote's setup the account's settings.json lacks: the
+ * claude-session hook (Fork, Resume, the session log), the notification hooks,
+ * the plan-usage status line. Read-only; scripts/install-account-setup.mjs copies
+ * them over from an account that has them (docs/accounts.md).
+ */
+export function accountSetupMissing(account: string, home?: string): string[] {
+  let settings: { hooks?: Record<string, unknown>; statusLine?: { command?: unknown } } = {};
+  try {
+    settings = JSON.parse(readFileSync(settingsPath(account, home), 'utf-8'));
+  } catch {
+    // No settings yet: everything is missing.
+  }
+  const commands = (event: string): string[] => {
+    const groups = settings.hooks?.[event];
+    if (!Array.isArray(groups)) return [];
+    return groups.flatMap((g: { hooks?: { command?: unknown }[] }) =>
+      Array.isArray(g?.hooks) ? g.hooks.map((h) => (typeof h?.command === 'string' ? h.command : '')) : []
+    );
+  };
+  const has = (event: string, route: string) => commands(event).some((c) => c.includes('CLAUDE_REMOTE_SESSION_ID') && c.includes(route));
+  const missing: string[] = [];
+  if (!has('SessionStart', '/claude-session')) missing.push('SessionStart claude-session hook');
+  if (!has('Stop', '/api/notify/')) missing.push('Stop notification hook');
+  if (!has('Notification', '/api/notify/')) missing.push('Notification hook');
+  const statusLine = settings.statusLine?.command;
+  if (typeof statusLine !== 'string' || !statusLine.includes('statusline.mjs')) missing.push('plan-usage statusLine');
+  return missing;
 }

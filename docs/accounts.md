@@ -106,3 +106,26 @@ warning (`session.accountWarnings`) and a toast/notification (`account-changed`)
 - Existing sessions are `personal`, but their transcripts are still in the work folder
   until `f-ilxxdj` moves them: reads fall back to other folders, but a revive or Resume of
   one runs `claude --resume` in `~/.claude-personal`, which doesn't have it.
+
+## Per-account setup
+
+Each account's `claude` reads only its own folder, so claude-remote's setup goes into each:
+
+- **Skills**: `installSkillsAtBoot` installs `skills/` into every account's `skills/`
+  (`npm run install-skill` does the same from `config.json`; `--dest` overrides).
+- **Hooks and status line**: the claude-session hook (Fork, Resume, the session log), the
+  notification hooks (`docs/notifications.md`, `docs/session-fork.md`) and the plan-usage
+  status line live in each account's `settings.json`. Copy them from an account that has
+  them — only claude-remote's entries, never replacing the target's own status line,
+  backing the target up to `settings.json.bak`:
+  ```
+  node scripts/install-account-setup.mjs --from ~/.claude/settings.json --to ~/.claude-personal/settings.json
+  ```
+  The server logs, at boot, every account whose settings lack any of them
+  (`accountSetupMissing`); `GET /api/accounts` lists them as `setupMissing`.
+- **Plan usage** is kept per account: `statusline.mjs` sends its `CLAUDE_CONFIG_DIR`
+  (`config_dir`, empty for `~/.claude`), the server files the reading under the account on
+  that folder (a folder no account uses is dropped), and the chip shows the attached
+  session's account (`GET /api/plan-usage?account=`), naming that account's settings file
+  in its setup hint. A `plan-usage.json` from before accounts is restored as the default
+  folder's account's.

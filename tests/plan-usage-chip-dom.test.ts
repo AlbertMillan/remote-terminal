@@ -69,6 +69,12 @@ describe('rendering', () => {
 
   it('shows the exact setup snippet when no reading has ever arrived', () => {
     const view = renderPlanUsage({ snapshot: null, setup: { command: 'node "C:/repo/scripts/statusline.mjs"' } }, NOW);
+    const personal = renderPlanUsage(
+      { snapshot: null, setup: { command: 'x', settingsPath: 'C:\\Users\\me\\.claude-personal\\settings.json' } },
+      NOW
+    );
+    // The account's own settings file, not always ~/.claude's.
+    expect(personal.body).toContain('C:\\Users\\me\\.claude-personal\\settings.json');
     expect(view.summary).toContain('not set up');
     expect(view.body).toContain('~/.claude/settings.json');
     expect(view.body).toContain('"statusLine"');

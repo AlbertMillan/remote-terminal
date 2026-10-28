@@ -35,6 +35,9 @@ const { registerPlanUsageRoutes, statuslineCommand } = await import('../src/serv
 const NOW = Date.now();
 const inHours = (h: number) => Math.round(NOW / 1000 + h * 3600);
 const snapshotFile = join(dataDir, 'plan-usage.json');
+/** The default folder's account's entry in the file: readings with no folder named are its. */
+const onDiskOf = (text: string) => JSON.parse(text).accounts.work;
+const onDisk = () => onDiskOf(readFileSync(snapshotFile, 'utf8'));
 
 /** A status line payload, trimmed to what matters. */
 function payload(five: number | null, seven: number | null, fiveResets = inHours(2), sevenResets = inHours(96)) {
@@ -143,7 +146,7 @@ describe('writing the snapshot', () => {
 
     plan.recordReading(payload(56, 22), NOW + 30_000);
     expect(writes()).toBe(afterFirst + 1);
-    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).fiveHour.usedPercentage).toBe(56);
+    expect(onDisk().fiveHour.usedPercentage).toBe(56);
   });
 
   it('does not write for a stale reading the merge throws away', () => {
@@ -172,14 +175,14 @@ describe('relay contact', () => {
   it('persists contact the first time, then at most hourly — the relay posts on every render', () => {
     plan.recordReading({ rate_limits: null }, NOW);
     const first = readFileSync(snapshotFile, 'utf8');
-    expect(JSON.parse(first).relaySeenAt).toBe(new Date(NOW).toISOString());
+    expect(onDiskOf(first).relaySeenAt).toBe(new Date(NOW).toISOString());
 
     plan.recordReading({ rate_limits: null }, NOW + 10 * 60_000);
     expect(readFileSync(snapshotFile, 'utf8')).toBe(first); // not rewritten
     expect(plan.getRelaySeenAt()).toBe(new Date(NOW + 10 * 60_000).toISOString()); // but current in memory
 
     plan.recordReading({ rate_limits: null }, NOW + 70 * 60_000);
-    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).relaySeenAt).toBe(
+    expect(onDisk().relaySeenAt).toBe(
       new Date(NOW + 70 * 60_000).toISOString()
     );
   });
@@ -189,6 +192,17 @@ describe('relay contact', () => {
     plan.loadSnapshot();
     expect(plan.getSnapshot()).toBeNull();
     expect(plan.getRelaySeenAt()).toBe(new Date(NOW).toISOString());
+  });
+
+  it('restores a file from before accounts as the default folder account\'s', () => {
+    const soon = Math.round(Date.now() / 1000);
+    writeFileSync(
+      snapshotFile,
+      JSON.stringify({ fiveHour: { usedPercentage: 42, resetsAt: soon + 3600, observedAt: new Date().toISOString() }, sevenDay: null })
+    );
+    plan.loadSnapshot();
+    expect(plan.getSnapshot('work')!.fiveHour!.usedPercentage).toBe(42);
+    expect(plan.getSnapshot('personal')).toBeNull();
   });
 
   it('ignores a malformed contact time on disk', () => {
@@ -209,13 +223,38 @@ describe('routes', () => {
   it('relays a reading in and serves it back with the setup command', async () => {
     const a = await app();
     const body = payload(55, 22, Math.round(Date.now() / 1000) + 3600, Math.round(Date.now() / 1000) + 86400);
+    // No config_dir: the default ~/.claude, which is `work` in the default config.
     const post = await a.inject({ method: 'POST', url: '/api/plan-usage', payload: body });
-    expect(post.json()).toEqual({ stored: true });
+    expect(post.json()).toEqual({ stored: true, account: 'work' });
 
-    const get = (await a.inject({ method: 'GET', url: '/api/plan-usage' })).json();
+    const get = (await a.inject({ method: 'GET', url: '/api/plan-usage?account=work' })).json();
+    expect(get.account).toBe('work');
     expect(get.snapshot.fiveHour.usedPercentage).toBe(55);
     expect(typeof get.relaySeenAt).toBe('string');
     expect(get.setup.command).toMatch(/^node ".*\/scripts\/statusline\.mjs"$/);
+    expect(get.setup.settingsPath).toMatch(/[\\/]\.claude[\\/]settings\.json$/);
+    await a.close();
+  });
+
+  it("keeps each account's limits apart, and drops a folder no account uses", async () => {
+    const a = await app();
+    const soon = Math.round(Date.now() / 1000);
+    await a.inject({ method: 'POST', url: '/api/plan-usage', payload: payload(90, 50, soon + 3600, soon + 86400) });
+    const personal = await a.inject({
+      method: 'POST',
+      url: '/api/plan-usage',
+      payload: { ...payload(10, 5, soon + 3600, soon + 86400), config_dir: '~/.claude-personal' },
+    });
+    expect(personal.json()).toEqual({ stored: true, account: 'personal' });
+    const stray = await a.inject({ method: 'POST', url: '/api/plan-usage', payload: { ...payload(1, 1), config_dir: 'C:/nowhere' } });
+    expect(stray.json()).toEqual({ stored: false, account: null });
+
+    const get = async (account: string) => (await a.inject({ method: 'GET', url: `/api/plan-usage?account=${account}` })).json();
+    expect((await get('work')).snapshot.fiveHour.usedPercentage).toBe(90);
+    expect((await get('personal')).snapshot.fiveHour.usedPercentage).toBe(10);
+    expect((await get('personal')).setup.settingsPath).toMatch(/\.claude-personal[\\/]settings\.json$/);
+    // No account asked: the default account's.
+    expect((await get('nobody')).account).toBe('personal');
     await a.close();
   });
 

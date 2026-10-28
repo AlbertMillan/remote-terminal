@@ -810,6 +810,8 @@ class SessionManager {
     this.currentSessionId = payload.session.id;
     this.attachingSessionId = null; // Clear in-flight flag
     this.sessions.set(payload.session.id, payload.session);
+    // The plan chip shows this session's login's limits (docs/accounts.md).
+    this.planUsage.setAccount(payload.session.account);
 
     // Clear notification for this session
     this.sessionNotifications.delete(payload.session.id);

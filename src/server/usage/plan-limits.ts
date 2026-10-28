@@ -2,6 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { accountForConfigDir, defaultAccount } from '../accounts.js';
 
 const logger = createLogger('plan-usage');
 
@@ -79,29 +80,51 @@ function merge(
   return held;
 }
 
-let snapshot: PlanUsageSnapshot | null = null;
 /**
- * When the status line relay last reached the server, limits or not. It is
- * what tells "never set up" apart from "set up, but no limits yet" — a session
- * before its first response, a plan without limits — so the chip does not ask
- * for a snippet that is already installed.
+ * One account's readings (docs/accounts.md): each login has its own plan and
+ * limits, and a status line reports only its own session's.
+ *
+ * `relaySeenAt` is when its status line relay last reached the server, limits
+ * or not. It is what tells "never set up" apart from "set up, but no limits yet"
+ * — a session before its first response, a plan without limits — so the chip
+ * does not ask for a snippet that is already installed.
+ *
+ * `savedFigures` / `relaySavedAt` are what the file on disk last recorded, so a
+ * post that changes nothing worth keeping writes nothing. Every session's status
+ * line posts on every render; a synchronous write and rename per post churns the
+ * disk on the event loop, and on Windows the rename fails outright whenever an
+ * indexer or antivirus has the file open. Worth keeping: a percentage or reset
+ * time that changed. Not worth a write: a fresher `observedAt` alone (a restored
+ * "as of" a little old is harmless), or relay contact already recorded within
+ * the hour.
  */
-let relaySeenAt: string | null = null;
+interface AccountState {
+  snapshot: PlanUsageSnapshot | null;
+  relaySeenAt: string | null;
+  savedFigures: string | null;
+  relaySavedAt: number;
+}
+
+const states = new Map<string, AccountState>();
+const RELAY_SAVE_EVERY_MS = 60 * 60 * 1000;
+
+function stateOf(account: string): AccountState {
+  let state = states.get(account);
+  if (!state) {
+    state = { snapshot: null, relaySeenAt: null, savedFigures: null, relaySavedAt: 0 };
+    states.set(account, state);
+  }
+  return state;
+}
 
 /**
- * What the file on disk last recorded, so a post that changes nothing worth
- * keeping writes nothing. Every session's status line posts on every render;
- * a synchronous write and rename per post churns the disk on the event loop,
- * and on Windows the rename fails outright whenever an indexer or antivirus
- * has the file open.
- *
- * Worth keeping: a percentage or reset time that changed. Not worth a write:
- * a fresher `observedAt` alone (a restored "as of" a little old is harmless),
- * or relay contact already recorded within the hour.
+ * The account a reading belongs to when nothing says: the one on Claude Code's
+ * default folder (a status line with no CLAUDE_CONFIG_DIR runs there), else the
+ * configured default.
  */
-let savedFigures: string | null = null;
-let relaySavedAt = 0;
-const RELAY_SAVE_EVERY_MS = 60 * 60 * 1000;
+function unscopedAccount(): string {
+  return accountForConfigDir(null) ?? defaultAccount();
+}
 
 function figuresOf(s: PlanUsageSnapshot | null): string {
   const w = (r: WindowReading | null | undefined) => (r ? [r.usedPercentage, r.resetsAt] : null);
@@ -113,76 +136,89 @@ function snapshotPath(): string {
 }
 
 /**
- * Take one relay post. Every post proves the relay is installed; one carrying
- * usable limits also updates the snapshot. Returns whether it carried limits
- * (their absence is normal: plans without limits, and a session before its
- * first response, send none).
+ * Take one relay post for `account`. Every post proves the relay is installed;
+ * one carrying usable limits also updates that account's snapshot. Returns
+ * whether it carried limits (their absence is normal: plans without limits, and
+ * a session before its first response, send none).
  */
-export function recordReading(body: unknown, now = Date.now()): boolean {
-  relaySeenAt = new Date(now).toISOString();
+export function recordReading(body: unknown, now = Date.now(), account: string = unscopedAccount()): boolean {
+  const state = stateOf(account);
+  state.relaySeenAt = new Date(now).toISOString();
   const reading = parseReading(body, now);
   if (reading) {
     const observedAt = new Date(now).toISOString();
-    snapshot = {
-      fiveHour: merge(snapshot?.fiveHour ?? null, reading.fiveHour, observedAt),
-      sevenDay: merge(snapshot?.sevenDay ?? null, reading.sevenDay, observedAt),
+    state.snapshot = {
+      fiveHour: merge(state.snapshot?.fiveHour ?? null, reading.fiveHour, observedAt),
+      sevenDay: merge(state.snapshot?.sevenDay ?? null, reading.sevenDay, observedAt),
     };
   }
   // Measured against what was last WRITTEN, not last seen: contact every few
   // minutes must still be persisted once the saved time is an hour old.
-  if (figuresOf(snapshot) !== savedFigures || now - relaySavedAt > RELAY_SAVE_EVERY_MS) save(now);
+  if (figuresOf(state.snapshot) !== state.savedFigures || now - state.relaySavedAt > RELAY_SAVE_EVERY_MS) save(now);
   return reading !== null;
 }
 
-export function getSnapshot(): PlanUsageSnapshot | null {
-  return snapshot;
+export function getSnapshot(account: string = unscopedAccount()): PlanUsageSnapshot | null {
+  return states.get(account)?.snapshot ?? null;
 }
 
-export function getRelaySeenAt(): string | null {
-  return relaySeenAt;
+export function getRelaySeenAt(account: string = unscopedAccount()): string | null {
+  return states.get(account)?.relaySeenAt ?? null;
 }
 
-/** Write via a temp file and rename, so a crash mid-write never leaves half a JSON file. */
+/** Write every account via a temp file and rename, so a crash mid-write never leaves half a JSON file. */
 function save(now: number): void {
   const path = snapshotPath();
+  const accounts: Record<string, unknown> = {};
+  for (const [name, state] of states) accounts[name] = { ...state.snapshot, relaySeenAt: state.relaySeenAt };
   try {
-    writeFileSync(`${path}.tmp`, JSON.stringify({ ...snapshot, relaySeenAt }));
+    writeFileSync(`${path}.tmp`, JSON.stringify({ accounts }));
     renameSync(`${path}.tmp`, path);
-    savedFigures = figuresOf(snapshot);
-    relaySavedAt = now;
+    for (const state of states.values()) {
+      state.savedFigures = figuresOf(state.snapshot);
+      state.relaySavedAt = now;
+    }
   } catch (error) {
     logger.warn({ error, path }, 'plan-usage: could not save snapshot');
   }
 }
 
+function restoreState(raw: Record<string, unknown>): AccountState {
+  const restore = (w: unknown): WindowReading | null => {
+    if (!w || typeof w !== 'object') return null;
+    const { usedPercentage, resetsAt, observedAt } = w as Record<string, unknown>;
+    if (typeof observedAt !== 'string') return null;
+    const parsed = parseWindow({ used_percentage: usedPercentage, resets_at: resetsAt }, Date.now() / 1000);
+    return parsed ? { ...parsed, observedAt } : null;
+  };
+  const fiveHour = restore(raw.fiveHour);
+  const sevenDay = restore(raw.sevenDay);
+  const snapshot = fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
+  const relaySeenAt =
+    typeof raw.relaySeenAt === 'string' && !Number.isNaN(Date.parse(raw.relaySeenAt)) ? raw.relaySeenAt : null;
+  // What is on disk now, so the first post after a restart does not rewrite it unchanged.
+  return { snapshot, relaySeenAt, savedFigures: figuresOf(snapshot), relaySavedAt: relaySeenAt ? Date.parse(relaySeenAt) : 0 };
+}
+
 /**
- * Restore the last snapshot at boot, so a restart does not blank the chip.
+ * Restore the last snapshots at boot, so a restart does not blank the chip.
  * A missing or unreadable file is an empty start, never a failure; each window
- * is re-validated rather than trusted from disk.
+ * is re-validated rather than trusted from disk. A file from before accounts
+ * (one flat snapshot) was the default folder's login, and is restored as its.
  */
 export function loadSnapshot(): void {
   const path = snapshotPath();
-  snapshot = null;
-  relaySeenAt = null;
-  savedFigures = null;
-  relaySavedAt = 0;
+  states.clear();
   if (!existsSync(path)) return;
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-    const restore = (w: unknown): WindowReading | null => {
-      if (!w || typeof w !== 'object') return null;
-      const { usedPercentage, resetsAt, observedAt } = w as Record<string, unknown>;
-      if (typeof observedAt !== 'string') return null;
-      const parsed = parseWindow({ used_percentage: usedPercentage, resets_at: resetsAt }, Date.now() / 1000);
-      return parsed ? { ...parsed, observedAt } : null;
-    };
-    const fiveHour = restore(raw.fiveHour);
-    const sevenDay = restore(raw.sevenDay);
-    snapshot = fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
-    relaySeenAt = typeof raw.relaySeenAt === 'string' && !Number.isNaN(Date.parse(raw.relaySeenAt)) ? raw.relaySeenAt : null;
-    // What is on disk now, so the first post after a restart does not rewrite it unchanged.
-    savedFigures = figuresOf(snapshot);
-    relaySavedAt = relaySeenAt ? Date.parse(relaySeenAt) : 0;
+    if (raw.accounts && typeof raw.accounts === 'object') {
+      for (const [name, entry] of Object.entries(raw.accounts as Record<string, unknown>)) {
+        if (entry && typeof entry === 'object') states.set(name, restoreState(entry as Record<string, unknown>));
+      }
+    } else {
+      states.set(unscopedAccount(), restoreState(raw));
+    }
   } catch (error) {
     logger.warn({ error, path }, 'plan-usage: ignoring unreadable snapshot');
   }

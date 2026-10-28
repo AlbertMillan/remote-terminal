@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createLogger } from './logger.js';
+import { allSkillsDirs } from '../accounts.js';
 
 const logger = createLogger('skill-install');
 
@@ -18,7 +19,8 @@ export function serverCheckoutRoot(): string {
 }
 
 /**
- * Refresh the repo's skills in ~/.claude/skills at boot, from the checkout this server
+ * Refresh the repo's skills in every account's skills folder at boot (`--dest` per
+ * account, accounts.ts skillsDir), from the checkout this server
  * runs from. The skill is how an agent learns `cr-session start` / `land` exist; it was
  * left uninstalled because installing was a manual step to repeat after every change.
  * Landed skill changes reach the user on the next restart.
@@ -27,14 +29,15 @@ export function serverCheckoutRoot(): string {
  * build, and would install a skill that hasn't landed. Never blocks or fails startup.
  */
 export function installSkillsAtBoot(
-  opts: { root?: string; dest?: string; env?: NodeJS.ProcessEnv } = {}
+  opts: { root?: string; dest?: string | string[]; env?: NodeJS.ProcessEnv } = {}
 ): Promise<'skipped' | 'ran' | 'failed'> {
   const env = opts.env ?? process.env;
   if (env.CLAUDE_REMOTE_CONFIG) return Promise.resolve('skipped');
   const root = opts.root ?? serverCheckoutRoot();
   const script = join(root, 'scripts', 'install-skill.mjs');
   if (!existsSync(script)) return Promise.resolve('skipped');
-  const args = [script, ...(opts.dest ? ['--dest', opts.dest] : [])];
+  const dests = opts.dest === undefined ? allSkillsDirs() : Array.isArray(opts.dest) ? opts.dest : [opts.dest];
+  const args = [script, ...dests.flatMap((d) => ['--dest', d])];
   return new Promise((resolveRun) => {
     execFile(process.execPath, args, { cwd: root, timeout: 30_000 }, (error, stdout, stderr) => {
       if (error) {

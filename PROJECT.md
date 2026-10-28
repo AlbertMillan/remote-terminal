@@ -100,7 +100,7 @@ status: active
 - [x] `f-ygg1cl` P1 Per-account paths — one helper replaces every hardcoded `~/.claude`; a session's data uses its account, scans cover all accounts → project/accounts.md
 - [x] `f-pd3yag` P1 Launch under the right login — `CLAUDE_CONFIG_DIR`, stripped auth/telemetry env, identity preflight, Log in and Clean up from claude-remote → project/accounts.md
 - [ ] `f-ilxxdj` P2 Existing sessions move to personal — their transcripts move to `~/.claude-personal` and `usage_files` is repointed, after one canary resume → project/accounts.md
-- [ ] `f-zig3f6` P2 Per-account setup — hooks, statusLine, skills and plan usage per account folder → project/accounts.md
+- [x] `f-zig3f6` P2 Per-account setup — hooks, statusLine, skills and plan usage per account folder → project/accounts.md
 - [ ] `f-fsx3z3` P2 SESSION-LOG records the account — marker and entry carry it; track attribution reads the account's transcripts → project/accounts.md
 - [ ] `f-psbdve` P2 Usage ledger prunes rows for transcripts that no longer exist → project/rename-claude-work.md
 - [ ] `f-fhrnu3` P3 Rename `~/.claude` to `~/.claude-work` — sweep outside references, machine steps, `usage_files` rewrite script → project/rename-claude-work.md

@@ -17,7 +17,7 @@ import {
   launchProfileForTranscript,
   accountForTranscript,
 } from '../db/queries.js';
-import { assertAccountReady, claudeJsonPath, findTranscript, projectsDir, resolveStartAccount } from '../accounts.js';
+import { assertAccountReady, claudeJsonPath, findTranscript, projectsDir, resolveStartAccount, settingsPath } from '../accounts.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -111,7 +111,7 @@ export async function forkSession(
   if (!claudeSessionId) {
     throw new Error(
       'No Claude session ID registered for this session. ' +
-      'Ensure the claude-session hook is configured in ~/.claude/settings.json ' +
+      `Ensure the claude-session hook is configured in ${settingsPath(sourceMetadata.account)} ` +
       'and Claude has stopped at least once in this terminal.'
     );
   }

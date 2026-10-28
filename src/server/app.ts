@@ -6,7 +6,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
-import { accountNames, accountProblems, defaultAccount, preflight } from './accounts.js';
+import { accountNames, accountProblems, accountSetupMissing, defaultAccount, preflight } from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
@@ -45,6 +45,16 @@ export async function createApp(): Promise<FastifyInstance> {
   loadConfig();
   for (const problem of accountProblems()) {
     logger.error({ problem }, 'Invalid account configuration (docs/accounts.md)');
+  }
+  for (const account of accountNames()) {
+    try {
+      const missing = accountSetupMissing(account);
+      if (missing.length > 0) {
+        logger.warn({ account, missing }, 'Account settings lack claude-remote setup: run scripts/install-account-setup.mjs (docs/accounts.md)');
+      }
+    } catch {
+      // An unknown account: accountProblems() already said so.
+    }
   }
   const config = getConfig();
 
@@ -171,7 +181,7 @@ export async function createApp(): Promise<FastifyInstance> {
     defaultAccount: defaultAccount(),
     accounts: accountNames().map((name) => {
       const result = preflight(name);
-      return { name, configDir: result.configDir, ready: result.ok };
+      return { name, configDir: result.configDir, ready: result.ok, setupMissing: accountSetupMissing(name) };
     }),
   }));
 
