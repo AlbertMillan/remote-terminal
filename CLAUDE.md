@@ -72,6 +72,8 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
 - `/api/agent/*` needs loopback **and** a session token (`authenticate()`, the one guard);
   the rest of `/api/*` is unauthenticated on `0.0.0.0`, so dropping either lets the tailnet
   run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
+- A started session runs under its **caller's** account (another is refused, 403), or one
+  login's session orchestrates work on another's.
 - Started sessions (`spawned_by`) can't start sessions. Prompt files live under
   `<dataDir>/prompts/<id>/`, never in a worktree, or `commitAll` commits them.
 - Worktrees get a **copy** of `.claude/settings.local.json` (`ensureLocalClaudeSettings`),

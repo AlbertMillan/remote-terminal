@@ -25,7 +25,6 @@ import {
   claudeJsonPath,
   isAccount,
   preflight,
-  resolveStartAccount,
   type PreflightResult,
 } from '../accounts.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
@@ -237,7 +236,7 @@ export interface StartBody {
   name?: unknown;
   permissionMode?: unknown;
   mcpServers?: unknown;
-  /** The Claude login it runs under; unset is the project's default, else the configured one. */
+  /** Always the caller's Claude login; naming any other is refused (403). */
   account?: unknown;
 }
 
@@ -305,10 +304,19 @@ export async function startAgentSession(
   if (body.account !== undefined && !isAccount(body.account)) {
     throw new AgentSessionError(400, `account must be one of: ${accountNames().join(', ')}`);
   }
+  // A started session runs under its caller's login, never another: one token
+  // must not reach a second account (personal work on the org's collector, or
+  // the reverse). Naming the caller's own account is allowed, any other refused.
+  const account = caller.account;
+  if (body.account !== undefined && body.account !== account) {
+    throw new AgentSessionError(
+      403,
+      `This session runs under account "${account}"; the sessions it starts run under it too, not "${body.account}"`
+    );
+  }
 
   const project = deps.projectForCwd(caller.cwd);
   if (!project) throw new AgentSessionError(400, `${caller.cwd} is not in a workspace project`);
-  const account = resolveStartAccount(body.account as string | undefined, project.cwd);
   // Before the branch, worktree and install: a start on the wrong login creates nothing.
   // The message names who is logged in and who is expected.
   const ready = deps.preflight(account);

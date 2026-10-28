@@ -22,8 +22,8 @@
  * `--mcp` (repeatable, or comma-separated): the user's whole roster is ~21k
  * tokens of every call (project/lean-started-sessions.md).
  *
- * `--account` picks the Claude login it runs under (docs/accounts.md); without
- * it the project's default account, else the configured one. `list` shows each.
+ * A started session runs under the caller's Claude login (docs/accounts.md);
+ * `--account` naming any other is refused. `list` shows each one's account.
  *
  * The prompt comes on stdin and only there: a `--prompt` argument breaks on
  * quotes and on Windows' command-line length limit, and a heredoc keeps the

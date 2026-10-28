@@ -373,23 +373,32 @@ describe('start', () => {
     expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --add-dir "[^"]+" --name "Split view" -- "Read /);
   });
 
-  it('runs under the default account, or the project default, when the start names none', async () => {
+  it("runs under the caller's account, even when the project defaults to another", async () => {
     const res = await start(GOOD);
     expect(res.json().account).toBe('personal');
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ account: 'personal' }));
-    // projects.json can name a project's default account; a start without one gets it.
     const registry = join(dataDir, 'projects.json');
     writeFileSync(registry, JSON.stringify({ projects: [{ cwd: PROJECT, account: 'work' }] }));
     try {
       rows = new Map([[MAIN_ID, row(MAIN_ID)]]);
       const res2 = await start(GOOD);
-      expect(res2.json().account).toBe('work');
+      expect(res2.json().account).toBe('personal');
     } finally {
       rmSync(registry, { force: true });
     }
   });
 
-  it('runs under the account the start names, and list shows it', async () => {
+  it("refuses an account other than the caller's with 403, before creating anything", async () => {
+    const res = await start({ ...GOOD, account: 'work' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain('"personal"');
+    expect(deps.preflight).not.toHaveBeenCalled();
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it("allows naming the caller's own account, and list shows it", async () => {
+    rows = new Map([[MAIN_ID, row(MAIN_ID, { account: 'work' })]]);
     const res = await start({ ...GOOD, account: 'work' });
     expect(res.statusCode).toBe(200);
     expect(res.json().account).toBe('work');
@@ -413,7 +422,8 @@ describe('start', () => {
       expected: { organizationUuid: 'org-1' },
       message: 'Account "work" (C:\cfg) is logged in as me@home.example, but expects organization org-1',
     });
-    const res = await start({ ...GOOD, account: 'work' });
+    rows = new Map([[MAIN_ID, row(MAIN_ID, { account: 'work' })]]);
+    const res = await start(GOOD);
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toContain('me@home.example');
     expect(res.json().error).toContain('org-1');

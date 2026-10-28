@@ -42,10 +42,11 @@ EOF
   one, e.g. `--mcp playwright` for a check in a browser. An unknown name is refused with
   the list of names you can pass; plugin servers and claude.ai connectors can't be passed.
   The session keeps the same servers when it is revived or resumed.
-- `--account <name>`: the Claude login it runs under (e.g. `personal`, `work`). Leave it
-  out to get the project's default account, else the configured default. Pass one only
-  when the user names it. A start whose account's folder holds the wrong login is
-  refused (409) with who is logged in and who is expected: tell the user, don't retry.
+- A started session always runs under **your own** Claude login (account). Leave
+  `--account` out; naming any other account is refused (403) — if the user wants the work
+  on a different account, tell them to start it from a session on that account. A start
+  whose account's folder holds the wrong login is refused (409) with who is logged in and
+  who is expected: tell the user, don't retry.
 - One call per track. It waits while the track's branch is created and its
   dependencies installed, which can take several minutes — **pass `timeout: 600000`
   on the Bash call**. The default 2-minute timeout kills the CLI, but the server

@@ -28,11 +28,16 @@ user-scope MCP servers are per account.
 
 `resolveStartAccount(requested, cwd)` (`src/server/accounts.ts`):
 
-1. the account the start names (new-session dialog, `cr-session start --account`);
+1. the account the start names (new-session dialog);
 2. else its project's `account` in `projects.json` (most specific project containing the cwd);
    a track or job worktree is looked up by its owner's checkout (`projectCwdFor`), since
    worktrees sit outside every project;
 3. else `defaultAccount`.
+
+A session an agent starts (`POST /api/agent/sessions`, `cr-session start`) skips this: it
+always runs under its **caller's** account, and naming any other is refused (403). Otherwise
+a session on one login could orchestrate work on another, e.g. personal work reporting to
+the org's collector, or an org session spending the personal plan.
 
 The project's `account` is set from the project header's **Account** select
 (`POST /api/projects/account`, `setProjectAccount`): it edits `projects.json` in place like a
