@@ -18,6 +18,11 @@
   --border: #414868;
   --border-subtle: #343a52;
   --terminal-bg: #16161e;
+  /* Claude accounts, by position in the config: never the severity colours. */
+  --account-0: #bb9af7;
+  --account-1: #7dcfff;
+  --account-2: #73daca;
+  --account-3: #a9b1d6;
 
   /* Typography */
   --font-ui: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -222,12 +227,61 @@ body {
 }
 .plan-usage-summary {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   padding: 8px 12px;
   cursor: pointer;
   list-style: none;
   font-family: var(--font-mono);
+}
+/* One line per account: name, 5h · wk, and an "attached" tag. */
+.pu-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pu-line .pu-acct {
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Account colours, by position in the config (accountColourClass). */
+.pu-acct.pu-acct-c0 {
+  color: var(--account-0);
+}
+.pu-acct.pu-acct-c1 {
+  color: var(--account-1);
+}
+.pu-acct.pu-acct-c2 {
+  color: var(--account-2);
+}
+.pu-acct.pu-acct-c3 {
+  color: var(--account-3);
+}
+.pu-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.pu-tag.ok {
+  color: var(--success);
+  border-color: rgba(158, 206, 106, 0.4);
+}
+.pu-tag.warn {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.pu-window.unknown,
+.pu-pct.unknown {
+  color: var(--warning);
 }
 .plan-usage-summary::-webkit-details-marker {
   display: none;
@@ -322,6 +376,44 @@ body {
   word-break: break-all;
   background: var(--bg-tertiary);
   border-radius: 4px;
+}
+/* One popover section per account. */
+.pu-section {
+  padding: 8px 0;
+}
+.pu-section + .pu-section {
+  border-top: 1px solid var(--border-subtle);
+}
+.pu-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+.pu-plan {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.pu-tokens {
+  margin-top: 6px;
+}
+.pu-held {
+  margin-top: 4px;
+  color: var(--warning);
+}
+.pu-breakdown {
+  margin-top: 8px;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.pu-breakdown:hover {
+  color: var(--accent-hover);
 }
 
 .status.connecting {

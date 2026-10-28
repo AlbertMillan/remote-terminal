@@ -2,10 +2,29 @@ import type { FastifyInstance } from 'fastify';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { discardHeld, getHeld, getRelaySeenAt, getSnapshot, recordReading, type Verdict } from './plan-limits.js';
-import { accountForConfigDir, defaultAccount, isAccount, settingsPath } from '../accounts.js';
+import {
+  discardHeld,
+  getHeld,
+  getRelaySeenAt,
+  getSnapshot,
+  recordReading,
+  type Verdict,
+  type WindowReading,
+} from './plan-limits.js';
+import {
+  accountForConfigDir,
+  accountNames,
+  defaultAccount,
+  isAccount,
+  planLabel,
+  projectAccount,
+  projectsDir,
+  readIdentity,
+  settingsPath,
+} from '../accounts.js';
 import { accountLogin, accountWarningFor } from '../sessions/account-watch.js';
 import { getSession } from '../db/queries.js';
+import { usageByAccount, type AccountUsage } from './store.js';
 
 /**
  * The status line script, found by walking up from this module: it sits at
@@ -83,7 +102,104 @@ export function classifyRelayPost(body: unknown, now = Date.now()): { account: s
   return loginUuid ? { account, verdict: { verified: true, loginUuid } } : { account, verdict: { verified: false, reason: 'no-login' } };
 }
 
-export function registerPlanUsageRoutes(app: FastifyInstance): void {
+/** A window's ledger usage, and from when it is counted. */
+export interface WindowTokens extends AccountUsage {
+  since: string;
+  /** True when `since` is the login's creation, later than the window's start. */
+  sinceLogin: boolean;
+}
+
+/** A window as served: without the `loginUuid` it was verified for, which identifies the login. */
+export type PublicWindow = Omit<WindowReading, 'loginUuid'>;
+
+function publicWindow(w: WindowReading | null): PublicWindow | null {
+  if (!w) return null;
+  return { usedPercentage: w.usedPercentage, resetsAt: w.resetsAt, observedAt: w.observedAt };
+}
+
+/** One account in `GET /api/plan-usage`. */
+export interface AccountPlanUsage {
+  account: string;
+  /** "Max 5x", "Team", or null when the credentials file says nothing. */
+  plan: string | null;
+  /** Whether the account's folder holds its expected login right now. */
+  verified: boolean;
+  snapshot: { fiveHour: PublicWindow | null; sevenDay: PublicWindow | null } | null;
+  relaySeenAt: string | null;
+  /** Readings held back for it (docs/plan-usage.md). */
+  held: number;
+  /** claude-remote sessions running under it. */
+  running: number;
+  /** Ledger usage per open window; null without a snapshot to take windows from. */
+  tokens: { fiveHour: WindowTokens | null; sevenDay: WindowTokens | null } | null;
+  /** True for the account the current project's jobs run under (projectAccount). */
+  jobs: boolean;
+  setup: { command: string | null; settingsPath: string };
+}
+
+const WINDOW_S = { fiveHour: 5 * 3600, sevenDay: 7 * 24 * 3600 } as const;
+
+/** The login's creation time (ISO), or null: where "this week" starts for a login younger than the week. */
+function loginCreatedAt(account: string): string | null {
+  try {
+    const raw = readIdentity(account)?.accountCreatedAt;
+    const ms = raw ? Date.parse(raw) : NaN;
+    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function windowTokens(account: string, reading: WindowReading | null, length: number, now: number): WindowTokens | null {
+  if (!reading || reading.resetsAt * 1000 <= now) return null; // closed: nothing current to count
+  const start = new Date((reading.resetsAt - length) * 1000).toISOString();
+  const created = loginCreatedAt(account);
+  const sinceLogin = created !== null && created > start;
+  const since = sinceLogin ? created : start;
+  const usage = usageByAccount(account, since, projectsDir(account));
+  return usage ? { ...usage, since, sinceLogin } : null;
+}
+
+/**
+ * Every configured account's plan usage, for the chip and the usage page. Only
+ * labels and figures: the credentials file gives `plan` and nothing else, and
+ * no login identity is included (the route is unauthenticated, like
+ * `/api/accounts`).
+ */
+export function planUsageSummary(
+  running: { account: string }[],
+  cwd: string | undefined,
+  now = Date.now()
+): AccountPlanUsage[] {
+  const jobsAccount = projectAccount(cwd);
+  return accountNames().map((account) => {
+    const snapshot = getSnapshot(account);
+    return {
+      account,
+      plan: planLabel(account),
+      verified: accountLogin(account, now)?.ok === true,
+      snapshot: snapshot && { fiveHour: publicWindow(snapshot.fiveHour), sevenDay: publicWindow(snapshot.sevenDay) },
+      relaySeenAt: getRelaySeenAt(account),
+      held: getHeld(account).length,
+      running: running.filter((s) => s.account === account).length,
+      tokens: snapshot
+        ? {
+            fiveHour: windowTokens(account, snapshot.fiveHour, WINDOW_S.fiveHour, now),
+            sevenDay: windowTokens(account, snapshot.sevenDay, WINDOW_S.sevenDay, now),
+          }
+        : null,
+      jobs: account === jobsAccount,
+      setup: { command: statuslineCommand(), settingsPath: settingsPath(account) },
+    };
+  });
+}
+
+export interface PlanUsageRouteDeps {
+  /** Running claude-remote sessions (`getRunningSessions`), for each account's count. */
+  runningSessions?: () => { account: string }[];
+}
+
+export function registerPlanUsageRoutes(app: FastifyInstance, deps: PlanUsageRouteDeps = {}): void {
   // The relay: scripts/statusline.mjs posts `{ rate_limits }` on every status
   // line render. A post with no usable limits is normal (before a session's
   // first response, or on a plan without limits); it still counts as contact,
@@ -111,15 +227,23 @@ export function registerPlanUsageRoutes(app: FastifyInstance): void {
     return reply.code(400).send({ error: 'Pass { id } or { account }' });
   });
 
-  // `?account=` picks whose limits: the chip asks for the attached session's.
-  app.get<{ Querystring: { account?: string } }>('/api/plan-usage', async (request) => {
+  // Every account (the chip shows them all). `?account=` names the attached
+  // session's, marked `attached`; `?cwd=` its folder, which says whose login the
+  // project's jobs run under. The top-level account/snapshot/relaySeenAt/setup
+  // are the attached (else default) account's, so a tab from before still renders.
+  app.get<{ Querystring: { account?: string; cwd?: string } }>('/api/plan-usage', async (request) => {
     const asked = request.query?.account;
-    const account = isAccount(asked) ? asked : defaultAccount();
+    const attached = isAccount(asked) ? asked : undefined;
+    const cwd = typeof request.query?.cwd === 'string' && request.query.cwd ? request.query.cwd : undefined;
+    const accounts = planUsageSummary(deps.runningSessions?.() ?? [], cwd);
+    const legacy = accounts.find((a) => a.account === (attached ?? defaultAccount())) ?? accounts[0];
     return {
-      account,
-      snapshot: getSnapshot(account),
-      relaySeenAt: getRelaySeenAt(account),
-      setup: { command: statuslineCommand(), settingsPath: settingsPath(account) },
+      ...(attached ? { attached } : {}),
+      accounts,
+      account: legacy?.account,
+      snapshot: legacy?.snapshot ?? null,
+      relaySeenAt: legacy?.relaySeenAt ?? null,
+      setup: legacy?.setup ?? { command: statuslineCommand() },
     };
   });
 }

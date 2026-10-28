@@ -175,6 +175,29 @@ export function credentialsPath(account: string, home?: string): string {
   return join(configDir(account, home), '.credentials.json');
 }
 
+/**
+ * The login's plan as a label ("Max 5x", "Team"), from its credentials file's
+ * `claudeAiOauth.subscriptionType` and `rateLimitTier` — the only two fields
+ * read. That file holds the login's OAuth tokens: nothing else of it is kept,
+ * returned or logged. Null when either is missing or unreadable.
+ */
+export function planLabel(account: string, home?: string): string | null {
+  let type: unknown;
+  let tier: unknown;
+  try {
+    const oauth = (JSON.parse(readFileSync(credentialsPath(account, home), 'utf-8')) as { claudeAiOauth?: Record<string, unknown> })
+      ?.claudeAiOauth;
+    type = oauth?.subscriptionType;
+    tier = oauth?.rateLimitTier;
+  } catch {
+    return null;
+  }
+  if (typeof type !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(type)) return null;
+  const multiple = typeof tier === 'string' ? /(\d+)x\b/i.exec(tier)?.[1] : undefined;
+  const name = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+  return multiple ? `${name} ${multiple}x` : name;
+}
+
 /** Each distinct value of `perAccount` over every account, in config order. Two accounts on one folder count once. */
 function distinctPaths(perAccount: (account: string) => string): string[] {
   const seen = new Set<string>();

@@ -86,17 +86,43 @@ with a later reset pinned the window until it expired. So `classifyRelayPost`
   session, and a synchronous write per post churns the disk and, on Windows, fails whenever
   an indexer or antivirus holds the file. A fresher "as of" alone is not written.
 
+## Every account on the chip (`f-dnapj1`)
+
+`GET /api/plan-usage` returns **every** configured account (`planUsageSummary`):
+`{ attached?, accounts: [{ account, plan, verified, snapshot, relaySeenAt, held, running,
+tokens: { fiveHour, sevenDay } | null, jobs, setup }] }`, plus the attached (else default)
+account's `account`/`snapshot`/`relaySeenAt`/`setup` at the top level so a tab from before
+still renders (and the client reads such an answer as a one-account list).
+
+- `?account=` marks the attached session's account; `?cwd=` its folder, so `jobs` marks the
+  account `projectAccount(cwd)` gives (whose login that project's jobs run under).
+- `plan`: a label ("Max 5x", "Team") from the credentials file's
+  `claudeAiOauth.subscriptionType` / `rateLimitTier` (`planLabel()`) — the only two fields
+  read; no token is returned, logged or cached. The route is unauthenticated, so windows are
+  served **without** `loginUuid`, and no login identity appears.
+- `running`: running claude-remote sessions on the account. `tokens`: `usageByAccount()`
+  from each open window's start (`resetsAt − 5h` / `− 7d`, or the login's creation when it is
+  younger, `sinceLogin`); null for a closed window or without a snapshot.
+- The chip: one summary line per account — name in the account's colour (`--account-N` by
+  position in the config), `5h n% · wk n%`, an "attached" tag. A window with no verified
+  reading shows `?` in amber; an account never heard from says "not set up". The popover
+  has one section per account (plan, verified state, both bars, this 5h window's tokens,
+  "As of … · n running sessions", "jobs run here", held-back count) and "Per-account
+  breakdown →", which opens the usage page.
+
 ## What the chip can and cannot tell you
 
 - Readings arrive only while an interactive Claude Code session renders its status line,
   and only after that session's first response. Headless job runs never send one. So:
-  - a reading older than 10 minutes shows its age ("as of 14:02 (37m ago)") and dims;
+  - a reading older than 10 minutes shows its age ("as of 14:02 (37m ago)"); the chip dims
+    once every account's readings are that old;
   - once a window's `resets_at` passes, the chip says "reset" rather than the old figure.
-- With no reading, the chip says **"waiting"** if the relay has ever reported (it is
-  installed; limits come after a session's first response, on Pro/Max only) and **"not set
-  up"** with the exact snippet if it never has — plus a hint about `CLAUDE_REMOTE_URL` for
-  a relay that is installed but cannot reach the server.
-- Amber from 80 %, red from 95 %, coloured by the worst window still open.
+- With no verified reading, an account's section says the relay **is set up** if it has
+  ever reported (limits come after a session's first response, on Pro/Max only) and shows
+  the exact snippet for that account's settings file if it never has — plus a hint about
+  `CLAUDE_REMOTE_URL` for a relay that is installed but cannot reach the server.
+- Amber from 80 %, red from 95 %, per window; the chip's border takes the worst open window
+  of any account.
 - The client polls `GET /api/plan-usage` every 60 s — skipped while the tab is hidden —
   and on focus or when the tab is shown again; countdowns tick locally.
 - Not shown: per-model (Opus) weekly limits and extra-usage spend. Those exist only in the
