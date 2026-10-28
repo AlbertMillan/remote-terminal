@@ -136,6 +136,7 @@ function staleRow(overrides: Record<string, unknown> = {}) {
     claudeSessionId: null,
     isFork: false,
     forkJsonlPath: null,
+    account: 'personal',
     ...overrides,
   };
 }

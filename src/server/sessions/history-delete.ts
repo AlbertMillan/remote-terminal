@@ -1,13 +1,13 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getSession } from '../db/queries.js';
 import { sessionManager } from './manager.js';
 import { findProjectByCwd, invalidateProjectCache } from './project-discovery.js';
 import { parseLogEntries, removeLogEntry } from './session-log-format.js';
-import { tryGetTranscriptPath } from './transcript.js';
+import { allProjectsDirs, findTranscript } from '../accounts.js';
+import { isInside } from '../utils/paths.js';
 
 const logger = createLogger('history-delete');
 
@@ -35,7 +35,7 @@ export type TranscriptKeptReason =
   | 'no-session-id' // entry carries a backfill/unknown/malformed marker
   | 'still-referenced' // other surviving log entries point at the same transcript
   | 'session-live' // a running claude-remote session is using it right now
-  | 'not-found' // already gone from ~/.claude/projects
+  | 'not-found' // already gone from every account's projects folder
   | 'unsafe-id' // marker session id isn't a plain UUID — refuse to unlink
   | 'failed'; // unlink threw (permissions, file lock)
 
@@ -138,11 +138,11 @@ export function deleteHistoryEntry(options: DeleteHistoryEntryOptions): DeleteHi
     result.transcriptKeptReason = 'unsafe-id';
     logger.warn({ cwd: project.cwd, sid }, 'history-delete: refusing to unlink non-UUID session id');
   } else {
-    const path = tryGetTranscriptPath(homedir(), project.cwd, sid);
-    const transcriptsRoot = resolve(join(homedir(), '.claude', 'projects'));
+    // Looked for in every account's folder; it is unlinked only from inside one.
+    const path = findTranscript(project.cwd, sid)?.path ?? null;
     if (!path || !existsSync(path)) {
       result.transcriptKeptReason = 'not-found';
-    } else if (!resolve(path).startsWith(transcriptsRoot)) {
+    } else if (!allProjectsDirs().some((root) => isInside(root, path))) {
       result.transcriptKeptReason = 'unsafe-id';
     } else {
       result.transcriptPath = path;

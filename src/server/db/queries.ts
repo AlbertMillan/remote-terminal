@@ -211,9 +211,10 @@ export function getUnloggedSessionsForLog(): {
   cwd: string;
   claudeSessionId: string;
   createdAt: string;
+  account: string;
 }[] {
   return executeStatement('getUnloggedSessionsForLog', `
-    SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt
+    SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt, account
     FROM sessions
     WHERE logged_at IS NULL AND is_fork = 0 AND claude_session_id IS NOT NULL
       AND status != 'idle'
@@ -223,6 +224,7 @@ export function getUnloggedSessionsForLog(): {
     cwd: string;
     claudeSessionId: string;
     createdAt: string;
+    account: string;
   }[]);
 }
 

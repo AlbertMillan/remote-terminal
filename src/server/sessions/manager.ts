@@ -543,6 +543,7 @@ class SessionManager {
       cwd: metadata.cwd,
       claudeSessionId: metadata.claudeSessionId,
       createdAt: metadata.createdAt,
+      account: metadata.account,
     });
   }
 

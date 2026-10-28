@@ -342,6 +342,7 @@ export async function createApp(): Promise<FastifyInstance> {
           cwd: session.cwd,
           claudeSessionId: session.claudeSessionId,
           createdAt: session.createdAt,
+          account: session.account,
         });
         return { sessionId, outcome, cwd: session.cwd, fileName: getConfig().projectLog.fileName };
       }

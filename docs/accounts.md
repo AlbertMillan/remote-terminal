@@ -37,3 +37,25 @@ stored on the row (`sessions.account`, migration `019_session_account`, which ba
 every older row to `personal`). Revive, Fork and history Resume reuse the row's account
 (`accountForTranscript` for a history entry): a transcript only resumes from the folder it
 lives in.
+
+## Paths
+
+Every Claude Code path goes through `accounts.ts`; a hardcoded `~/.claude` reads the work
+login's folder for a personal session.
+
+- `configDir`, `projectsDir`, `sessionsDir`, `skillsDir`, `commandsDir`, `settingsPath`,
+  `credentialsPath` — one account's. A session's own data (its transcript for Fork,
+  Resume, prompt delivery, the session log) uses its account; an unknown account throws.
+- `allProjectsDirs`, `allSessionsDirs` — every account's, each folder once. Scans
+  (project discovery, recent paths, slug recovery, the usage ledger, track attribution,
+  Claude's live session names) cover all of them.
+- `findTranscript(cwd, id, preferred)` — the preferred account's folder first, then any
+  other: a read (the session log, history delete) still finds a transcript that was never
+  moved. A launch (Fork, Resume) uses only the account's own folder.
+- `accountForTranscriptPath` — the account is inferable from a transcript's path, so
+  `usage_files` has no account column.
+- `claudeJsonPath(account)` — the global config file (login, trust, MCP servers). Inside a
+  custom folder, but **`~/.claude.json` beside the default `~/.claude`**: an account on
+  `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.
+- Jobs and other headless runs with no session use `projectAccount(cwd)`: the project's
+  default, else the configured one. The review stage reads that account's `/code-review`.

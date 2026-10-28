@@ -1,6 +1,5 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'fs';
 import { basename, join } from 'path';
-import { homedir } from 'os';
 import { setImmediate } from 'timers';
 import type Database from 'better-sqlite3';
 import { getDatabase } from '../db/schema.js';
@@ -10,6 +9,7 @@ import { worktreeRoot } from '../jobs/worktree.js';
 import { jobEvents } from '../jobs/events.js';
 import { onRunSettled } from '../agent/run-events.js';
 import { invalidateUsageCache } from './store.js';
+import { allProjectsDirs } from '../accounts.js';
 
 const logger = createLogger('usage-ledger');
 
@@ -41,8 +41,8 @@ const READ_CHUNK = 1024 * 1024;
 const SEP = '\\';
 
 export interface IngestOptions {
-  /** `~/.claude/projects` unless overridden (tests). */
-  projectsDir?: string;
+  /** Every account's projects folder (accounts.ts) unless overridden (tests). */
+  projectsDirs?: string[];
   /** Cwds of the projects that have a PROJECT.md. Defaults to the workspace board's. */
   docProjects?: string[];
   /** Bytes per read step (tests, to put a chunk boundary where they want it). */
@@ -446,7 +446,7 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
   const db = getDatabase();
   const stmts = prepare(db);
   const chunkBytes = opts.readChunkBytes ?? READ_CHUNK;
-  const projectsDir = opts.projectsDir ?? join(homedir(), '.claude', 'projects');
+  const projectsDirs = opts.projectsDirs ?? allProjectsDirs();
   const docList = opts.docProjects ?? (await defaultDocProjects());
   const docs = new Map(docList.map((cwd) => [pathKey(cwd), cwd]));
 
@@ -454,7 +454,7 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
     (db.prepare('SELECT * FROM usage_files').all() as FileRow[]).map((r) => [r.path, r])
   );
   const candidates: (Candidate & { row: FileRow | undefined; cwd: string | null })[] = [];
-  for (const c of listTranscripts(projectsDir)) {
+  for (const c of projectsDirs.flatMap(listTranscripts)) {
     const row = known.get(c.path);
     // cwd is fixed once found. A file with none yet is scanned again only
     // when it has changed — an unchanged file has nothing new to find.

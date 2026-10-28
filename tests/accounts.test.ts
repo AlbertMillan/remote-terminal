@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -140,5 +140,67 @@ describe('migration 019_session_account', () => {
     expect(accountForTranscript('never-ran')).toBeNull();
     // Not null after the migration.
     expect(() => getDatabase().prepare(`UPDATE sessions SET account = NULL WHERE id = 'old-1'`).run()).toThrow(/NOT NULL/);
+  });
+});
+
+describe('per-account paths', () => {
+  const personal = join(dataDir, 'claude-personal');
+  const work = join(dataDir, 'claude-work');
+
+  it("resolve under each account's own folder", () => {
+    expect(accounts.configDir('personal')).toBe(personal);
+    expect(accounts.projectsDir('work')).toBe(join(work, 'projects'));
+    expect(accounts.sessionsDir('personal')).toBe(join(personal, 'sessions'));
+    expect(accounts.skillsDir('work')).toBe(join(work, 'skills'));
+    expect(accounts.commandsDir('personal')).toBe(join(personal, 'commands'));
+    expect(accounts.settingsPath('work')).toBe(join(work, 'settings.json'));
+    expect(accounts.credentialsPath('personal')).toBe(join(personal, '.credentials.json'));
+  });
+
+  it('refuse an unknown account rather than fall back to another folder', () => {
+    expect(() => accounts.configDir('nobody')).toThrow(accounts.UnknownAccountError);
+  });
+
+  it('list every account for scans, each folder once', () => {
+    expect(accounts.allProjectsDirs()).toEqual([join(personal, 'projects'), join(work, 'projects')]);
+    expect(accounts.allSessionsDirs()).toEqual([join(personal, 'sessions'), join(work, 'sessions')]);
+  });
+
+  it('infer the account from a transcript path', () => {
+    expect(accounts.accountForTranscriptPath(join(work, 'projects', 'C--p', 'abc.jsonl'))).toBe('work');
+    expect(accounts.accountForTranscriptPath(join(personal, 'projects', 'C--p', 'abc', 'subagents', 'x.jsonl'))).toBe('personal');
+    expect(accounts.accountForTranscriptPath(join(dataDir, 'elsewhere', 'abc.jsonl'))).toBeNull();
+    // A sibling folder that merely starts with the same name is not inside it.
+    expect(accounts.accountForTranscriptPath(join(`${work}-old`, 'projects', 'C--p', 'abc.jsonl'))).toBeNull();
+  });
+
+  it('find a transcript in the preferred account first, then any other', () => {
+    const sid = '11111111-1111-4111-8111-111111111111';
+    const cwd = 'C:\p\demo';
+    const slug = 'C--p-demo';
+    for (const root of [personal, work]) mkdirSync(join(root, 'projects', slug), { recursive: true });
+    writeFileSync(join(work, 'projects', slug, `${sid}.jsonl`), '{}\n');
+    expect(accounts.findTranscript(cwd, sid, 'personal')).toEqual({ path: join(work, 'projects', slug, `${sid}.jsonl`), account: 'work' });
+    writeFileSync(join(personal, 'projects', slug, `${sid}.jsonl`), '{}\n');
+    expect(accounts.findTranscript(cwd, sid, 'personal')!.account).toBe('personal');
+    expect(accounts.findTranscript(cwd, sid, 'work')!.account).toBe('work');
+    expect(accounts.findTranscript(cwd, 'not-there', 'work')).toBeNull();
+    rmSync(join(personal, 'projects'), { recursive: true, force: true });
+    rmSync(join(work, 'projects'), { recursive: true, force: true });
+  });
+
+  it("put .claude.json beside the default ~/.claude, and inside any other folder", () => {
+    const home = join(dataDir, 'home');
+    const cfg = getConfig();
+    const saved = cfg.accounts;
+    cfg.accounts = { personal: { configDir: '~/.claude-personal', accountUuid: 'a' }, work: { configDir: '~/.claude', organizationUuid: 'o' } };
+    try {
+      expect(accounts.isDefaultConfigDir('work', home)).toBe(true);
+      expect(accounts.claudeJsonPath('work', home)).toBe(join(home, '.claude.json'));
+      expect(accounts.isDefaultConfigDir('personal', home)).toBe(false);
+      expect(accounts.claudeJsonPath('personal', home)).toBe(join(home, '.claude-personal', '.claude.json'));
+    } finally {
+      cfg.accounts = saved;
+    }
   });
 });

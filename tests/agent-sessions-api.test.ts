@@ -113,7 +113,7 @@ function makeDeps(): AgentSessionDeps {
     writePromptFile,
     mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
     // The real flags, reading a stand-in for the user's Claude config.
-    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, FAKE_HOME)),
+    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'))),
     setMcpServers: vi.fn((id: string, servers: string[]) => {
       const r = rows.get(id);
       if (r) r.mcpServers = servers;
@@ -414,14 +414,14 @@ describe('start', () => {
     const res = await start(GOOD);
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [] }));
     expect(rows.get(res.json().sessionId)!.mcpServers).toEqual([]);
-    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] });
+    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] }, 'personal');
     expect(deps.mcpServersFor).not.toHaveBeenCalled();
   });
 
   it('scopes in the MCP servers the start names', async () => {
     const res = await start({ ...GOOD, mcpServers: ['playwright', 'playwright'] });
     expect(res.statusCode).toBe(200);
-    expect(deps.mcpServersFor).toHaveBeenCalledWith(PROJECT);
+    expect(deps.mcpServersFor).toHaveBeenCalledWith(PROJECT, 'personal');
     expect(rows.get(res.json().sessionId)!.mcpServers).toEqual(['playwright']);
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --mcp-config "[^"]+" --add-dir /);
@@ -432,7 +432,7 @@ describe('start', () => {
   it('still starts when the launch drops a server, but stores and reports what it got', async () => {
     // The check passed, then the config lost the server (or its file couldn't be written).
     (deps.launchFlags as ReturnType<typeof vi.fn>).mockImplementationOnce((id: string, cwd: string, p: LaunchProfile) =>
-      launchFlags(id, cwd, { ...p, mcpServers: ['everhour'] }, FAKE_HOME)
+      launchFlags(id, cwd, { ...p, mcpServers: ['everhour'] }, join(FAKE_HOME, '.claude.json'))
     );
     const res = await start({ ...GOOD, mcpServers: ['playwright', 'everhour'] });
     expect(res.statusCode).toBe(200);

@@ -1,11 +1,9 @@
 import { existsSync, readFileSync, statSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { stampSessionLogged } from '../db/queries.js';
 import {
-  tryGetTranscriptPath,
   readTranscript,
   transcriptHasEditsSince,
   countUserTurnsSince,
@@ -20,6 +18,7 @@ import { worktreeOwner, type WorktreeOwner } from '../projects/worktree-owner.js
 import { loadRegistry } from '../projects/registry.js';
 import { worktreeRoot } from '../jobs/worktree.js';
 import { isInside } from '../utils/paths.js';
+import { findTranscript } from '../accounts.js';
 import { pathKey } from './project-discovery.js';
 
 const logger = createLogger('project-log');
@@ -97,6 +96,8 @@ export interface SessionLogContext {
   cwd: string;
   claudeSessionId: string;
   createdAt: string; // ISO timestamp of session creation
+  /** The account it ran under: its transcript is in that account's folder (accounts.ts). */
+  account: string;
 }
 
 export type LogOutcome = 'generated' | 'skipped' | 'disabled' | 'error';
@@ -299,7 +300,9 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
       return 'skipped';
     }
 
-    const transcriptPath = tryGetTranscriptPath(homedir(), ctx.cwd, ctx.claudeSessionId);
+    // Its own account's folder first; another account's when the transcript was never moved
+    // there (sessions from before accounts are `personal`, but ran on the work login).
+    const transcriptPath = findTranscript(ctx.cwd, ctx.claudeSessionId, ctx.account)?.path ?? null;
     if (!transcriptPath) {
       // No transcript on disk → nothing to summarize. Treat as handled.
       logger.info({ sessionId: ctx.sessionId }, 'project-log: no transcript found, skipping');

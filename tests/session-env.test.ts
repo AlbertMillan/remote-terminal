@@ -84,6 +84,7 @@ vi.mock('../src/server/sessions/persistence.js', () => ({
 
 vi.mock('../src/server/sessions/transcript.js', () => ({
   findClaudeProjectDir: vi.fn(() => join(dataDir, 'claude-project')),
+  tryGetTranscriptPath: vi.fn(() => null),
 }));
 
 vi.mock('../src/server/sessions/project-log.js', () => ({

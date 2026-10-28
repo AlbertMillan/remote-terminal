@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { copyFileSync, unlinkSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { createPty, writeToPty, type ScrollbackBuffer } from './pty-handler.js';
 import { findClaudeProjectDir } from './transcript.js';
@@ -18,7 +17,7 @@ import {
   launchProfileForTranscript,
   accountForTranscript,
 } from '../db/queries.js';
-import { resolveStartAccount } from '../accounts.js';
+import { claudeJsonPath, findTranscript, projectsDir, resolveStartAccount } from '../accounts.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -84,7 +83,7 @@ export function claudeNameFlag(name: string | null | undefined): string {
 function injectResumeCommand(session: ActiveSession, resumeId: string, profile?: LaunchProfile): void {
   // A dropped server is logged in launchFlags and stays on the row: it loads again once the
   // config has it back.
-  const flags = profile ? launchFlags(session.id, session.cwd, profile).flags : '';
+  const flags = profile ? launchFlags(session.id, session.cwd, profile, claudeJsonPath(session.account)).flags : '';
   injectCommand(session, `claude ${flags}--resume ${resumeId}${claudeNameFlag(session.name)}`);
 }
 
@@ -117,7 +116,8 @@ export async function forkSession(
   }
 
   // C1: Robust project dir lookup — computed slug first, fallback scans all project dirs
-  const projectDir = findClaudeProjectDir(homedir(), sourceMetadata.cwd, claudeSessionId);
+  // The source's own account: the copy must sit where its `claude --resume` will look.
+  const projectDir = findClaudeProjectDir(projectsDir(sourceMetadata.account), sourceMetadata.cwd, claudeSessionId);
   const sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
   const newClaudeSessionId = randomUUID();
   const destJsonlPath = join(projectDir, `${newClaudeSessionId}.jsonl`);
@@ -230,12 +230,19 @@ export async function openClaudeSession(
 
   // In fork mode we must locate and copy the source transcript. In resume mode we run against
   // the original id directly and let `claude --resume` surface any missing-transcript error.
+  // A transcript can only be resumed from the folder it lives in: the account of the row
+  // that ran it, else the account whose folder holds it, else the start's.
+  const account =
+    accountForTranscript(claudeSessionId) ??
+    findTranscript(cwd, claudeSessionId)?.account ??
+    resolveStartAccount(options.account, cwd);
+
   let resumeId = claudeSessionId;
   let isFork = false;
   let forkJsonlPath: string | null = null;
   let sourceJsonlPath: string | null = null;
   if (mode === 'fork') {
-    const projectDir = findClaudeProjectDir(homedir(), cwd, claudeSessionId);
+    const projectDir = findClaudeProjectDir(projectsDir(account), cwd, claudeSessionId);
     sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
     resumeId = randomUUID();
     forkJsonlPath = join(projectDir, `${resumeId}.jsonl`);
@@ -245,9 +252,6 @@ export async function openClaudeSession(
   // A started session's transcript resumes with its profile, on a row of the user's own: no
   // spawned_by, so it neither counts against the parent's limit nor can be landed by it.
   const profile = mode === 'resume' ? launchProfileForTranscript(claudeSessionId) : null;
-  // A transcript can only be resumed from the folder it lives in: the account of the row
-  // that ran it. One claude-remote never ran falls back to the start's account.
-  const account = accountForTranscript(claudeSessionId) ?? resolveStartAccount(options.account, cwd);
 
   const shortId = claudeSessionId.slice(0, 8);
   const name = options.name || (mode === 'fork' ? `Fork: ${shortId}` : `Resume: ${shortId}`);

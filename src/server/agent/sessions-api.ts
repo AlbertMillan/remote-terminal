@@ -19,7 +19,7 @@ import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb, setSessionMcpServers } from '../db/queries.js';
 import { getConfig } from '../config.js';
-import { accountNames, isAccount, resolveStartAccount } from '../accounts.js';
+import { accountNames, claudeJsonPath, isAccount, resolveStartAccount } from '../accounts.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
 import {
   broadcastLandResult,
@@ -120,9 +120,10 @@ export interface AgentSessionDeps {
   deleteSession(id: string): Promise<unknown>;
   writePromptFile(sessionId: string, prompt: string): string;
   /** MCP servers a session in `cwd` can be given by name (launch-profile.ts). */
-  mcpServersFor(cwd: string): string[];
+  /** The MCP servers `account`'s config defines that a session in `cwd` can be given. */
+  mcpServersFor(cwd: string, account: string): string[];
   /** The profile's flags for a launch; writes the scoped MCP config (launch-profile.ts). */
-  launchFlags(sessionId: string, cwd: string, profile: LaunchProfile): LaunchFlags;
+  launchFlags(sessionId: string, cwd: string, profile: LaunchProfile, account: string): LaunchFlags;
   /** Record the MCP servers a session actually got, when its launch dropped some. */
   setMcpServers(id: string, servers: string[]): void;
   injectCommand(session: ActiveSession, line: string): void;
@@ -189,8 +190,8 @@ export const defaultDeps: AgentSessionDeps = {
   createSession: (options) => sessionManager.createSession(options),
   deleteSession: (id) => sessionManager.deleteSession(id),
   writePromptFile,
-  mcpServersFor: (cwd) => [...availableMcpServers(cwd).keys()],
-  launchFlags: (sessionId, cwd, profile) => launchFlags(sessionId, cwd, profile),
+  mcpServersFor: (cwd, account) => [...availableMcpServers(cwd, claudeJsonPath(account)).keys()],
+  launchFlags: (sessionId, cwd, profile, account) => launchFlags(sessionId, cwd, profile, claudeJsonPath(account)),
   setMcpServers: setSessionMcpServers,
   injectCommand,
   lastNotification: (id) => notificationService.getSessionNotification(id),
@@ -305,7 +306,7 @@ export async function startAgentSession(
     // Before anything is created: a session missing the server its task needs
     // would fail halfway through. Looked up from the project, where its worktree
     // will be; plugin servers and claude.ai connectors can't be scoped.
-    const available = deps.mcpServersFor(project.cwd);
+    const available = deps.mcpServersFor(project.cwd, account);
     const unknown = mcpServers.filter((n) => !available.includes(n));
     if (unknown.length > 0) {
       throw new AgentSessionError(
@@ -378,7 +379,7 @@ export async function startAgentSession(
       throw error;
     }
 
-    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode, mcpServers });
+    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode, mcpServers }, account);
     deps.injectCommand(session, startCommand(launch.flags, promptDir, promptPath, session.name));
     // The check above passed, so this is a config edited since, or a file that couldn't be
     // written. Started anyway, like a failed install: the row and `list` say what it really

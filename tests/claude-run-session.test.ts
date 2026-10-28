@@ -202,7 +202,7 @@ describe('from run to ledger', () => {
     spawned.exitCode = 1;
     await expect(runClaude('C:/wt', 'prompt', ['**'], { tag: TAG })).rejects.toThrow(/exited/);
 
-    await ingestUsage({ projectsDir, docProjects: [TAG.projectCwd] });
+    await ingestUsage({ projectsDirs: [projectsDir], docProjects: [TAG.projectCwd] });
     const implement = usageByJob(['job-1']).get('job-1')?.stages.get('implement');
     expect(implement?.runCount).toBe(1);
     expect(implement?.outputTokens).toBe(1_000_000); // two lines, one response

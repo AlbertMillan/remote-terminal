@@ -41,6 +41,8 @@ import { existsSync } from 'fs';
 
 const SESSION = '33333333-3333-4333-8333-333333333333';
 let home: string;
+/** The account's `.claude.json` (accounts.ts claudeJsonPath) under the stand-in home. */
+const claudeJson = () => join(home, '.claude.json');
 let project: string;
 let worktree: string;
 
@@ -70,7 +72,7 @@ describe('availableMcpServers', () => {
     writeJson(join(home, '.mcp.json'), { mcpServers: { slack: { command: 'home-slack' }, github: { command: 'gh' } } });
     writeJson(join(worktree, '.mcp.json'), { mcpServers: { github: { command: 'wt-gh' } } });
 
-    const servers = availableMcpServers(worktree, home);
+    const servers = availableMcpServers(worktree, claudeJson());
     expect(servers.get('playwright')).toEqual({ command: 'local-pw' });
     expect(servers.get('slack')).toEqual({ command: 'home-slack' });
     expect(servers.get('github')).toEqual({ command: 'wt-gh' });
@@ -81,8 +83,8 @@ describe('availableMcpServers', () => {
     // A start checks names against the main checkout; the launch reads them from the worktree.
     trackProject = project;
     writeJson(join(project, '.mcp.json'), { mcpServers: { unity: { command: 'project-unity' } } });
-    expect(availableMcpServers(project, home).get('unity')).toEqual({ command: 'project-unity' });
-    expect(availableMcpServers(worktree, home).get('unity')).toEqual({ command: 'project-unity' });
+    expect(availableMcpServers(project, claudeJson()).get('unity')).toEqual({ command: 'project-unity' });
+    expect(availableMcpServers(worktree, claudeJson()).get('unity')).toEqual({ command: 'project-unity' });
   });
 
   it('lets the worktree\'s own .mcp.json win, and never lets a shared parent override the project', () => {
@@ -90,7 +92,7 @@ describe('availableMcpServers', () => {
     writeJson(join(home, '.mcp.json'), { mcpServers: { unity: { command: 'home' }, slack: { command: 'home-slack' } } });
     writeJson(join(project, '.mcp.json'), { mcpServers: { unity: { command: 'project' }, slack: { command: 'project-slack' } } });
     writeJson(join(worktree, '.mcp.json'), { mcpServers: { slack: { command: 'wt-slack' } } });
-    const servers = availableMcpServers(worktree, home);
+    const servers = availableMcpServers(worktree, claudeJson());
     // home is in both chains: read once, in the project's, so the project still wins over it.
     expect(servers.get('unity')).toEqual({ command: 'project' });
     expect(servers.get('slack')).toEqual({ command: 'wt-slack' });
@@ -99,9 +101,9 @@ describe('availableMcpServers', () => {
   it('never throws on a missing or unreadable ~/.claude.json, and reads it as empty', () => {
     // The walk up from a temp folder can reach a real .mcp.json above it, so compare
     // against that baseline rather than assume none.
-    const baseline = [...availableMcpServers(worktree, home).keys()];
+    const baseline = [...availableMcpServers(worktree, claudeJson()).keys()];
     writeFileSync(join(home, '.claude.json'), '{ not json');
-    expect([...availableMcpServers(worktree, home).keys()]).toEqual(baseline);
+    expect([...availableMcpServers(worktree, claudeJson()).keys()]).toEqual(baseline);
   });
 });
 
@@ -121,15 +123,15 @@ describe('parseMcpServers', () => {
 
 describe('launchFlags', () => {
   it('gives the full profile only its permission mode', () => {
-    expect(launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: null }, home)).toEqual({
+    expect(launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: null }, claudeJson())).toEqual({
       flags: '--permission-mode auto ',
       mcpServers: null,
     });
-    expect(launchFlags(SESSION, worktree, { permissionMode: null, mcpServers: null }, home).flags).toBe('');
+    expect(launchFlags(SESSION, worktree, { permissionMode: null, mcpServers: null }, claudeJson()).flags).toBe('');
   });
 
   it('gives no MCP servers for an empty list, and types no mode for manual or default', () => {
-    expect(launchFlags(SESSION, worktree, { permissionMode: 'manual', mcpServers: [] }, home)).toEqual({
+    expect(launchFlags(SESSION, worktree, { permissionMode: 'manual', mcpServers: [] }, claudeJson())).toEqual({
       flags: '--strict-mcp-config ',
       mcpServers: [],
     });
@@ -142,7 +144,7 @@ describe('launchFlags', () => {
   });
 
   it('drops the --mcp-config flag when none of the opted-in servers is left', () => {
-    expect(launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['gone'] }, home)).toEqual({
+    expect(launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['gone'] }, claudeJson())).toEqual({
       flags: '--permission-mode auto --strict-mcp-config ',
       mcpServers: [],
     });
@@ -151,7 +153,7 @@ describe('launchFlags', () => {
   it('writes the opted-in servers’ current config beside the prompt folder, never in it or the worktree', () => {
     writeJson(join(home, '.claude.json'), { mcpServers: { playwright: { command: 'npx', env: { KEY: 'k1' } }, everhour: { command: 'eh' } } });
 
-    const { flags, mcpServers } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['playwright', 'gone'] }, home);
+    const { flags, mcpServers } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['playwright', 'gone'] }, claudeJson());
 
     const path = mcpConfigPathFor(SESSION);
     // --add-dir opens the prompt folder to the session without asking; the keys stay out of it.
@@ -164,7 +166,7 @@ describe('launchFlags', () => {
 
     // Rewritten at the next launch, so a changed key applies.
     writeJson(join(home, '.claude.json'), { mcpServers: { playwright: { command: 'npx', env: { KEY: 'k2' } } } });
-    launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['playwright'] }, home);
+    launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: ['playwright'] }, claudeJson());
     expect(JSON.parse(readFileSync(path, 'utf-8')).mcpServers.playwright.env.KEY).toBe('k2');
 
     // Deleted with the session, like its prompt folder.

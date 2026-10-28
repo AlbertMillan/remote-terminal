@@ -91,10 +91,25 @@ function transcript(folder: string, sessionId: string, lines: string[]): string 
 }
 
 const ingest = (docs = [ALPHA], readChunkBytes?: number) =>
-  ingestUsage({ projectsDir, docProjects: docs, readChunkBytes });
+  ingestUsage({ projectsDirs: [projectsDir], docProjects: docs, readChunkBytes });
 const total = (cwd = ALPHA) => usageByProject().get(cwd)?.total;
 
 describe('counting', () => {
+  it("counts every account's projects folder in one pass", async () => {
+    // Two logins, one project: each folder's transcripts count toward it.
+    transcript('alpha', S1, [line('msg_a', ALPHA)]);
+    const other = join(dataDir, 'claude-projects-personal');
+    mkdirSync(join(other, 'alpha'), { recursive: true });
+    writeFileSync(join(other, 'alpha', `${S2}.jsonl`), `${line('msg_b', ALPHA)}
+`);
+    try {
+      await ingestUsage({ projectsDirs: [projectsDir, other], docProjects: [ALPHA] });
+      expect(total()?.outputTokens).toBe(40);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('counts a response once, however many lines repeat it', async () => {
     // Claude Code writes one line per content block, each carrying the whole
     // response's usage. Summing lines roughly doubled every figure.

@@ -1,5 +1,6 @@
 import { createLogger } from '../utils/logger.js';
 import { findWorkspaceProject } from '../projects/workspace.js';
+import { projectAccount } from '../accounts.js';
 import { capabilitiesFor, detectVcs } from '../projects/vcs.js';
 import { admit } from './scheduler.js';
 import {
@@ -443,6 +444,7 @@ async function executeReview(job: Job, signal?: AbortSignal): Promise<void> {
     specPath: specPathOf(job.id),
     signal,
     ...runLane(job, 'review'),
+    account: projectAccount(job.projectCwd),
   });
 
   if (result.claudeSessionId) updateJob(job.id, { claudeSessionId: result.claudeSessionId });
