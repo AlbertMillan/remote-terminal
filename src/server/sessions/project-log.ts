@@ -198,7 +198,7 @@ function buildPrompt(opts: {
     : '4. Do not modify plan or design files.';
 
   const skeleton = buildEntrySkeleton({
-    meta: { date: nowIso, session: ctx.name, branch, claudeSessionId: ctx.claudeSessionId, blockers: 0, openItems: 0 },
+    meta: { date: nowIso, session: ctx.name, branch, claudeSessionId: ctx.claudeSessionId, account: ctx.account, blockers: 0, openItems: 0 },
     headingDate: nowIso.slice(0, 10),
     headingTitle: ctx.name,
     hints: {
@@ -415,7 +415,8 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd, logCwd: projectCwd }, 'project-log: generating entry');
     // Edits allowed only to the log file (+ plan files when checkbox-ticking is on).
     const allowedWrites = editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
-    await runClaude(projectCwd, prompt, allowedWrites, { tag: { projectCwd, kind: 'session-log' } });
+    // Under the session's own login: its transcript is in that account's folder.
+    await runClaude(projectCwd, prompt, allowedWrites, { tag: { projectCwd, kind: 'session-log' }, account: ctx.account });
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —

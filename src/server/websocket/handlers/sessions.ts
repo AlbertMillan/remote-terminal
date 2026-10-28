@@ -418,6 +418,7 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
       ownerId: connection.identity?.userId,
       cols,
       rows,
+      ...(typeof payload.account === 'string' && payload.account ? { account: payload.account } : {}),
     });
 
     const sessionMetadata = getSessionFromDb(session.id);

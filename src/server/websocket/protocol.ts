@@ -210,6 +210,8 @@ export interface SessionOpenPayload {
   claudeSessionId: string;
   cwd: string;
   mode: 'resume' | 'fork';
+  /** The account its SESSION-LOG entry names, for a transcript no session row ran. */
+  account?: string;
   cols?: number;
   rows?: number;
 }

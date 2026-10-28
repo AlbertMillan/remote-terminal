@@ -129,3 +129,13 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   session's account (`GET /api/plan-usage?account=`), naming that account's settings file
   in its setup hint. A `plan-usage.json` from before accounts is restored as the default
   folder's account's.
+
+## SESSION-LOG records the account
+
+Both accounts commit as the same git user, so the log is the only record of which login
+made a change. The entry marker carries `account` beside `claudeSessionId`, the entry shows
+`**Account:** <name>` under its heading, and the history view tags it. Backfills and
+entries from before accounts have none. The generator runs under the session's account
+(its transcript is there); history Resume / Fork pass the entry's account for a transcript
+no session row ran, and history delete looks in that account's folder first. Track
+attribution reads every account's transcripts for the project, the session's included.

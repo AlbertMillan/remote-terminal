@@ -83,6 +83,8 @@ export interface LogEntryMeta {
   session: string;
   branch: string;
   claudeSessionId: string;
+  /** The Claude login the session ran under; absent on older entries. */
+  account?: string;
   blockers: number;
   openItems: number;
 }

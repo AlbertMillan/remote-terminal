@@ -292,7 +292,8 @@ class SessionManager {
         const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
         const cwd = openBtn.getAttribute('data-open-cwd') || '';
         const mode = openBtn.getAttribute('data-open-mode') === 'fork' ? 'fork' : 'resume';
-        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode);
+        const account = openBtn.getAttribute('data-open-account') || undefined;
+        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode, account);
         return;
       }
       const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
@@ -1342,9 +1343,9 @@ class SessionManager {
 
   // Open a Claude session from a project's session history: `resume` continues the original
   // transcript, `fork` branches a copy. The server auto-attaches, so showTerminal() takes over.
-  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork'): void {
-    const id = this.send('session.open', { claudeSessionId, cwd, mode });
-    this.launchRetries.set(id, () => this.openHistorySession(claudeSessionId, cwd, mode));
+  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork', account?: string): void {
+    const id = this.send('session.open', { claudeSessionId, cwd, mode, ...(account ? { account } : {}) });
+    this.launchRetries.set(id, () => this.openHistorySession(claudeSessionId, cwd, mode, account));
   }
 
   attachToSession(sessionId: string): void {

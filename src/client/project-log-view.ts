@@ -278,8 +278,8 @@ export class ProjectLogView {
     const sid = meta?.claudeSessionId;
     const hasSid = !!sid && sid !== 'backfill' && sid !== 'unknown';
     const openButtons = hasSid
-      ? `<button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" title="Resume this Claude session">Resume</button>
-          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" title="Fork this Claude session into a new branch">Fork</button>`
+      ? `<button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" data-open-account="${escapeAttr(meta?.account ?? '')}" title="Resume this Claude session">Resume</button>
+          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" data-open-account="${escapeAttr(meta?.account ?? '')}" title="Fork this Claude session into a new branch">Fork</button>`
       : '';
     // Delete is offered for every entry, including ones with no usable session id
     // (those are log-only removals — there's no transcript to find).
@@ -292,6 +292,7 @@ export class ProjectLogView {
         ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
         ${meta?.session ? `<span class="log-entry-session">${escapeHtml(meta.session)}</span>` : ''}
         ${meta?.branch ? `<span class="log-entry-branch">${escapeHtml(meta.branch)}</span>` : ''}
+        ${meta?.account ? `<span class="log-entry-branch log-entry-account" title="Claude account">${escapeHtml(meta.account)}</span>` : ''}
         ${actions}
       </div>`;
     return `<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;

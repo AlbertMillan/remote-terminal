@@ -139,7 +139,8 @@ export function deleteHistoryEntry(options: DeleteHistoryEntryOptions): DeleteHi
     logger.warn({ cwd: project.cwd, sid }, 'history-delete: refusing to unlink non-UUID session id');
   } else {
     // Looked for in every account's folder; it is unlinked only from inside one.
-    const path = findTranscript(project.cwd, sid)?.path ?? null;
+    // The entry's own account's folder first (its marker says which login ran it).
+    const path = findTranscript(project.cwd, sid, entries[entryIndex]?.meta?.account)?.path ?? null;
     if (!path || !existsSync(path)) {
       result.transcriptKeptReason = 'not-found';
     } else if (!allProjectsDirs().some((root) => isInside(root, path))) {

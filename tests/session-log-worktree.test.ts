@@ -35,6 +35,7 @@ interface FakeRun {
   prompt: string;
   globs: string[];
   tagCwd: string | undefined;
+  account: string | undefined;
 }
 const runs: FakeRun[] = [];
 
@@ -45,8 +46,8 @@ vi.mock('../src/server/sessions/transcript.js', async (importActual) => ({
 
 vi.mock('../src/server/agent/claude-run.js', async (importActual) => ({
   ...(await importActual<typeof import('../src/server/agent/claude-run.js')>()),
-  runClaude: async (cwd: string, prompt: string, globs: string[], opts: { tag?: { projectCwd?: string } } = {}) => {
-    runs.push({ cwd, prompt, globs, tagCwd: opts.tag?.projectCwd });
+  runClaude: async (cwd: string, prompt: string, globs: string[], opts: { tag?: { projectCwd?: string }; account?: string } = {}) => {
+    runs.push({ cwd, prompt, globs, tagCwd: opts.tag?.projectCwd, account: opts.account });
     writeFileSync(join(cwd, 'SESSION-LOG.md'), '# Session Log\n\nentry\n');
     return { isError: false, result: '', permissionDenials: 0, sessionId: null };
   },
@@ -73,6 +74,7 @@ const ctx = (cwd: string) => ({
   cwd,
   claudeSessionId: '11111111-2222-3333-4444-555555555555',
   createdAt: SESSION_START,
+  account: 'work',
 });
 
 beforeAll(() => {
@@ -139,6 +141,10 @@ describe('generateSessionLog for a worktree session', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].cwd).toBe(repo);
     expect(runs[0].tagCwd).toBe(repo);
+    // Under the session's own login, and the entry records which one.
+    expect(runs[0].account).toBe('work');
+    expect(runs[0].prompt).toContain('"account":"work"');
+    expect(runs[0].prompt).toContain('**Account:** work');
     // Plan ticking is off for worktree sessions: only the log may be written.
     expect(runs[0].globs).toEqual(['SESSION-LOG.md']);
     expect(runs[0].prompt).toContain('Do not modify plan or design files.');
