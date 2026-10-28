@@ -108,9 +108,3 @@ status: active
 - [x] `f-hrsrrl` P2 New-session dialog names the resolved default — "Default (work, from project)" for the chosen folder → project/accounts.md
 - [x] `f-8x96pp` P2 Job board shows the account jobs run under — jobs can't override the project's → project/accounts.md
 - [x] `f-tkaa6d` P2 Status line shows the session's account — mapped from `CLAUDE_CONFIG_DIR`, no server call → project/accounts.md
-
-## Track: Per-account usage
-- [ ] `f-jzpmyk` P1 Plan-usage readings verified against the login that produced them — relay sends its session, mismatches and legacy readings are held back instead of pinning → project/per-account-usage.md
-- [ ] `f-7oap94` P1 Usage ledger attributes messages to the login that ran them — `usage_messages.account`, moved transcripts back to work, `usageByAccount()` → project/per-account-usage.md
-- [ ] `f-dnapj1` P1 Plan-usage chip shows every account — one line each, plan, verified state, tokens this window → project/per-account-usage.md
-- [ ] `f-7y1fcz` P2 Account usage page — per-account cards, token table, held-back readings with Discard → project/per-account-usage.md
