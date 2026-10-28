@@ -33,20 +33,50 @@ only documented source (code.claude.com/docs/en/statusline). They are **not** de
 from the usage ledger's tokens: the limits are weighted by model and their sizes are not
 published. Not exposed by hooks, the `claude -p` envelope, OTel or any CLI command.
 
-`scripts/statusline.mjs` prints `Opus 5 · 5h 55% · wk 22%` and POSTs `{ rate_limits }` —
-only the limits, never the payload's cwd, transcript path, session id or cost — to
-`/api/plan-usage`. It prints first and gives the POST 300 ms, swallowing every failure — it
-runs on every render of every session's status line, so it must never slow one down. It
-posts even when there are no limits yet (`{ "rate_limits": null }`): that contact is how the
-chip tells "set up, waiting" from "not set up".
+`scripts/statusline.mjs` prints `Opus 5 · 5h 55% · wk 22%` and POSTs
+`{ rate_limits, config_dir, session_id }` — the limits plus two identifiers: its
+`CLAUDE_CONFIG_DIR` and `CLAUDE_REMOTE_SESSION_ID` (set by `sessionEnv()` in every
+claude-remote PTY, absent outside one). Never the payload's cwd, transcript path, Claude's
+own session id or cost. It prints first and gives the POST 300 ms, swallowing every
+failure — it runs on every render of every session's status line, so it must never slow
+one down. It posts even when there are no limits yet (`{ "rate_limits": null }`): that
+contact is how the chip tells "set up, waiting" from "not set up".
+
+## Whose reading it is — verification (`f-jzpmyk`)
+
+Filing a reading by config folder alone was wrong (diagnosed 2026-10-28,
+`project/per-account-usage.md`): a `claude` started before a `/login` swap in its folder
+keeps the old login in memory and reports that login's limits, and one misfiled reading
+with a later reset pinned the window until it expired. So `classifyRelayPost`
+(`plan-routes.ts`) decides:
+
+- **Account**: the session row's `account` when `session_id` names a claude-remote session,
+  else `accountForConfigDir(config_dir)`. An id naming no session counts as absent — the
+  endpoint is unauthenticated on the tailnet, so nothing in the body is trusted, and an id
+  only picks which account is then verified.
+- **Verified**: that account's folder holds its expected login now (`accountLogin()` in
+  `account-watch.ts`: preflight cached per account for 60 s and refreshed by every watch
+  tick — never a preflight per post) **and**, for a session, account-watch has not flagged
+  it. Each stored window records the `loginUuid` it was verified for; a verified reading for
+  another `loginUuid` replaces the window outright, whatever its reset.
+- **Held back**, not merged, otherwise — reason `login-mismatch`, `session-flagged`,
+  `no-login` (nobody logged in, or no expected identity), `unknown-folder`. Kept in memory
+  per account (one entry per window, reason and reset; at most 10), listed by
+  `GET /api/plan-usage/held` for the usage page, dropped with
+  `POST /api/plan-usage/held/discard` (`{ id }` or `{ account }`). They never feed the chip.
+  Relay contact (`relaySeenAt`) still counts for a held reading's account.
+- **Upgrade**: a window restored from disk without `loginUuid` (any file written before
+  this) comes back held back as `unverified-legacy` — exactly the data that was wrong. The
+  chip says "waiting" until the next verified reading, seconds away for any open session.
 
 ## How readings combine — `src/server/usage/plan-limits.ts`
 
-- One account-wide snapshot. Every open session reports, and an **idle session can
-  re-render its status line with limits it cached long ago**, so arrival order means
-  nothing. Per window: a later `resets_at` is a newer window and wins outright; within the
-  same window the higher percentage wins, since usage only rises. A stale reading can
-  re-confirm a value (refreshing "as of") but never lower it.
+- One snapshot per account, of verified readings only. Every open session reports, and an
+  **idle session can re-render its status line with limits it cached long ago**, so arrival
+  order means nothing. Per window: a later `resets_at` is a newer window and wins outright;
+  within the same window the higher percentage wins, since usage only rises. A stale
+  reading can re-confirm a value (refreshing "as of") but never lower it. These rules hold
+  for one login's stream — hence a new `loginUuid` replacing outright.
 - Every field is validated — percentage within 0–100, `resets_at` between a day ago and
   eight days out, body ≤ 64 KB — because the endpoint is reachable over the tailnet like
   `/api/notify`. A bad reading is dropped without touching the snapshot.

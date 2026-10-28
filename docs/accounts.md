@@ -139,12 +139,11 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   The server logs, at boot, every account whose settings lack any of them
   (`accountSetupMissing`); `GET /api/accounts` lists them as `setupMissing`. That route
   (`accountsSummary`) is unauthenticated, so it names no folder or login.
-- **Plan usage** is kept per account: `statusline.mjs` sends its `CLAUDE_CONFIG_DIR`
-  (`config_dir`, empty for `~/.claude`), the server files the reading under the account on
-  that folder (a folder no account uses is dropped), and the chip shows the attached
-  session's account (`GET /api/plan-usage?account=`), naming that account's settings file
-  in its setup hint. A `plan-usage.json` from before accounts is restored as the default
-  folder's account's.
+- **Plan usage** is kept per account: `statusline.mjs` sends its claude-remote session
+  (`session_id`) and `CLAUDE_CONFIG_DIR` (`config_dir`, empty for `~/.claude`); the server
+  files the reading under the session's account, else the folder's, and keeps it only once
+  verified as that account's login — otherwise it is held back (`docs/plan-usage.md`). A
+  `plan-usage.json` from before verification is restored held back.
 - **The status line names the account** (`Opus 5.5 · [personal] · 5h 4%`): `statusline.mjs`
   maps its `CLAUDE_CONFIG_DIR` through `scripts/claude-accounts.mjs` (config.json only, so
   it still prints before any server call). A folder no account uses shows no name.

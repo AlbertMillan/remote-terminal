@@ -12,6 +12,8 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('account-watch');
 
+const POLL_MS = 60_000;
+
 /** Session id → why its account is no longer the expected login. */
 let warnings = new Map<string, string>();
 
@@ -35,10 +37,40 @@ export interface AccountCheck {
   changed: boolean;
 }
 
+/**
+ * The last preflight per account, and when it ran. The plan-usage relay asks on
+ * every status line render of every session (docs/plan-usage.md), so it reads
+ * this instead of re-reading `.claude.json` per post; a watch tick refreshes it.
+ */
+const logins = new Map<string, { at: number; result: PreflightResult | null }>();
+
+/**
+ * Whether the account's folder holds its expected login, at most `POLL_MS` old:
+ * the watch's own reading when it has one that fresh, else a preflight now
+ * (cached in turn). Null for an account that can't be checked (unknown).
+ */
+export function accountLogin(
+  account: string,
+  now = Date.now(),
+  check: (account: string) => PreflightResult = preflight
+): PreflightResult | null {
+  const cached = logins.get(account);
+  if (cached && now - cached.at < POLL_MS) return cached.result;
+  let result: PreflightResult | null;
+  try {
+    result = check(account);
+  } catch {
+    result = null;
+  }
+  logins.set(account, { at: now, result });
+  return result;
+}
+
 /** One check over the running sessions. Each account's folder is read once. */
 export function checkSessionAccounts(
   sessions: WatchedSession[],
-  check: (account: string) => PreflightResult = preflight
+  check: (account: string) => PreflightResult = preflight,
+  now = Date.now()
 ): AccountCheck {
   const byAccount = new Map<string, PreflightResult | null>();
   const next = new Map<string, string>();
@@ -52,6 +84,7 @@ export function checkSessionAccounts(
         logger.warn({ account: s.account, error }, 'account-watch: could not check an account');
         byAccount.set(s.account, null);
       }
+      logins.set(s.account, { at: now, result: byAccount.get(s.account) ?? null });
     }
     const result = byAccount.get(s.account);
     if (result && !result.ok && result.reason === 'unreadable') {
@@ -69,7 +102,6 @@ export function checkSessionAccounts(
   return { warnings: Object.fromEntries(next), flagged, changed };
 }
 
-const POLL_MS = 60_000;
 let timer: NodeJS.Timeout | null = null;
 let tick: (() => void) | null = null;
 
@@ -109,4 +141,5 @@ export function stopAccountWatch(): void {
   timer = null;
   tick = null;
   warnings = new Map();
+  logins.clear();
 }

@@ -74,9 +74,11 @@ function statusText(payload, account = accountName()) {
 }
 
 /**
- * Post the limits — only the limits, and the config folder they belong to. The payload also carries the working
- * directory, transcript path, session id and cost, none of which the server
- * reads, and CLAUDE_REMOTE_URL may point at another machine.
+ * Post the limits — only the limits, plus the two identifiers that say whose they
+ * are: the claude-remote session this runs in and its config folder. The payload
+ * also carries the working directory, transcript path, Claude's own session id
+ * and cost, none of which the server reads, and CLAUDE_REMOTE_URL may point at
+ * another machine.
  *
  * Posted even when there are none yet (before a session's first response):
  * that contact is how the chip tells "set up, waiting" from "not set up".
@@ -86,9 +88,15 @@ async function relay(payload) {
     await fetch(`${SERVER}/api/plan-usage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      // Which login's limits: each account has its own (docs/accounts.md). Empty is
-      // Claude Code's default ~/.claude.
-      body: JSON.stringify({ rate_limits: payload?.rate_limits ?? null, config_dir: process.env.CLAUDE_CONFIG_DIR || null }),
+      // Which login's limits: each account has its own (docs/accounts.md). The
+      // server verifies them against the session's account (CLAUDE_REMOTE_SESSION_ID,
+      // set in every claude-remote PTY; absent outside one), else the folder's.
+      // Empty config_dir is Claude Code's default ~/.claude.
+      body: JSON.stringify({
+        rate_limits: payload?.rate_limits ?? null,
+        config_dir: process.env.CLAUDE_CONFIG_DIR || null,
+        session_id: process.env.CLAUDE_REMOTE_SESSION_ID || null,
+      }),
       signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
     });
   } catch {
