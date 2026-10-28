@@ -102,6 +102,30 @@ describe('parsePhasesBlock', () => {
   });
 });
 
+describe('the account', () => {
+  it('round-trips in the marker and is shown in the entry', () => {
+    const skeleton = buildEntrySkeleton({
+      meta: { ...META, account: 'personal' },
+      headingDate: '2026-06-28',
+      headingTitle: 'Refactor auth',
+      hints: { done: 'd', changed: 'c', planProgress: 'p', openNext: 'o', blockers: 'b' },
+    });
+    expect(parseLogEntries(skeleton)[0].meta!.account).toBe('personal');
+    expect(skeleton.split('\n')[2]).toBe('**Account:** personal');
+  });
+
+  it('is simply absent on an entry from before accounts', () => {
+    const skeleton = buildEntrySkeleton({
+      meta: META,
+      headingDate: '2026-06-28',
+      headingTitle: 'Refactor auth',
+      hints: { done: 'd', changed: 'c', planProgress: 'p', openNext: 'o', blockers: 'b' },
+    });
+    expect(skeleton).not.toContain('**Account:**');
+    expect(parseLogEntries(skeleton)[0].meta!.account).toBeUndefined();
+  });
+});
+
 describe('buildEntrySkeleton', () => {
   it('emits a marker the parser can read back', () => {
     const skeleton = buildEntrySkeleton({

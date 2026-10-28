@@ -24,6 +24,12 @@ const mockPty = {
   }),
 };
 
+// Preflight reads the account's real login; these tests launch nothing real.
+vi.mock('../src/server/accounts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
+  assertAccountReady: vi.fn(),
+}));
+
 vi.mock('node-pty', () => ({
   spawn: vi.fn(() => mockPty),
 }));

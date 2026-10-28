@@ -2,7 +2,7 @@
 
 The fork button in the terminal header branches the current Claude Code conversation into an independent new session (copies the JSONL transcript to a new UUID, then runs `claude --resume <new-uuid>`). The fork is ephemeral — its transcript is deleted when the session is closed. Click **Keep** to make it permanent.
 
-**Required hook** — add to `~/.claude/settings.json` so the server knows the Claude session ID:
+**Required hook** — add to every Claude account's `settings.json` (e.g. `~/.claude/settings.json`; `scripts/install-account-setup.mjs` copies it, see `docs/accounts.md`) so the server knows the Claude session ID:
 ```json
 {
   "hooks": {

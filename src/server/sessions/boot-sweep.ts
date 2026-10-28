@@ -51,6 +51,7 @@ export function sweepUnloggedSessions(): void {
       cwd: s.cwd,
       claudeSessionId: s.claudeSessionId,
       createdAt: s.createdAt,
+      account: s.account,
     });
   }
 }

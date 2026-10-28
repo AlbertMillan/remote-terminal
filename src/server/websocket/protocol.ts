@@ -1,5 +1,6 @@
 // WebSocket message protocol definitions
 import type { JobsSummary } from '../jobs/summary.js';
+import type { PreflightRefusal } from '../accounts.js';
 
 export type ClientMessageType =
   | 'auth'
@@ -45,6 +46,8 @@ export type ServerMessageType =
   | 'session.forked'
   | 'session.kept'
   | 'session.claudeNames'
+  | 'session.accountWarnings'
+  | 'session.loginEnded'
   | 'session.error'
   | 'terminal.data'
   | 'terminal.exit'
@@ -85,6 +88,15 @@ export interface SessionCreatePayload {
   cwd?: string;
   cols?: number;
   rows?: number;
+  /** The Claude login to run under (accounts.ts); unset is the project's or configured default. */
+  account?: string;
+  /**
+   * A Log in session for `account`: `claude` in its folder and clean env, with no preflight,
+   * where the user runs `/login` (docs/accounts.md). Name and cwd are the server's.
+   */
+  login?: boolean;
+  /** With `login`: first delete the org-pushed `remote-settings*.json` in that folder. */
+  cleanup?: boolean;
 }
 
 export interface SessionAttachPayload {
@@ -178,6 +190,10 @@ export interface SessionInfo {
   /** What Claude calls the conversation running here (`ListAgents`' name), or null when
    *  none is running. Kept current by `session.claudeNames`. */
   claudeName: string | null;
+  /** The Claude login it runs under (accounts.ts). */
+  account: string;
+  /** Why its account no longer holds the expected login (account-watch.ts), or null. */
+  accountWarning: string | null;
 }
 
 /** Every session with a running Claude, by session id → Claude's name; sent on change. */
@@ -195,6 +211,8 @@ export interface SessionOpenPayload {
   claudeSessionId: string;
   cwd: string;
   mode: 'resume' | 'fork';
+  /** The account its SESSION-LOG entry names, for a transcript no session row ran. */
+  account?: string;
   cols?: number;
   rows?: number;
 }
@@ -347,6 +365,36 @@ export interface PromptMissingNotificationPayload {
   name: string;
   detail: string;
   timestamp: string;
+}
+
+/** A running session's account changed login under it (account-watch.ts). */
+export interface AccountChangedNotificationPayload {
+  kind: 'account-changed';
+  sessionId: string;
+  name: string;
+  detail: string;
+  timestamp: string;
+}
+
+/** Every running session whose account is on the wrong login, by id → why. */
+export interface SessionAccountWarningsPayload {
+  warnings: Record<string, string>;
+}
+
+/**
+ * A Log in session's process exited: the client that opened it retries the launch
+ * it was opened for. Sent to every connection, not just attached ones (unlike
+ * `terminal.exit`), so switching sessions during the login doesn't lose the retry.
+ */
+export interface SessionLoginEndedPayload {
+  sessionId: string;
+  exitCode: number;
+}
+
+/** `session.error`; `refusal` when a launch was refused by preflight (accounts.ts). */
+export interface SessionErrorPayload {
+  message: string;
+  refusal?: PreflightRefusal;
 }
 
 // Helper functions

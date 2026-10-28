@@ -12,6 +12,9 @@ import { BUILD_CHANGED_EVENT, BuildChip, ServerRestartControl } from './server-r
 import {
   isLandNotification,
   isPromptMissingNotification,
+  isAccountChangedNotification,
+  accountChangedTitle,
+  showAccountChanged,
   landResultTitle,
   promptMissingTitle,
   showLandResult,
@@ -19,6 +22,7 @@ import {
 } from './land-result.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
+import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
 import { SessionListView } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
@@ -26,6 +30,10 @@ import type {
   CategoryInfo,
   SessionMovedPayload,
   SessionClaudeNamesPayload,
+  SessionAccountWarningsPayload,
+  SessionLoginEndedPayload,
+  AccountChangedNotificationPayload,
+  AccountRefusal,
   SessionReorderedPayload,
   CategoryCreatedPayload,
   CategoryRenamedPayload,
@@ -101,8 +109,17 @@ class SessionManager {
 
   /** The "New Session" modal: name/cwd fields, recent-path suggestions, the Track picker. */
   private newSessionModal = new NewSessionModal({
-    createSession: (name, cwd) => this.createSession(name, cwd),
+    createSession: (name, cwd, notice, account) => this.createSession(name, cwd, notice, account),
   });
+
+  /** A launch the account preflight refused: Log in / Clean up (docs/accounts.md). */
+  private accountRefusal = new AccountRefusalModal({
+    logIn: (account, cleanup, retry) => this.startLogin(account, cleanup, retry),
+  });
+  /** How to send a launch (create, open, revive) again, by its message id, until it is answered. */
+  private launchRetries = new Map<string, () => void>();
+  /** Launches waiting on a Log in session, retried once it exits (`session.loginEnded`). */
+  private loginRetries = new LoginRetries();
 
   /** The keyboard shortcuts modal and the welcome-screen hints. */
   private shortcutsModal = new ShortcutsModal();
@@ -274,7 +291,8 @@ class SessionManager {
         const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
         const cwd = openBtn.getAttribute('data-open-cwd') || '';
         const mode = openBtn.getAttribute('data-open-mode') === 'fork' ? 'fork' : 'resume';
-        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode);
+        const account = openBtn.getAttribute('data-open-account') || undefined;
+        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode, account);
         return;
       }
       const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
@@ -595,7 +613,8 @@ class SessionManager {
       // Reject if this is an error response
       if (message.type === 'error' || message.type === 'session.error') {
         const errorPayload = message.payload as ErrorPayload;
-        reject(new Error(errorPayload?.message || 'Request failed'));
+        // A refused launch keeps its refusal, for the Log in / Clean up dialog.
+        reject(Object.assign(new Error(errorPayload?.message || 'Request failed'), { refusal: errorPayload?.refusal }));
         return;
       }
 
@@ -614,6 +633,7 @@ class SessionManager {
         this.handleSessionList(message.payload);
         break;
       case 'session.created':
+        this.trackLaunchAnswered(message.id, message.payload.session.id);
         this.handleSessionCreated(message.payload);
         break;
       case 'session.added':
@@ -633,6 +653,12 @@ class SessionManager {
         break;
       case 'session.claudeNames':
         this.handleClaudeNames(message.payload);
+        break;
+      case 'session.accountWarnings':
+        this.handleAccountWarnings(message.payload);
+        break;
+      case 'session.loginEnded':
+        this.handleLoginEnded(message.payload);
         break;
       case 'session.moved':
         this.handleSessionMoved(message.payload);
@@ -686,7 +712,7 @@ class SessionManager {
         this.workspace.onProjectsChanged();
         break;
       case 'session.error':
-        this.handleSessionError(message.payload);
+        this.handleSessionError(message.payload, message.id);
         break;
       case 'error':
         console.error('Server error:', message.payload);
@@ -694,8 +720,32 @@ class SessionManager {
     }
   }
 
-  private handleSessionError(payload: ErrorPayload): void {
+  /** A launch was answered: drop its retry, and start waiting on a Log in session's exit. */
+  private trackLaunchAnswered(messageId: string | undefined, sessionId: string): void {
+    if (!messageId) return;
+    this.launchRetries.delete(messageId);
+    this.loginRetries.created(messageId, sessionId);
+  }
+
+  /** A Log in session ended -- broadcast, so this arrives even after switching away from it. */
+  private handleLoginEnded(payload: SessionLoginEndedPayload): void {
+    this.loginRetries.ended(payload.sessionId);
+  }
+
+  private handleAccountWarnings(payload: SessionAccountWarningsPayload): void {
+    for (const [id, session] of this.sessions) {
+      session.accountWarning = payload.warnings[id] ?? null;
+    }
+    this.renderSessionList();
+  }
+
+  private handleSessionError(payload: ErrorPayload, messageId?: string): void {
     console.error('Session error:', payload.message);
+    const retry = messageId ? this.launchRetries.get(messageId) : undefined;
+    if (messageId) {
+      this.launchRetries.delete(messageId);
+      this.loginRetries.failed(messageId);
+    }
     // Release the in-flight attach flag. It is otherwise only cleared by a successful
     // session.attached or a socket close, so a rejected attach pins it to that session id
     // and every later attachToSession() for it early-returns -- leaving a live session
@@ -707,6 +757,12 @@ class SessionManager {
     // session its notice was for; held on, it would land on the next session
     // opened in that folder.
     this.createNotice = null;
+    // Refused by the account preflight: say who is logged in against who is expected, and
+    // offer to fix it from here. The launch is retried once the Log in session exits.
+    if (payload.refusal && retry) {
+      this.accountRefusal.show(payload.refusal, retry);
+      return;
+    }
     // Show error to user - for now use alert, could be improved with toast notification
     alert('Session error: ' + payload.message);
   }
@@ -758,6 +814,8 @@ class SessionManager {
     this.currentSessionId = payload.session.id;
     this.attachingSessionId = null; // Clear in-flight flag
     this.sessions.set(payload.session.id, payload.session);
+    // The plan chip shows this session's login's limits (docs/accounts.md).
+    this.planUsage.setAccount(payload.session.account);
 
     // Clear notification for this session
     this.sessionNotifications.delete(payload.session.id);
@@ -952,10 +1010,16 @@ class SessionManager {
   }
 
   private handleNotification(
-    payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload
+    payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload | AccountChangedNotificationPayload
   ): void {
     if (isLandNotification(payload)) {
       this.handleLandResult(payload);
+      return;
+    }
+    if (isAccountChangedNotification(payload)) {
+      // The row's account chip shows the warning too (session.accountWarnings).
+      showAccountChanged(payload);
+      this.showBrowserNotification(accountChangedTitle(payload), payload.detail, payload.sessionId);
       return;
     }
     if (isPromptMissingNotification(payload)) {
@@ -1219,9 +1283,17 @@ class SessionManager {
 
   private async forkCurrentSession(): Promise<void> {
     if (!this.currentSessionId) return;
+    const sourceId = this.currentSessionId;
     try {
-      await this.sendRequest('session.fork', { sessionId: this.currentSessionId });
+      await this.sendRequest('session.fork', { sessionId: sourceId });
     } catch (error) {
+      const refusal = (error as { refusal?: AccountRefusal }).refusal;
+      if (refusal) {
+        this.accountRefusal.show(refusal, () => {
+          if (this.currentSessionId === sourceId) void this.forkCurrentSession();
+        });
+        return;
+      }
       this.showForkError(error instanceof Error ? error.message : 'Failed to fork session');
     }
   }
@@ -1250,15 +1322,27 @@ class SessionManager {
    * locally and never sent to the PTY: a track session whose dependency
    * install failed opens anyway and says so where the user is looking.
    */
-  createSession(name?: string, cwd?: string, notice?: string): void {
+  createSession(name?: string, cwd?: string, notice?: string, account?: string): void {
     this.createNotice = notice && cwd ? { cwd, text: notice } : null;
-    this.send('session.create', { name, cwd });
+    const id = this.send('session.create', { name, cwd, ...(account ? { account } : {}) });
+    this.launchRetries.set(id, () => this.createSession(name, cwd, notice, account));
+  }
+
+  /**
+   * Open a Log in session for `account` (Clean up first deletes its org-pushed settings),
+   * and run `retry` -- the refused launch -- once it exits: the server preflights it again.
+   */
+  private startLogin(account: string, cleanup: boolean, retry: () => void): void {
+    const dims = this.terminalMgr.getDimensions();
+    const id = this.send('session.create', { account, login: true, cleanup, cols: dims.cols, rows: dims.rows });
+    this.loginRetries.requested(id, retry);
   }
 
   // Open a Claude session from a project's session history: `resume` continues the original
   // transcript, `fork` branches a copy. The server auto-attaches, so showTerminal() takes over.
-  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork'): void {
-    this.send('session.open', { claudeSessionId, cwd, mode });
+  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork', account?: string): void {
+    const id = this.send('session.open', { claudeSessionId, cwd, mode, ...(account ? { account } : {}) });
+    this.launchRetries.set(id, () => this.openHistorySession(claudeSessionId, cwd, mode, account));
   }
 
   attachToSession(sessionId: string): void {
@@ -1284,7 +1368,8 @@ class SessionManager {
    */
   reviveSession(sessionId: string): void {
     const dims = this.terminalMgr.getDimensions();
-    this.send('session.revive', { sessionId, cols: dims.cols, rows: dims.rows });
+    const id = this.send('session.revive', { sessionId, cols: dims.cols, rows: dims.rows });
+    this.launchRetries.set(id, () => this.reviveSession(sessionId));
   }
 
   deleteSession(sessionId: string): void {

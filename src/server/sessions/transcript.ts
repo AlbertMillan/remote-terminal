@@ -30,9 +30,11 @@ export function countUserTurns(transcript: string): number {
  * all project dirs. Claude Code derives its project folder by replacing path
  * separators with '-', but the exact algorithm may vary, so scanning by known
  * session ID is always correct. Throws if the transcript can't be found.
+ *
+ * `projectsDir` is one account's (`accounts.ts` projectsDir): a transcript only
+ * resumes from the folder of the login that wrote it.
  */
-export function findClaudeProjectDir(homeDir: string, cwd: string, claudeSessionId: string): string {
-  const projectsDir = join(homeDir, '.claude', 'projects');
+export function findClaudeProjectDir(projectsDir: string, cwd: string, claudeSessionId: string): string {
   const slug = cwd.replace(/[:\\/]/g, '-').replace(/^-+/, '');
   const computedDir = join(projectsDir, slug);
   if (existsSync(join(computedDir, `${claudeSessionId}.jsonl`))) {
@@ -60,9 +62,9 @@ export function findClaudeProjectDir(homeDir: string, cwd: string, claudeSession
  * Non-throwing transcript locator — returns the absolute path to the
  * `<claudeSessionId>.jsonl` transcript, or null if it can't be found.
  */
-export function tryGetTranscriptPath(homeDir: string, cwd: string, claudeSessionId: string): string | null {
+export function tryGetTranscriptPath(projectsDir: string, cwd: string, claudeSessionId: string): string | null {
   try {
-    const dir = findClaudeProjectDir(homeDir, cwd, claudeSessionId);
+    const dir = findClaudeProjectDir(projectsDir, cwd, claudeSessionId);
     return join(dir, `${claudeSessionId}.jsonl`);
   } catch {
     return null;

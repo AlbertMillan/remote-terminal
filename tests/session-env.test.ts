@@ -41,6 +41,12 @@ const createPty = vi.fn(() => {
 });
 const writeToPty = vi.fn();
 
+// Preflight reads the account's real login; these tests launch nothing real.
+vi.mock('../src/server/accounts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
+  assertAccountReady: vi.fn(),
+}));
+
 vi.mock('../src/server/sessions/pty-handler.js', async () => {
   const actual = await vi.importActual<typeof import('../src/server/sessions/pty-handler.js')>(
     '../src/server/sessions/pty-handler.js'
@@ -68,6 +74,7 @@ vi.mock('../src/server/db/queries.js', () => ({
   logSessionEvent: vi.fn(),
   getMaxSessionSortOrder: vi.fn(() => 0),
   launchProfileForTranscript: vi.fn(() => null),
+  accountForTranscript: vi.fn(() => null),
   clearForkFlag: vi.fn(),
   getUnloggedSessionsForLog: vi.fn(() => []),
 }));
@@ -83,6 +90,7 @@ vi.mock('../src/server/sessions/persistence.js', () => ({
 
 vi.mock('../src/server/sessions/transcript.js', () => ({
   findClaudeProjectDir: vi.fn(() => join(dataDir, 'claude-project')),
+  tryGetTranscriptPath: vi.fn(() => null),
 }));
 
 vi.mock('../src/server/sessions/project-log.js', () => ({
@@ -115,6 +123,8 @@ import { configureSessionEnv, loopbackUrl, sessionForToken } from '../src/server
 import { injectCommand } from '../src/server/sessions/session-open.js';
 import { promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession } from '../src/server/sessions/types.js';
+import { assertAccountReady } from '../src/server/accounts.js';
+import { accountForTranscript } from '../src/server/db/queries.js';
 
 const CLAUDE_ID = '22222222-2222-4222-8222-222222222222';
 const URL = 'http://127.0.0.1:4399';
@@ -189,6 +199,64 @@ describe('sessionEnv on every PTY creation path', () => {
     const token = expectSessionEnv(s.id);
     await manager.terminateSession(s.id);
     expect(sessionForToken(token)).toBeNull();
+  });
+});
+
+describe("every creation path runs under the session's account", () => {
+  const lastAccount = () => {
+    const calls = createPty.mock.calls as unknown as [{ account: string }][];
+    return calls[calls.length - 1][0].account;
+  };
+
+  it('createSession: the account it names, preflighted, and stored on the row', async () => {
+    const s = await manager.createSession({ cwd: dataDir, account: 'work' });
+    expect(lastAccount()).toBe('work');
+    expect(assertAccountReady).toHaveBeenCalledWith('work');
+    expect(rows.get(s.id)!.account).toBe('work');
+    expect(s.account).toBe('work');
+  });
+
+  it('createSession without one: the default, personal', async () => {
+    await manager.createSession({ cwd: dataDir });
+    expect(lastAccount()).toBe('personal');
+  });
+
+  it('a refused createSession leaves no row and no PTY', async () => {
+    (assertAccountReady as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error('refused');
+    });
+    await expect(manager.createSession({ cwd: dataDir, account: 'work' })).rejects.toThrow('refused');
+    expect(rows.size).toBe(0);
+    expect(createPty).not.toHaveBeenCalled();
+  });
+
+  it('a Log in session skips the preflight', async () => {
+    await manager.createSession({ cwd: dataDir, account: 'work', skipPreflight: true });
+    expect(assertAccountReady).not.toHaveBeenCalled();
+    expect(lastAccount()).toBe('work');
+  });
+
+  it("forkSession and reviveSession keep the row's account", async () => {
+    const source = await manager.createSession({ cwd: dataDir, account: 'work' });
+    rows.get(source.id)!.claudeSessionId = CLAUDE_ID;
+    mkdirSync(join(dataDir, 'claude-project'), { recursive: true });
+    writeFileSync(join(dataDir, 'claude-project', `${CLAUDE_ID}.jsonl`), '{}\n');
+    const fork = await manager.forkSession(source.id);
+    expect(lastAccount()).toBe('work');
+    expect(rows.get(fork.id)!.account).toBe('work');
+
+    await manager.shutdown();
+    vi.mocked(assertAccountReady).mockClear();
+    createSessionManager().reviveSession({ id: source.id });
+    expect(lastAccount()).toBe('work');
+    expect(assertAccountReady).toHaveBeenCalledWith('work');
+  });
+
+  it('openClaudeSession resumes under the account of the row that ran the transcript', async () => {
+    vi.mocked(accountForTranscript).mockReturnValueOnce('work');
+    const s = await manager.openClaudeSession({ claudeSessionId: CLAUDE_ID, cwd: dataDir, mode: 'resume', account: 'personal' });
+    expect(lastAccount()).toBe('work');
+    expect(rows.get(s.id)!.account).toBe('work');
   });
 });
 

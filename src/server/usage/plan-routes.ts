@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getRelaySeenAt, getSnapshot, recordReading } from './plan-limits.js';
+import { accountForConfigDir, defaultAccount, isAccount, settingsPath } from '../accounts.js';
 
 /**
  * The status line script, found by walking up from this module: it sits at
@@ -22,7 +23,7 @@ function findStatuslineScript(): string | null {
 }
 
 /**
- * The `statusLine.command` to put in ~/.claude/settings.json. Forward slashes:
+ * The `statusLine.command` to put in each account's settings.json. Forward slashes:
  * Claude Code runs the command through bash on Windows too, where a backslash
  * path is an escape sequence waiting to happen.
  */
@@ -46,11 +47,27 @@ export function registerPlanUsageRoutes(app: FastifyInstance): void {
   // line render. A post with no usable limits is normal (before a session's
   // first response, or on a plan without limits); it still counts as contact,
   // which is how the chip knows the relay is installed.
+  //
+  // Each login has its own limits: the script sends its CLAUDE_CONFIG_DIR
+  // (`config_dir`, empty for the default ~/.claude) and the reading is kept
+  // under the account on that folder. A folder no account uses is not kept.
   app.post('/api/plan-usage', { bodyLimit: BODY_LIMIT }, async (request) => {
-    return { stored: recordReading(request.body) };
+    const body = request.body as { config_dir?: unknown } | null;
+    const dir = typeof body?.config_dir === 'string' ? body.config_dir : null;
+    const account = accountForConfigDir(dir);
+    if (!account) return { stored: false, account: null };
+    return { stored: recordReading(request.body, account), account };
   });
 
-  app.get('/api/plan-usage', async () => {
-    return { snapshot: getSnapshot(), relaySeenAt: getRelaySeenAt(), setup: { command: statuslineCommand() } };
+  // `?account=` picks whose limits: the chip asks for the attached session's.
+  app.get<{ Querystring: { account?: string } }>('/api/plan-usage', async (request) => {
+    const asked = request.query?.account;
+    const account = isAccount(asked) ? asked : defaultAccount();
+    return {
+      account,
+      snapshot: getSnapshot(account),
+      relaySeenAt: getRelaySeenAt(account),
+      setup: { command: statuslineCommand(), settingsPath: settingsPath(account) },
+    };
   });
 }

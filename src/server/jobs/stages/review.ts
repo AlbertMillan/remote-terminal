@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
 import { getConfig } from '../../config.js';
@@ -7,6 +6,7 @@ import { runClaude, type RunTag } from '../../agent/claude-run.js';
 import { COMPANION_DIR, REVIEWS_DIR, ensureReviewsIgnored } from '../../projects/project-store.js';
 import { findingsRelPath, readFindings, summarize, type FindingsFile } from '../findings.js';
 import { diffAgainst } from '../worktree.js';
+import { commandsDir } from '../../accounts.js';
 
 const logger = createLogger('stage-review');
 
@@ -20,8 +20,10 @@ const logger = createLogger('stage-review');
  * structured-output requirement the UI needs to offer checkboxes.
  */
 
-/** Where the user's own review criteria live. */
-const USER_REVIEW_COMMAND = join(homedir(), '.claude', 'commands', 'code-review.md');
+/** Where the user's own review criteria live: the job's account's `/code-review` command. */
+function userReviewCommand(account: string): string {
+  return join(commandsDir(account), 'code-review.md');
+}
 
 /** Cap the diff handed to the reviewer; past this it stops being reviewable. */
 const MAX_DIFF_CHARS = 60_000;
@@ -42,7 +44,7 @@ export interface ReviewResult {
 }
 
 /** Read the user's review criteria, falling back when they have none. */
-export function loadReviewCriteria(path = USER_REVIEW_COMMAND): {
+export function loadReviewCriteria(path: string): {
   criteria: string;
   source: string;
 } {
@@ -129,8 +131,10 @@ export async function runReviewStage(opts: {
   /** Queue lane and spawn notification; see runner.ts. */
   laneKey?: string;
   onSpawn?: () => void;
+  /** The job's account (accounts.ts projectAccount), whose `/code-review` is read. */
+  account: string;
 }): Promise<ReviewResult> {
-  const { jobId, worktreePath, baseBranch, specPath, tag, signal, laneKey, onSpawn } = opts;
+  const { jobId, worktreePath, baseBranch, specPath, tag, signal, laneKey, onSpawn, account } = opts;
 
   const fullDiff = await diffAgainst(worktreePath, baseBranch);
   if (!fullDiff.trim()) {
@@ -145,7 +149,7 @@ export async function runReviewStage(opts: {
   // on the job's own branch and lands with the merge like any other change.
   ensureReviewsIgnored({ cwd: worktreePath });
 
-  const { criteria, source } = loadReviewCriteria();
+  const { criteria, source } = loadReviewCriteria(userReviewCommand(account));
   const truncated = fullDiff.length > MAX_DIFF_CHARS;
 
   const prompt = buildReviewPrompt({

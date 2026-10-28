@@ -8,9 +8,11 @@
  * and again at the PTY chokepoint. Story: `docs/windows-auto-start.md`.
  *
  * This list is a denylist of *session-scoped* markers and must never become a
- * `CLAUDE_*` wildcard: ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR,
- * CLAUDE_CODE_FORCE_SESSION_PERSISTENCE and CLAUDE_CODE_EXECPATH are the user's
- * own settings and have to survive into the terminal untouched.
+ * `CLAUDE_*` wildcard: CLAUDE_CODE_FORCE_SESSION_PERSISTENCE and
+ * CLAUDE_CODE_EXECPATH are the user's own settings and have to survive into the
+ * terminal untouched. The login-scoped ones (CLAUDE_CONFIG_DIR, API keys, OAuth
+ * token, telemetry) are not this file's: every launch replaces them with its
+ * account's (accounts.ts accountEnv).
  */
 export const INHERITED_CLAUDE_SESSION_VARS = [
   /** The marker that turns transcript saving off. The reason this file exists. */

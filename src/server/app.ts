@@ -6,13 +6,15 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
+import { accountNames, accountProblems, accountSetupMissing, accountsSummary } from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
 import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-registry.js';
-import { broadcastClaudeNames } from './websocket/connections.js';
+import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames } from './websocket/connections.js';
+import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
@@ -41,6 +43,19 @@ const logger = createLogger('app');
 export async function createApp(): Promise<FastifyInstance> {
   // Load configuration
   loadConfig();
+  for (const problem of accountProblems()) {
+    logger.error({ problem }, 'Invalid account configuration (docs/accounts.md)');
+  }
+  for (const account of accountNames()) {
+    try {
+      const missing = accountSetupMissing(account);
+      if (missing.length > 0) {
+        logger.warn({ account, missing }, 'Account settings lack claude-remote setup: run scripts/install-account-setup.mjs (docs/accounts.md)');
+      }
+    } catch {
+      // An unknown account: accountProblems() already said so.
+    }
+  }
   const config = getConfig();
 
   // Initialize database
@@ -65,6 +80,11 @@ export async function createApp(): Promise<FastifyInstance> {
   startUsageLedger();
   // Claude's own name for each running conversation, for the sidebar.
   startClaudeNameWatch(() => sessionManager.getSessionList(), broadcastClaudeNames);
+  startAccountWatch(
+    () => sessionManager.getRunningSessions(),
+    broadcastAccountWarnings,
+    (s) => broadcastAccountChanged({ kind: 'account-changed', sessionId: s.id, name: s.name, detail: s.detail, timestamp: new Date().toISOString() })
+  );
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -155,6 +175,10 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   // Recent working directories (for the new-session path dropdown)
+  // The accounts a new session can run under, for the New Session picker. Readiness only:
+  // who is logged in where is said by a refusal, to the client that asked to launch.
+  app.get('/api/accounts', async () => accountsSummary());
+
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };
   });
@@ -283,6 +307,8 @@ export async function createApp(): Promise<FastifyInstance> {
       cwd = cwd.replace(/^\/([a-zA-Z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, '\\');
     }
     setClaudeSessionId(sessionId, claudeSessionId, cwd);
+    // A Claude just started or stopped here, possibly right after a `/login`.
+    recheckAccounts();
     return { success: true };
   });
 
@@ -338,6 +364,7 @@ export async function createApp(): Promise<FastifyInstance> {
           cwd: session.cwd,
           claudeSessionId: session.claudeSessionId,
           createdAt: session.createdAt,
+          account: session.account,
         });
         return { sessionId, outcome, cwd: session.cwd, fileName: getConfig().projectLog.fileName };
       }
@@ -373,6 +400,7 @@ export async function createApp(): Promise<FastifyInstance> {
 
     stopUsageLedger();
     stopClaudeNameWatch();
+    stopAccountWatch();
 
     // Close database
     closeDatabase();

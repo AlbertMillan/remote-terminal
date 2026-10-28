@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { createLogger } from './utils/logger.js';
+import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNTS } from './account-defaults.js';
 
 const logger = createLogger('config');
 
@@ -54,6 +55,23 @@ export interface Config {
     // sessions.maxSessions, which still applies.
     maxPerParent: number;
   };
+  /**
+   * Claude logins, by name (docs/accounts.md). Each is one Claude Code config
+   * folder (`CLAUDE_CONFIG_DIR`) and the identity expected to be logged in there:
+   * exactly one of `accountUuid` / `organizationUuid`. Every session runs under one.
+   */
+  accounts: Record<string, AccountConfig>;
+  /** The account a new session gets when neither its start nor its project names one. */
+  defaultAccount: string;
+}
+
+export interface AccountConfig {
+  /** `~`-relative or absolute; resolved by accounts.ts. */
+  configDir: string;
+  /** The personal login's `oauthAccount.accountUuid`. */
+  accountUuid?: string;
+  /** The org login's `oauthAccount.organizationUuid`. */
+  organizationUuid?: string;
 }
 
 const defaultConfig: Config = {
@@ -92,6 +110,8 @@ const defaultConfig: Config = {
   agentSessions: {
     maxPerParent: 5,
   },
+  accounts: DEFAULT_ACCOUNTS,
+  defaultAccount: DEFAULT_ACCOUNT,
 };
 
 let currentConfig: Config = { ...defaultConfig };
@@ -108,6 +128,11 @@ export function loadConfig(): Config {
       const content = readFileSync(configPath, 'utf-8');
       const loaded = JSON.parse(content);
       currentConfig = deepMerge(defaultConfig, loaded);
+      // Accounts are taken as written: merging would keep a default account the
+      // user deleted, and sessions could still be started under it.
+      if (loaded && typeof loaded.accounts === 'object' && loaded.accounts !== null) {
+        currentConfig.accounts = loaded.accounts;
+      }
       logger.info({ path: configPath }, 'Loaded configuration');
     } catch (error) {
       logger.error({ error, path: configPath }, 'Failed to load config, using defaults');
@@ -141,6 +166,34 @@ export function saveConfig(config: Config): void {
 
 export function getConfig(): Config {
   return currentConfig;
+}
+
+/**
+ * What is wrong with `config.accounts`, one line each; empty when nothing is.
+ * Logged at boot rather than thrown: a bad account refuses its own launches
+ * (accounts.ts preflight), and must not take every other session down with it.
+ */
+export function accountConfigProblems(config: Pick<Config, 'accounts' | 'defaultAccount'>): string[] {
+  const problems: string[] = [];
+  const accounts = config.accounts ?? {};
+  if (Object.keys(accounts).length === 0) {
+    // accounts.ts falls back to the built-in defaults rather than having no account at all.
+    return ['accounts is empty: the built-in defaults (personal, work) are used instead; define your accounts (docs/accounts.md)'];
+  }
+  for (const [name, account] of Object.entries(accounts)) {
+    if (!account || typeof account.configDir !== 'string' || !account.configDir.trim()) {
+      problems.push(`accounts.${name}: configDir is required`);
+      continue;
+    }
+    const ids = [account.accountUuid, account.organizationUuid].filter((v) => typeof v === 'string' && v.trim());
+    if (ids.length !== 1) {
+      problems.push(`accounts.${name}: set exactly one of accountUuid / organizationUuid (has ${ids.length})`);
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(accounts, config.defaultAccount)) {
+    problems.push(`defaultAccount "${config.defaultAccount}" is not one of accounts`);
+  }
+  return problems;
 }
 
 function deepMerge<T extends object>(target: T, source: Partial<T>): T {

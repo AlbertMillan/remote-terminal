@@ -1,8 +1,8 @@
 import { readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { createLogger } from '../utils/logger.js';
 import { getRecentCwds } from '../db/queries.js';
+import { allProjectsDirs } from '../accounts.js';
 
 const logger = createLogger('recent-paths');
 
@@ -58,11 +58,15 @@ function extractCwd(filePath: string): string | null {
 }
 
 /**
- * Scan Claude Code's project transcripts for the directories sessions ran in,
+ * Scan every account's Claude Code project transcripts for the directories sessions ran in,
  * one representative (newest) transcript per project folder.
  */
 function scanClaudeProjects(): RecentPath[] {
-  const projectsDir = join(homedir(), '.claude', 'projects');
+  return allProjectsDirs().flatMap(scanProjectsDir);
+}
+
+/** One account's projects folder. */
+function scanProjectsDir(projectsDir: string): RecentPath[] {
   const results: RecentPath[] = [];
 
   let entries;

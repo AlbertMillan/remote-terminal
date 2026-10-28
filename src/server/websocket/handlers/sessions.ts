@@ -16,7 +16,12 @@ import {
   type SessionKeepPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
+  type SessionErrorPayload,
 } from '../protocol.js';
+import { homedir } from 'os';
+import { AccountRefusedError, cleanupAccount, isAccount } from '../../accounts.js';
+import { injectCommand } from '../../sessions/session-open.js';
+import type { ActiveSession } from '../../sessions/types.js';
 import {
   updateSessionCategory,
   reorderSessions,
@@ -30,8 +35,10 @@ import {
   sessionToInfo,
   broadcastSessionUpdate,
   broadcastSessionKept,
+  broadcastLoginEnded,
   broadcastSessionMoved,
   broadcastSessionReordered,
+  logger,
 } from '../connections.js';
 
 // Validation constants
@@ -50,6 +57,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
   cwd?: string;
   cols?: number;
   rows?: number;
+  account?: string;
 } {
   const validated: {
     name?: string;
@@ -57,6 +65,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
     cwd?: string;
     cols?: number;
     rows?: number;
+    account?: string;
   } = {};
 
   // Validate and sanitize name
@@ -93,10 +102,59 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
     validated.cwd = payload.cwd;
   }
 
+  // An unknown name is refused by createSession (resolveStartAccount), never swapped for another.
+  if (payload?.account !== undefined) {
+    if (typeof payload.account !== 'string') {
+      throw new Error('Account must be a string');
+    }
+    validated.account = payload.account;
+  }
+
   // Validate terminal dimensions
   Object.assign(validated, validateTerminalDimensions(payload));
 
   return validated;
+}
+
+/**
+ * A `session.error` for a failed launch. A preflight refusal carries the refusal
+ * itself, so the client can offer Log in / Clean up (docs/accounts.md).
+ */
+export function sessionErrorPayload(error: unknown, fallback: string): SessionErrorPayload {
+  if (error instanceof AccountRefusedError) return { message: error.message, refusal: error.refusal };
+  return { message: error instanceof Error ? error.message : fallback };
+}
+
+/**
+ * A Log in session: `claude` in the account's folder with its clean env and no
+ * preflight — it is how the right login gets there. Clean up first deletes the
+ * org-pushed settings of an account that expects no organization.
+ */
+async function createLoginSession(
+  connection: ClientConnection,
+  payload: SessionCreatePayload,
+  dims: { cols?: number; rows?: number }
+): Promise<ActiveSession> {
+  if (!isAccount(payload.account)) throw new Error('A Log in session needs a known account');
+  if (payload.cleanup) {
+    const deleted = cleanupAccount(payload.account);
+    logger.info({ account: payload.account, deleted }, 'accounts: cleaned up org-pushed settings');
+  }
+  const session = await sessionManager.createSession({
+    name: `Log in: ${payload.account}`,
+    cwd: homedir(),
+    account: payload.account,
+    skipPreflight: true,
+    ownerId: connection.identity?.userId,
+    ...dims,
+  });
+  injectCommand(session, 'claude');
+  // `terminal.exit` reaches only attached connections; the retry waits on this instead.
+  const off = sessionManager.onExit(session.id, (exitCode) => {
+    off();
+    broadcastLoginEnded({ sessionId: session.id, exitCode });
+  });
+  return session;
 }
 
 export async function handleSessionCreate(connection: ClientConnection, message: ClientMessage): Promise<void> {
@@ -106,10 +164,12 @@ export async function handleSessionCreate(connection: ClientConnection, message:
     // Validate input before creating session
     const validatedOptions = validateSessionOptions(payload);
 
-    const session = await sessionManager.createSession({
-      ...validatedOptions,
-      ownerId: connection.identity?.userId,
-    });
+    const session = payload?.login
+      ? await createLoginSession(connection, payload, { cols: validatedOptions.cols, rows: validatedOptions.rows })
+      : await sessionManager.createSession({
+          ...validatedOptions,
+          ownerId: connection.identity?.userId,
+        });
 
     // Read back metadata from DB to get the actual sortOrder and categoryId
     const sessionMetadata = getSessionFromDb(session.id);
@@ -134,8 +194,7 @@ export async function handleSessionCreate(connection: ClientConnection, message:
     // Auto-attach to the new session
     attachToSession(connection, session.id);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to create session';
-    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+    connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to create session'), message.id));
   }
 }
 
@@ -330,8 +389,7 @@ export async function handleSessionFork(connection: ClientConnection, message: C
     }
     attachToSession(connection, forkedSession.id);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to fork session';
-    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+    connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to fork session'), message.id));
   }
 }
 
@@ -366,6 +424,7 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
       ownerId: connection.identity?.userId,
       cols,
       rows,
+      ...(typeof payload.account === 'string' && payload.account ? { account: payload.account } : {}),
     });
 
     const sessionMetadata = getSessionFromDb(session.id);
@@ -390,8 +449,7 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
     }
     attachToSession(connection, session.id);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to open session';
-    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+    connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to open session'), message.id));
   }
 }
 
@@ -441,8 +499,7 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
     }
     attachToSession(connection, session.id);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to revive session';
-    connection.ws.send(createMessage('session.error', { message: errorMessage }, message.id));
+    connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to revive session'), message.id));
   }
 }
 

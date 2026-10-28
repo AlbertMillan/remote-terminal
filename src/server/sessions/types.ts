@@ -11,6 +11,8 @@ export interface Session {
   status: SessionStatus;
   cols: number;
   rows: number;
+  /** The Claude login it runs under (accounts.ts). */
+  account: string;
 }
 
 export type SessionStatus = 'active' | 'idle' | 'terminated';
@@ -36,6 +38,10 @@ export interface SessionCreateOptions {
   permissionMode?: string;
   /** MCP servers it may load (launch-profile.ts); unset is the user's full roster. */
   mcpServers?: string[] | null;
+  /** The account it runs under; unset is its project's default, else the configured one. */
+  account?: string;
+  /** Only for a Log in session (accounts-routes.ts): it runs so the login can be fixed. */
+  skipPreflight?: boolean;
 }
 
 export interface SessionMetadata {
@@ -60,6 +66,8 @@ export interface SessionMetadata {
   permissionMode?: string | null;
   /** The MCP servers every launch of its `claude` gets (launch-profile.ts); null is the full roster. */
   mcpServers?: string[] | null;
+  /** The Claude login it runs under (accounts.ts); every revive, Resume and Fork reuses it. */
+  account: string;
 }
 
 export interface CategoryMetadata {

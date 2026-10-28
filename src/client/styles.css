@@ -547,6 +547,36 @@ body {
   line-height: 14px;
 }
 
+.session-account-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.session-account-chip.session-account-warning {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.account-refusal-detail {
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.account-refusal-detail dt {
+  font-weight: 600;
+}
+
+.account-refusal-detail dd {
+  margin: 0 0 6px;
+  word-break: break-all;
+}
+
 .session-delete-btn {
   background: transparent;
   border: none;

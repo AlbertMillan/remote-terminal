@@ -1,9 +1,10 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'fs';
 import { basename, join } from 'path';
-import { homedir } from 'os';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getRecentCwds } from '../db/queries.js';
+import { pathKey } from '../utils/paths.js';
+import { allProjectsDirs } from '../accounts.js';
 import { parseLogEntries, parsePhasesBlock, type LogEntryMeta, type ParsedLogEntry, type PhaseGroup } from './session-log-format.js';
 
 const logger = createLogger('project-discovery');
@@ -20,10 +21,8 @@ export interface DiscoveredProject {
   transcriptPaths: string[]; // absolute paths, newest first, capped
 }
 
-/** Normalize a path for case/separator-insensitive dedup keys (Windows-friendly). */
-export function pathKey(p: string): string {
-  return p.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();
-}
+// Lives in utils/paths.ts, which accounts.ts imports without pulling in this module.
+export { pathKey };
 
 /**
  * Read the first JSONL line that carries a `cwd` field (Claude Code records the
@@ -66,7 +65,7 @@ let cache: { at: number; projects: DiscoveredProject[] } | null = null;
 
 /**
  * Enumerate known projects from two sources, unified by working directory:
- *  - every project dir under ~/.claude/projects (real cwd decoded from a
+ *  - every project dir under each account's projects folder (real cwd decoded from a
  *    transcript line, since the slugified dir name is lossy), and
  *  - distinct cwds recorded in the sessions DB.
  *
@@ -83,11 +82,8 @@ export function discoverProjects(opts?: { force?: boolean }): DiscoveredProject[
   return projects;
 }
 
-function scanProjects(): DiscoveredProject[] {
-  const byKey = new Map<string, Accum>();
-
-  // Source 1: ~/.claude/projects/*
-  const projectsDir = join(homedir(), '.claude', 'projects');
+/** Fold one account's projects folder into `byKey`: each slug folder's cwd, read from its newest transcript. */
+function scanProjectsDir(projectsDir: string, byKey: Map<string, Accum>): void {
   try {
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -127,6 +123,13 @@ function scanProjects(): DiscoveredProject[] {
   } catch {
     logger.debug({ projectsDir }, 'project-discovery: projects dir not readable');
   }
+}
+
+function scanProjects(): DiscoveredProject[] {
+  const byKey = new Map<string, Accum>();
+
+  // Source 1: every account's <configDir>/projects/*
+  for (const projectsDir of allProjectsDirs()) scanProjectsDir(projectsDir, byKey);
 
   // Source 2: distinct cwds from the sessions DB (covers projects that may not
   // have a transcript dir, and supplies DB last-access times).

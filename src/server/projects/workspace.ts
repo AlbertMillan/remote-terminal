@@ -1,11 +1,12 @@
 import { existsSync, readdirSync, statSync } from 'fs';
-import { homedir, tmpdir } from 'os';
+import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { sessionsInWorktree } from '../utils/paths.js';
 import { discoverProjects, pathKey } from '../sessions/project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
 import { worktreeRoot } from '../jobs/worktree.js';
+import { allProjectsDirs } from '../accounts.js';
 import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } from './registry.js';
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
@@ -158,7 +159,7 @@ function dedupeByKey(paths: string[]): string[] {
 }
 
 /**
- * Working directories recovered from ~/.claude/projects directory names —
+ * Working directories recovered from every account's projects folder names —
  * projects whose transcripts were deleted, which discoverProjects() cannot see.
  *
  * Cached on the same short TTL as discoverProjects(): each decode walks the
@@ -172,16 +173,15 @@ function recoverCwdsFromSlugs(): string[] {
   const now = Date.now();
   if (slugCache && now - slugCache.at < SLUG_CACHE_TTL_MS) return slugCache.cwds;
 
-  const projectsDir = join(homedir(), '.claude', 'projects');
-  let cwds: string[] = [];
-  try {
-    const slugs = readdirSync(projectsDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    cwds = decodeProjectSlugs(slugs);
-  } catch {
-    cwds = [];
+  const slugs = new Set<string>();
+  for (const projectsDir of allProjectsDirs()) {
+    try {
+      for (const e of readdirSync(projectsDir, { withFileTypes: true })) if (e.isDirectory()) slugs.add(e.name);
+    } catch {
+      // This account has no projects folder yet.
+    }
   }
+  const cwds = decodeProjectSlugs([...slugs]);
   slugCache = { at: now, cwds };
   return cwds;
 }

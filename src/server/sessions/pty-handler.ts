@@ -4,6 +4,7 @@ import { getDefaultShell, getShellArgs, isWindows } from '../utils/platform.js';
 import { createLogger } from '../utils/logger.js';
 import { getConfig } from '../config.js';
 import { withoutInheritedClaudeSession } from '../utils/claude-env.js';
+import { accountEnv } from '../accounts.js';
 
 const logger = createLogger('pty-handler');
 
@@ -14,9 +15,11 @@ export interface PtyOptions {
   env?: Record<string, string>;
   cols?: number;
   rows?: number;
+  /** The Claude login it runs under: its `CLAUDE_CONFIG_DIR` and the stripped auth env (accounts.ts). */
+  account: string;
 }
 
-export function createPty(options: PtyOptions = {}): IPty {
+export function createPty(options: PtyOptions): IPty {
   const shell = options.shell || getDefaultShell();
   const args = options.args || getShellArgs();
   let cwd = options.cwd || process.cwd();
@@ -35,14 +38,16 @@ export function createPty(options: PtyOptions = {}): IPty {
   // it (see utils/claude-env.ts). A terminal we hand out is a top-level session; left
   // in, CLAUDE_CODE_CHILD_SESSION makes every `claude` in it skip saving its
   // transcript, which silently breaks Fork, resume history and SESSION-LOG.
+  //
+  // accountEnv: the account's CLAUDE_CONFIG_DIR, and no inherited API key, OAuth token or
+  // telemetry switch, or every `claude` in it runs under whatever login those name.
   const env = {
-    ...withoutInheritedClaudeSession(process.env),
-    ...options.env,
+    ...accountEnv({ ...withoutInheritedClaudeSession(process.env), ...options.env }, options.account),
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   };
 
-  logger.debug({ shell, args, cwd, cols, rows }, 'Creating PTY');
+  logger.debug({ shell, args, cwd, cols, rows, account: options.account }, 'Creating PTY');
 
   const ptyProcess = pty.spawn(shell, args, {
     name: 'xterm-256color',

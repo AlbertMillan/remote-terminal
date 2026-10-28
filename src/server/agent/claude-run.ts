@@ -7,6 +7,7 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { recordRunEnd, recordRunStart, type RunTag } from '../usage/store.js';
 import { emitRunSettled } from './run-events.js';
+import { accountEnv, assertAccountReady, defaultAccount, projectAccount } from '../accounts.js';
 
 export type { RunTag } from '../usage/store.js';
 
@@ -238,6 +239,12 @@ export interface SpawnOptions {
    * which a registry of live child processes would miss.
    */
   signal?: AbortSignal;
+  /**
+   * The Claude login it runs under (accounts.ts): its `CLAUDE_CONFIG_DIR` and the
+   * stripped auth/telemetry env. runClaude resolves it from the tag's project
+   * when unset; a bare spawnClaude uses the default account.
+   */
+  account?: string;
 }
 
 export interface RunOptions extends SpawnOptions {
@@ -353,7 +360,13 @@ export function spawnClaude(
         '--output-format',
         'json',
       ],
-      { cwd, shell: true, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+      {
+        cwd,
+        shell: true,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: accountEnv(process.env, options.account ?? defaultAccount()) as NodeJS.ProcessEnv,
+      }
     );
 
     // The run is now a real process. Until this point it was queued, and a
@@ -500,6 +513,10 @@ export async function runClaude(
     // is exactly when a cancel is most likely to land. Checking here means such a
     // run is dropped without ever touching the working tree.
     if (options.signal?.aborted) throw new RunAbortedError();
+    // A run with no session of its own (a job stage, the session log) runs under its
+    // project's account; refused, like a session, when that folder holds the wrong login.
+    const account = options.account ?? projectAccount(options.tag?.projectCwd ?? cwd);
+    assertAccountReady(account);
     const preEntries = await gitStatusEntries(cwd);
 
     // Name the session and record the run before the process exists: a run
@@ -510,7 +527,7 @@ export async function runClaude(
     const runId = options.tag ? recordRunStart(sessionId, options.tag) : null;
     let result: ClaudeRunResult;
     try {
-      result = await spawnClaude(cwd, prompt, { ...options, sessionId });
+      result = await spawnClaude(cwd, prompt, { ...options, sessionId, account });
     } finally {
       recordRunEnd(runId);
       emitRunSettled();

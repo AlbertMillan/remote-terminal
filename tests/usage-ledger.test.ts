@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -91,10 +91,25 @@ function transcript(folder: string, sessionId: string, lines: string[]): string 
 }
 
 const ingest = (docs = [ALPHA], readChunkBytes?: number) =>
-  ingestUsage({ projectsDir, docProjects: docs, readChunkBytes });
+  ingestUsage({ projectsDirs: [projectsDir], docProjects: docs, readChunkBytes });
 const total = (cwd = ALPHA) => usageByProject().get(cwd)?.total;
 
 describe('counting', () => {
+  it("counts every account's projects folder in one pass", async () => {
+    // Two logins, one project: each folder's transcripts count toward it.
+    transcript('alpha', S1, [line('msg_a', ALPHA)]);
+    const other = join(dataDir, 'claude-projects-personal');
+    mkdirSync(join(other, 'alpha'), { recursive: true });
+    writeFileSync(join(other, 'alpha', `${S2}.jsonl`), `${line('msg_b', ALPHA)}
+`);
+    try {
+      await ingestUsage({ projectsDirs: [projectsDir, other], docProjects: [ALPHA] });
+      expect(total()?.outputTokens).toBe(40);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('counts a response once, however many lines repeat it', async () => {
     // Claude Code writes one line per content block, each carrying the whole
     // response's usage. Summing lines roughly doubled every figure.
@@ -146,6 +161,64 @@ describe('counting', () => {
     transcript('alpha', S1, [line('msg_a', ALPHA, { model: '<synthetic>' })]);
     await ingest();
     expect(total()).toBeUndefined();
+  });
+});
+
+describe('pruning missing transcripts (f-psbdve)', () => {
+  const files = () =>
+    (getDatabase().prepare('SELECT path FROM usage_files ORDER BY path').all() as { path: string }[]).map((r) => r.path);
+
+  it("drops a deleted transcript's file row, and keeps its spend", async () => {
+    const a = transcript('alpha', S1, [line('msg_a', ALPHA)]);
+    const b = transcript('alpha', S2, [line('msg_b', ALPHA)]);
+    await ingest();
+    expect(files()).toEqual([a, b].sort());
+
+    rmSync(a);
+    const stats = await ingest();
+    expect(stats.pruned).toBe(1);
+    expect(files()).toEqual([b]);
+    // The ledger is the record of spend: deleting a transcript never lowers it.
+    expect(total()?.outputTokens).toBe(40);
+  });
+
+  it('re-reads a moved transcript under its new path without counting it twice', async () => {
+    const a = transcript('alpha', S1, [line('msg_a', ALPHA)]);
+    await ingest();
+    const moved = join(projectsDir, 'alpha-moved', `${S1}.jsonl`);
+    mkdirSync(join(projectsDir, 'alpha-moved'));
+    renameSync(a, moved);
+    expect((await ingest()).pruned).toBe(1);
+    expect(files()).toEqual([moved]);
+    expect(total()?.outputTokens).toBe(20);
+  });
+
+  it("keeps a parent's row while a subagent file of it survives", async () => {
+    const parent = transcript('alpha', S1, [line('msg_parent', ALPHA)]);
+    const sub = join(projectsDir, 'alpha', S1, 'subagents');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, 'agent-abc.jsonl'), `${line('msg_sub', 'C:\\elsewhere')}\n`);
+    await ingest();
+    rmSync(parent);
+    expect((await ingest()).pruned).toBe(0);
+    expect(files()).toContain(parent);
+    rmSync(join(projectsDir, 'alpha', S1), { recursive: true });
+    expect((await ingest()).pruned).toBe(2);
+    expect(files()).toEqual([]);
+  });
+
+  it('keeps the rows of a folder this pass did not scan while its files still exist', async () => {
+    const a = transcript('alpha', S1, [line('msg_a', ALPHA)]);
+    await ingest();
+    // Another account's folder only: alpha's file was not listed, but it is still there.
+    const other = join(dataDir, 'claude-projects-other');
+    mkdirSync(other, { recursive: true });
+    try {
+      expect((await ingestUsage({ projectsDirs: [other], docProjects: [ALPHA] })).pruned).toBe(0);
+      expect(files()).toEqual([a]);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });
 

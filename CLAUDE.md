@@ -64,6 +64,11 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   `<dataDir>/mcp/`, never the worktree (`commitAll`) or the prompt folder (`--add-dir`
   lets the session read its keys).
 - **Every PTY gets its env from `sessionEnv(id)`**, or its agent can't use the CLI.
+- **Every `claude` claude-remote launches (PTY or `runClaude`) gets its account's
+  `accountEnv()` and passes `preflight()`**, or it runs under whatever login `~/.claude`
+  (or an inherited token) has, and personal work reports to the org's collector. Every
+  Claude Code path goes through `accounts.ts`, never `join(homedir(), '.claude', …)`.
+  → `docs/accounts.md`
 - `/api/agent/*` needs loopback **and** a session token (`authenticate()`, the one guard);
   the rest of `/api/*` is unauthenticated on `0.0.0.0`, so dropping either lets the tailnet
   run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.

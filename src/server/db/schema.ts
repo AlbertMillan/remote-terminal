@@ -374,6 +374,15 @@ function runMigrations(database: Database.Database): void {
         UPDATE sessions SET mcp_servers = '[]' WHERE spawned_by IS NOT NULL;
       `,
     },
+    {
+      // The Claude login every session runs under (docs/accounts.md). Every
+      // row from before accounts becomes 'personal' (the DEFAULT backfills
+      // them); new rows always write their account explicitly.
+      name: '019_session_account',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN account TEXT NOT NULL DEFAULT 'personal';
+      `,
+    },
   ];
 
   const appliedMigrations = database

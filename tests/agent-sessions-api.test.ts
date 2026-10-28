@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -66,6 +66,7 @@ function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetad
     forkJsonlPath: null,
     spawnedBy: null,
     permissionMode: null,
+    account: 'personal',
     attachable: true,
     ...overrides,
   };
@@ -99,6 +100,7 @@ function makeDeps(): AgentSessionDeps {
           spawnedBy: opts.spawnedBy ?? null,
           permissionMode: opts.permissionMode ?? null,
           mcpServers: opts.mcpServers ?? null,
+          account: opts.account ?? 'personal',
           createdAt: `2026-10-01T10:00:0${created}.000Z`,
         })
       );
@@ -111,7 +113,8 @@ function makeDeps(): AgentSessionDeps {
     writePromptFile,
     mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
     // The real flags, reading a stand-in for the user's Claude config.
-    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, FAKE_HOME)),
+    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'))),
+    preflight: vi.fn((account: string) => ({ ok: true as const, account, configDir: 'C:\cfg', found: { accountUuid: 'a' } })),
     setMcpServers: vi.fn((id: string, servers: string[]) => {
       const r = rows.get(id);
       if (r) r.mcpServers = servers;
@@ -370,18 +373,75 @@ describe('start', () => {
     expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --add-dir "[^"]+" --name "Split view" -- "Read /);
   });
 
+  it('runs under the default account, or the project default, when the start names none', async () => {
+    const res = await start(GOOD);
+    expect(res.json().account).toBe('personal');
+    expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ account: 'personal' }));
+    // projects.json can name a project's default account; a start without one gets it.
+    const registry = join(dataDir, 'projects.json');
+    writeFileSync(registry, JSON.stringify({ projects: [{ cwd: PROJECT, account: 'work' }] }));
+    try {
+      rows = new Map([[MAIN_ID, row(MAIN_ID)]]);
+      const res2 = await start(GOOD);
+      expect(res2.json().account).toBe('work');
+    } finally {
+      rmSync(registry, { force: true });
+    }
+  });
+
+  it('runs under the account the start names, and list shows it', async () => {
+    const res = await start({ ...GOOD, account: 'work' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().account).toBe('work');
+    expect(rows.get(res.json().sessionId)!.account).toBe('work');
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/agent/sessions',
+      remoteAddress: '127.0.0.1',
+      headers: { authorization: `Bearer ${mainToken}` },
+    });
+    expect(list.json().sessions[0].account).toBe('work');
+  });
+
+  it('refuses a start on the wrong login with 409, naming found and expected, before creating anything', async () => {
+    (deps.preflight as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      ok: false,
+      account: 'work',
+      configDir: 'C:\cfg',
+      reason: 'mismatch',
+      found: { accountUuid: 'b', emailAddress: 'me@home.example' },
+      expected: { organizationUuid: 'org-1' },
+      message: 'Account "work" (C:\cfg) is logged in as me@home.example, but expects organization org-1',
+    });
+    const res = await start({ ...GOOD, account: 'work' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain('me@home.example');
+    expect(res.json().error).toContain('org-1');
+    expect(deps.preflight).toHaveBeenCalledWith('work');
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses an account the config does not define, before creating anything', async () => {
+    const res = await start({ ...GOOD, account: 'nobody' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('personal, work');
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
   it('loads no MCP servers by default, and stores that on the row', async () => {
     const res = await start(GOOD);
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [] }));
     expect(rows.get(res.json().sessionId)!.mcpServers).toEqual([]);
-    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] });
+    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] }, 'personal');
     expect(deps.mcpServersFor).not.toHaveBeenCalled();
   });
 
   it('scopes in the MCP servers the start names', async () => {
     const res = await start({ ...GOOD, mcpServers: ['playwright', 'playwright'] });
     expect(res.statusCode).toBe(200);
-    expect(deps.mcpServersFor).toHaveBeenCalledWith(PROJECT);
+    expect(deps.mcpServersFor).toHaveBeenCalledWith(PROJECT, 'personal');
     expect(rows.get(res.json().sessionId)!.mcpServers).toEqual(['playwright']);
     const [, line] = (deps.injectCommand as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(line).toMatch(/^claude --permission-mode auto --strict-mcp-config --mcp-config "[^"]+" --add-dir /);
@@ -392,7 +452,7 @@ describe('start', () => {
   it('still starts when the launch drops a server, but stores and reports what it got', async () => {
     // The check passed, then the config lost the server (or its file couldn't be written).
     (deps.launchFlags as ReturnType<typeof vi.fn>).mockImplementationOnce((id: string, cwd: string, p: LaunchProfile) =>
-      launchFlags(id, cwd, { ...p, mcpServers: ['everhour'] }, FAKE_HOME)
+      launchFlags(id, cwd, { ...p, mcpServers: ['everhour'] }, join(FAKE_HOME, '.claude.json'))
     );
     const res = await start({ ...GOOD, mcpServers: ['playwright', 'everhour'] });
     expect(res.statusCode).toBe(200);
@@ -448,8 +508,8 @@ describe('list', () => {
     const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions).toEqual([
-      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
-      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, notification: null, prompt: { state: 'pending' } },
+      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], account: 'personal', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
+      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, account: 'personal', notification: null, prompt: { state: 'pending' } },
     ]);
   });
 });

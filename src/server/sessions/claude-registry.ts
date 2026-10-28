@@ -1,6 +1,6 @@
 /**
  * Claude's own name for each running Claude session, read from its live registry
- * (`~/.claude/sessions/<pid>.json`: `{ pid, sessionId, name, … }`). `name` is what
+ * (`<account configDir>/sessions/<pid>.json`: `{ pid, sessionId, name, … }`). `name` is what
  * `ListAgents` shows and what other agents address with `SendMessage`, so the sidebar
  * shows it beside a session whose claude-remote name differs (docs/session-orchestration.md).
  *
@@ -9,14 +9,15 @@
  * entry counts only while its pid is alive.
  */
 import { readdirSync, readFileSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { createLogger } from '../utils/logger.js';
+import { allSessionsDirs } from '../accounts.js';
 
 const logger = createLogger('claude-registry');
 
-export function claudeRegistryDir(): string {
-  return join(homedir(), '.claude', 'sessions');
+/** Every account's live registry: each session's `claude` writes to its own account's. */
+export function claudeRegistryDirs(): string[] {
+  return allSessionsDirs();
 }
 
 function pidAlive(pid: number): boolean {
@@ -29,17 +30,22 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** Claude session id → Claude's name, for every live entry in `dir`. */
+/** Claude session id → Claude's name, for every live entry in `dirs`. */
 export function readClaudeNames(
-  dir: string = claudeRegistryDir(),
+  dirs: string | string[] = claudeRegistryDirs(),
   isAlive: (pid: number) => boolean = pidAlive
 ): Map<string, string> {
   const names = new Map<string, string>();
+  for (const dir of Array.isArray(dirs) ? dirs : [dirs]) readRegistryDir(dir, isAlive, names);
+  return names;
+}
+
+function readRegistryDir(dir: string, isAlive: (pid: number) => boolean, names: Map<string, string>): void {
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith('.json'));
   } catch {
-    return names;
+    return;
   }
   for (const file of files) {
     try {
@@ -52,7 +58,6 @@ export function readClaudeNames(
       // Mid-write or not ours to understand: skip it.
     }
   }
-  return names;
 }
 
 let latest = new Map<string, string>();

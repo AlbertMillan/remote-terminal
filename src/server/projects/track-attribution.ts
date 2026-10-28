@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { open } from 'fs/promises';
-import { homedir } from 'os';
 import { basename, isAbsolute, join, relative, resolve } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
@@ -8,6 +7,7 @@ import { git, gitStatusEntries, type GitStatusEntry } from '../agent/claude-run.
 import { parsePhasesBlock, type PhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
 import { readProjectPlan } from './project-plan.js';
+import { allProjectsDirs } from '../accounts.js';
 import { featuresOf, type ProjectDoc } from './project-doc-format.js';
 
 const logger = createLogger('track-attribution');
@@ -199,23 +199,33 @@ async function scanTranscriptNow(path: string): Promise<TranscriptSummary | null
   return entry.summary;
 }
 
-/** The Claude Code transcript folder for a cwd: every non-alphanumeric becomes '-'. */
-function transcriptDirFor(cwd: string): string | null {
-  const root = join(homedir(), '.claude', 'projects');
+/**
+ * The Claude Code transcript folders for a cwd, one per account that has one
+ * (every non-alphanumeric becomes '-'): a project is worked on by either login.
+ */
+function transcriptDirsFor(cwd: string): string[] {
   const slug = resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-  try {
-    const hit = readdirSync(root, { withFileTypes: true }).find(
-      (e) => e.isDirectory() && e.name.toLowerCase() === slug
-    );
-    return hit ? join(root, hit.name) : null;
-  } catch {
-    return null;
+  const dirs: string[] = [];
+  for (const root of allProjectsDirs()) {
+    try {
+      const hit = readdirSync(root, { withFileTypes: true }).find(
+        (e) => e.isDirectory() && e.name.toLowerCase() === slug
+      );
+      if (hit) dirs.push(join(root, hit.name));
+    } catch {
+      // This account has no projects folder yet.
+    }
   }
+  return dirs;
 }
 
 async function projectTranscripts(cwd: string): Promise<TranscriptSummary[]> {
-  const dir = transcriptDirFor(cwd);
-  if (!dir) return [];
+  const out: TranscriptSummary[] = [];
+  for (const dir of transcriptDirsFor(cwd)) out.push(...(await transcriptsIn(dir)));
+  return out;
+}
+
+async function transcriptsIn(dir: string): Promise<TranscriptSummary[]> {
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));

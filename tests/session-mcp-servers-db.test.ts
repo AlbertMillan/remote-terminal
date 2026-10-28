@@ -37,6 +37,7 @@ function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetad
     claudeSessionId: null,
     isFork: false,
     forkJsonlPath: null,
+    account: 'personal',
     ...overrides,
   };
 }

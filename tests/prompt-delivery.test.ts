@@ -17,6 +17,8 @@ const CREATED = '2026-10-04T16:47:45.785Z';
 const T0 = Date.parse(CREATED);
 
 let home: string;
+/** The account's projects folder under the stand-in home. */
+const projects = () => join(home, '.claude', 'projects');
 
 function transcript(name: string, lines: object[], mtime = new Date(T0 + 5_000)): string {
   const dir = join(home, '.claude', 'projects', claudeProjectSlug(CWD));
@@ -60,37 +62,37 @@ describe('namesPrompt', () => {
 describe('promptDelivery', () => {
   it('is received once a transcript in the session’s folder starts with the prompt', () => {
     transcript('aaaa', [{ type: 'summary' }, userLine(ourPrompt)]);
-    expect(promptDelivery(session(), T0 + 10_000, home)).toEqual({ state: 'received' });
+    expect(promptDelivery(session(), T0 + 10_000, projects())).toEqual({ state: 'received' });
   });
 
   it('is pending inside the grace period with no transcript', () => {
-    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS - 1, home)).toEqual({ state: 'pending' });
+    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS - 1, projects())).toEqual({ state: 'pending' });
   });
 
   it('is not-received after it: Claude registered but wrote nothing (the --add-dir bug)', () => {
-    const d = promptDelivery(session('402eec0b-675c-4fab-a1fc-deaa35883ba7'), T0 + PROMPT_GRACE_MS, home);
+    const d = promptDelivery(session('402eec0b-675c-4fab-a1fc-deaa35883ba7'), T0 + PROMPT_GRACE_MS, projects());
     expect(d.state).toBe('not-received');
     expect(d.detail).toMatch(/Claude started, but the prompt never reached it/);
   });
 
   it('names a Claude that never registered differently', () => {
-    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS, home).detail).toMatch(/Claude may never have started/);
+    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS, projects()).detail).toMatch(/Claude may never have started/);
   });
 
   it('is not-received when the first message came from elsewhere (a cross-session message)', () => {
     transcript('bbbb', [userLine('Another Claude session sent a message: YOUR TASK …')]);
-    expect(promptDelivery(session('bbbb'), T0 + PROMPT_GRACE_MS, home).state).toBe('not-received');
+    expect(promptDelivery(session('bbbb'), T0 + PROMPT_GRACE_MS, projects()).state).toBe('not-received');
   });
 
   it('ignores a transcript older than the session (an earlier session in the same folder)', () => {
     transcript('cccc', [userLine(ourPrompt)], new Date(T0 - 60_000));
-    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS, home).state).toBe('not-received');
+    expect(promptDelivery(session(), T0 + PROMPT_GRACE_MS, projects()).state).toBe('not-received');
   });
 
   it('finds the registered transcript even outside the computed folder', () => {
     const other = join(home, '.claude', 'projects', 'somewhere-else');
     mkdirSync(other, { recursive: true });
     writeFileSync(join(other, 'dddd.jsonl'), JSON.stringify(userLine(ourPrompt)) + '\n');
-    expect(promptDelivery(session('dddd'), T0 + PROMPT_GRACE_MS, home)).toEqual({ state: 'received' });
+    expect(promptDelivery(session('dddd'), T0 + PROMPT_GRACE_MS, projects())).toEqual({ state: 'received' });
   });
 });

@@ -1,7 +1,7 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { tryGetTranscriptPath } from '../sessions/transcript.js';
+import { defaultAccount, projectsDir } from '../accounts.js';
 
 /**
  * Did a started session's agent get its prompt? (docs/session-orchestration.md)
@@ -33,7 +33,7 @@ export const PROMPT_GRACE_MS = 90_000;
 /** A transcript's first user turn is near its start; never read a whole long one. */
 const READ_LIMIT = 256 * 1024;
 
-/** Claude Code's folder under ~/.claude/projects: every non-alphanumeric becomes `-`. */
+/** Claude Code's folder under an account's projects folder: every non-alphanumeric becomes `-`. */
 export function claudeProjectSlug(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
@@ -64,15 +64,15 @@ export function namesPrompt(transcript: string, sessionId: string): boolean {
  * was created (the hook may not be installed, or may not have run yet).
  */
 function candidateTranscripts(
-  home: string,
+  projects: string,
   session: { cwd: string; createdAt: string; claudeSessionId: string | null }
 ): string[] {
   const paths = new Set<string>();
   if (session.claudeSessionId) {
-    const registered = tryGetTranscriptPath(home, session.cwd, session.claudeSessionId);
+    const registered = tryGetTranscriptPath(projects, session.cwd, session.claudeSessionId);
     if (registered) paths.add(registered);
   }
-  const dir = join(home, '.claude', 'projects', claudeProjectSlug(session.cwd));
+  const dir = join(projects, claudeProjectSlug(session.cwd));
   const since = Date.parse(session.createdAt);
   try {
     for (const name of readdirSync(dir)) {
@@ -90,12 +90,13 @@ function candidateTranscripts(
   return [...paths];
 }
 
+/** `projects` is the session's account's projects folder (accounts.ts), where its `claude` writes. */
 export function promptDelivery(
-  session: { id: string; cwd: string; createdAt: string; claudeSessionId: string | null },
+  session: { id: string; cwd: string; createdAt: string; claudeSessionId: string | null; account?: string },
   now: number = Date.now(),
-  home: string = homedir()
+  projects: string = projectsDir(session.account ?? defaultAccount())
 ): PromptDelivery {
-  if (candidateTranscripts(home, session).some((p) => namesPrompt(readHead(p), session.id))) {
+  if (candidateTranscripts(projects, session).some((p) => namesPrompt(readHead(p), session.id))) {
     return { state: 'received' };
   }
   const age = now - Date.parse(session.createdAt);

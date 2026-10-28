@@ -7,6 +7,12 @@ export interface LogEntryMeta {
   session: string; // session name (or "(backfill)")
   branch: string;
   claudeSessionId: string; // or "backfill"
+  /**
+   * The Claude login the session ran under (docs/accounts.md). Both accounts commit as
+   * the same git user, so this is the only record of which login made a change. Absent
+   * on backfills and on entries from before accounts.
+   */
+  account?: string;
   blockers: number;
   openItems: number;
 }
@@ -133,6 +139,7 @@ export function buildEntrySkeleton(opts: {
   return [
     buildMarker(meta),
     `## ${headingDate} · ${headingTitle} · ${meta.branch}`,
+    ...(meta.account ? [`**Account:** ${meta.account}`] : []),
     `**Done:** ${hints.done}`,
     `**Changed:** ${hints.changed}`,
     `**Plan progress:** ${hints.planProgress}`,

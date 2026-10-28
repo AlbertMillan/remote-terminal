@@ -8,9 +8,14 @@ import {
   type LandNotificationPayload,
   type PromptMissingNotificationPayload,
   type SessionClaudeNamesPayload,
+  type SessionAccountWarningsPayload,
+  type SessionLoginEndedPayload,
+  type AccountChangedNotificationPayload,
 } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
+import { defaultAccount } from '../accounts.js';
+import { accountWarningFor } from '../sessions/account-watch.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -82,7 +87,7 @@ export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 
   }
 }
 
-export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null }): SessionInfo {
+export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null; account?: string }): SessionInfo {
   return {
     id: session.id,
     name: session.name,
@@ -101,6 +106,8 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     spawnedBy: session.spawnedBy ?? null,
     permissionMode: session.permissionMode ?? null,
     claudeName: claudeNameFor(session.claudeSessionId),
+    account: session.account ?? defaultAccount(),
+    accountWarning: accountWarningFor(session.id),
   };
 }
 
@@ -143,6 +150,33 @@ export function broadcastSessionAdded(session: SessionInfo): void {
  * this is the only place the result of that Land is ever reported.
  */
 export function broadcastLandResult(payload: LandNotificationPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('notification', payload));
+    }
+  }
+}
+
+export function broadcastAccountWarnings(warnings: Record<string, string>): void {
+  const payload: SessionAccountWarningsPayload = { warnings };
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.accountWarnings', payload));
+    }
+  }
+}
+
+/** A Log in session exited: to every connection, so its retry survives a session switch. */
+export function broadcastLoginEnded(payload: SessionLoginEndedPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.loginEnded', payload));
+    }
+  }
+}
+
+/** A running session's account changed login. Unfiltered, like a Land result: it is a warning about whose login runs it. */
+export function broadcastAccountChanged(payload: AccountChangedNotificationPayload): void {
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage('notification', payload));

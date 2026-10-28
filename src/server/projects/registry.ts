@@ -23,6 +23,8 @@ export interface RegistryProject {
   doc?: string;
   /** Override the display name (defaults to the directory basename). */
   name?: string;
+  /** The account its new sessions default to (accounts.ts); any session may pick another. */
+  account?: string;
 }
 
 export interface Registry {
@@ -84,6 +86,7 @@ export function normalizeRegistry(raw: unknown): Registry {
         cwd: e.cwd,
         ...(typeof e.doc === 'string' && e.doc ? { doc: e.doc } : {}),
         ...(typeof e.name === 'string' && e.name ? { name: e.name } : {}),
+        ...(typeof e.account === 'string' && e.account ? { account: e.account } : {}),
       });
     }
   }

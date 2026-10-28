@@ -10,6 +10,11 @@ export function isInside(root: string, p: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+/** Normalize a path for case/separator-insensitive dedup keys (Windows-friendly). */
+export function pathKey(p: string): string {
+  return p.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();
+}
+
 /**
  * The sessions whose cwd is the worktree or below it. Land closes these,
  * Delete track closes and counts them, and the board counts them for the Land

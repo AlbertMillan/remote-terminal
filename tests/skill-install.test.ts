@@ -27,6 +27,15 @@ describe('installSkillsAtBoot', () => {
     );
   });
 
+  it("installs into every account's skills folder", async () => {
+    const personal = tmp();
+    const work = tmp();
+    expect(await installSkillsAtBoot({ root: repoRoot, dest: [personal, work], env: {} })).toBe('ran');
+    for (const dest of [personal, work]) {
+      expect(existsSync(join(dest, 'claude-remote-sessions', 'SKILL.md'))).toBe(true);
+    }
+  });
+
   it('skips an isolated boot, which usually runs an unlanded worktree build', async () => {
     const dest = tmp();
     const result = await installSkillsAtBoot({ root: repoRoot, dest, env: { CLAUDE_REMOTE_CONFIG: 'x.json' } });

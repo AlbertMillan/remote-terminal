@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { copyFileSync, unlinkSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
 import { createPty, writeToPty, type ScrollbackBuffer } from './pty-handler.js';
 import { findClaudeProjectDir } from './transcript.js';
@@ -16,7 +15,9 @@ import {
   logSessionEvent,
   getMaxSessionSortOrder,
   launchProfileForTranscript,
+  accountForTranscript,
 } from '../db/queries.js';
+import { assertAccountReady, claudeJsonPath, findTranscript, projectsDir, resolveStartAccount, settingsPath } from '../accounts.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -82,7 +83,7 @@ export function claudeNameFlag(name: string | null | undefined): string {
 function injectResumeCommand(session: ActiveSession, resumeId: string, profile?: LaunchProfile): void {
   // A dropped server is logged in launchFlags and stays on the row: it loads again once the
   // config has it back.
-  const flags = profile ? launchFlags(session.id, session.cwd, profile).flags : '';
+  const flags = profile ? launchFlags(session.id, session.cwd, profile, claudeJsonPath(session.account)).flags : '';
   injectCommand(session, `claude ${flags}--resume ${resumeId}${claudeNameFlag(session.name)}`);
 }
 
@@ -104,18 +105,20 @@ export async function forkSession(
 
   const sourceMetadata = getSessionMetadata(sourceId);
   if (!sourceMetadata) throw new Error('Source session not found');
+  assertAccountReady(sourceMetadata.account);
 
   const { claudeSessionId } = sourceMetadata;
   if (!claudeSessionId) {
     throw new Error(
       'No Claude session ID registered for this session. ' +
-      'Ensure the claude-session hook is configured in ~/.claude/settings.json ' +
+      `Ensure the claude-session hook is configured in ${settingsPath(sourceMetadata.account)} ` +
       'and Claude has stopped at least once in this terminal.'
     );
   }
 
   // C1: Robust project dir lookup — computed slug first, fallback scans all project dirs
-  const projectDir = findClaudeProjectDir(homedir(), sourceMetadata.cwd, claudeSessionId);
+  // The source's own account: the copy must sit where its `claude --resume` will look.
+  const projectDir = findClaudeProjectDir(projectsDir(sourceMetadata.account), sourceMetadata.cwd, claudeSessionId);
   const sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
   const newClaudeSessionId = randomUUID();
   const destJsonlPath = join(projectDir, `${newClaudeSessionId}.jsonl`);
@@ -146,6 +149,7 @@ export async function forkSession(
     claudeSessionId: newClaudeSessionId,
     isFork: true,
     forkJsonlPath: destJsonlPath,
+    account: sourceMetadata.account,
   };
   insertSession(metadata);
 
@@ -160,7 +164,7 @@ export async function forkSession(
   // Create PTY
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
+    ptyProcess = createPty({ shell, cwd, cols, rows, account: metadata.account, env: sessionEnv(id) });
   } catch (error) {
     revokeSessionToken(id);
     try { unlinkSync(destJsonlPath); } catch { /* best-effort cleanup */ }
@@ -174,6 +178,7 @@ export async function forkSession(
     ownerId: options.ownerId,
     status: 'active',
     cols, rows,
+    account: metadata.account,
     pty: ptyProcess,
     scrollback: [],
     connectedClients: new Set(),
@@ -206,6 +211,7 @@ export async function openClaudeSession(
     ownerId?: string;
     cols?: number;
     rows?: number;
+    account?: string;
   }
 ): Promise<ActiveSession> {
   const { claudeSessionId, cwd, mode } = options;
@@ -225,12 +231,20 @@ export async function openClaudeSession(
 
   // In fork mode we must locate and copy the source transcript. In resume mode we run against
   // the original id directly and let `claude --resume` surface any missing-transcript error.
+  // A transcript can only be resumed from the folder it lives in: the account of the row
+  // that ran it, else the account whose folder holds it, else the start's.
+  const account =
+    accountForTranscript(claudeSessionId) ??
+    findTranscript(cwd, claudeSessionId)?.account ??
+    resolveStartAccount(options.account, cwd);
+  assertAccountReady(account);
+
   let resumeId = claudeSessionId;
   let isFork = false;
   let forkJsonlPath: string | null = null;
   let sourceJsonlPath: string | null = null;
   if (mode === 'fork') {
-    const projectDir = findClaudeProjectDir(homedir(), cwd, claudeSessionId);
+    const projectDir = findClaudeProjectDir(projectsDir(account), cwd, claudeSessionId);
     sourceJsonlPath = join(projectDir, `${claudeSessionId}.jsonl`);
     resumeId = randomUUID();
     forkJsonlPath = join(projectDir, `${resumeId}.jsonl`);
@@ -263,6 +277,7 @@ export async function openClaudeSession(
     forkJsonlPath,
     permissionMode: profile?.permissionMode ?? null,
     mcpServers: profile?.mcpServers ?? null,
+    account,
   };
   insertSession(metadata);
 
@@ -277,7 +292,7 @@ export async function openClaudeSession(
 
   let ptyProcess;
   try {
-    ptyProcess = createPty({ shell, cwd, cols, rows, env: sessionEnv(id) });
+    ptyProcess = createPty({ shell, cwd, cols, rows, account: metadata.account, env: sessionEnv(id) });
   } catch (error) {
     revokeSessionToken(id);
     if (forkJsonlPath) { try { unlinkSync(forkJsonlPath); } catch { /* best-effort cleanup */ } }
@@ -291,6 +306,7 @@ export async function openClaudeSession(
     ownerId: options.ownerId,
     status: 'active',
     cols, rows,
+    account: metadata.account,
     pty: ptyProcess,
     scrollback: [],
     connectedClients: new Set(),
@@ -332,11 +348,15 @@ export function reviveSession(
   // would resume a conversation whose JSONL no longer exists.
   if (metadata.isFork) throw new Error('Forked sessions cannot be revived; their transcript is removed on restart');
 
+  // Its own account, whatever the start of a new session would pick: the conversation
+  // only resumes from the folder it lives in.
+  assertAccountReady(metadata.account);
+
   const cols = options.cols || metadata.cols || 80;
   const rows = options.rows || metadata.rows || 24;
   const now = new Date();
 
-  logger.info({ id, cwd: metadata.cwd, claudeSessionId: metadata.claudeSessionId }, 'Reviving stale session');
+  logger.info({ id, cwd: metadata.cwd, claudeSessionId: metadata.claudeSessionId, account: metadata.account }, 'Reviving stale session');
 
   let ptyProcess;
   try {
@@ -345,6 +365,7 @@ export function reviveSession(
       cwd: metadata.cwd,
       cols,
       rows,
+      account: metadata.account,
       env: sessionEnv(id),
     });
   } catch (error) {
@@ -366,6 +387,7 @@ export function reviveSession(
     status: 'active',
     cols,
     rows,
+    account: metadata.account,
     pty: ptyProcess,
     tmuxSession: metadata.tmuxSession ?? undefined,
     scrollback: [],

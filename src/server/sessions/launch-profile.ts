@@ -1,11 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { trackBranchContaining } from '../projects/track-store.js';
 import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
 import { pathKey } from './project-discovery.js';
 import { mcpConfigPathFor } from './prompt-file.js';
+import { claudeJsonPath, defaultAccount } from '../accounts.js';
 
 /**
  * How a started session's `claude` is launched, every time it is launched: at start, on
@@ -57,7 +57,7 @@ function ancestors(dir: string): string[] {
 
 /**
  * Every MCP server the user's Claude config defines that a session in `cwd` can be given by
- * name, in Claude Code's precedence: local scope (`~/.claude.json` `projects[<dir>]`, for the
+ * name, in Claude Code's precedence: local scope (the account's `.claude.json` `projects[<dir>]`, for the
  * cwd and the project it belongs to), then the nearest `.mcp.json`, then user scope. Plugin
  * servers and claude.ai connectors aren't in these files and never appear.
  *
@@ -67,7 +67,7 @@ function ancestors(dir: string): string[] {
  * never gets a gitignored or uncommitted `.mcp.json`. Walking both makes every name the check
  * passes one the launch finds.
  */
-export function availableMcpServers(cwd: string, home: string = homedir()): Map<string, ServerConfig> {
+export function availableMcpServers(cwd: string, claudeJsonFile: string = claudeJsonPath(defaultAccount())): Map<string, ServerConfig> {
   let projectCwd = cwd;
   try {
     projectCwd = trackBranchContaining(cwd)?.projectCwd ?? cwd;
@@ -75,7 +75,7 @@ export function availableMcpServers(cwd: string, home: string = homedir()): Map<
     // Only the local-scope lookup needs it; the cwd's own entry still counts.
     logger.warn({ cwd, error }, 'Could not map the cwd to its project for local-scope MCP servers');
   }
-  const claudeJson = readJson(join(home, '.claude.json')) ?? {};
+  const claudeJson = readJson(claudeJsonFile) ?? {};
   const layers: Record<string, ServerConfig>[] = [serversOf(claudeJson.mcpServers)];
   // Farthest first, so the nearer file wins. A folder both chains share is read once, in the
   // project's chain: read again after the project's own folder, it would override it.
@@ -134,9 +134,9 @@ export function writeMcpConfig(
   sessionId: string,
   cwd: string,
   names: string[],
-  home: string = homedir()
+  claudeJsonFile?: string
 ): { path: string; written: string[] } {
-  const available = availableMcpServers(cwd, home);
+  const available = availableMcpServers(cwd, claudeJsonFile);
   const mcpServers: Record<string, ServerConfig> = {};
   for (const name of names) {
     const cfg = available.get(name);
@@ -166,7 +166,8 @@ export function launchFlags(
   sessionId: string,
   cwd: string,
   profile: LaunchProfile,
-  home: string = homedir()
+  /** The session's account's `.claude.json` (accounts.ts claudeJsonPath), whose servers it may load. */
+  claudeJsonFile?: string
 ): LaunchFlags {
   const mode = permissionModeFlag(profile.permissionMode);
   if (!profile.mcpServers) return { flags: mode, mcpServers: null };
@@ -174,7 +175,7 @@ export function launchFlags(
   let loaded: string[] = [];
   if (profile.mcpServers.length > 0) {
     try {
-      const { path, written } = writeMcpConfig(sessionId, cwd, profile.mcpServers, home);
+      const { path, written } = writeMcpConfig(sessionId, cwd, profile.mcpServers, claudeJsonFile);
       if (UNSAFE_IN_QUOTES.test(path)) throw new Error(`${path} has a character no shell quotes safely`);
       if (written.length > 0) {
         scoped = `--mcp-config "${path}" `;

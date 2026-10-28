@@ -10,7 +10,7 @@ The server supports webhook notifications to alert users when Claude Code needs 
 - Server sends: `notification` (with sessionId, type, timestamp)
 - Client sends: `notification.dismiss`, `notification.preferences.get`, `notification.preferences.set`
 
-**Claude Code Hooks** (add to `~/.claude/settings.json`):
+**Claude Code Hooks** (add to every Claude account's `settings.json`, e.g. `~/.claude/settings.json`; `scripts/install-account-setup.mjs` copies them to another account, see `docs/accounts.md`):
 ```json
 {
   "hooks": {

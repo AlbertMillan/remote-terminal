@@ -19,10 +19,13 @@ export interface WindowReading {
 }
 
 export interface PlanUsage {
+  /** Whose limits these are: each Claude account has its own (docs/accounts.md). */
+  account?: string;
   snapshot: { fiveHour: WindowReading | null; sevenDay: WindowReading | null } | null;
   /** When the relay last reached the server, limits or not; null if it never has. */
   relaySeenAt?: string | null;
-  setup: { command: string | null };
+  /** `settingsPath`: that account's settings.json, where the status line goes. */
+  setup: { command: string | null; settingsPath?: string };
 }
 
 export type Level = 'ok' | 'warn' | 'danger';
@@ -113,7 +116,7 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
     return {
       summary: '<span class="pu-label">Plan usage</span> <span class="pu-muted">not set up</span>',
       body:
-        '<p>No reading yet. Add this to <code>~/.claude/settings.json</code>; the chip fills in ' +
+        `<p>No reading yet. Add this to <code>${escapeHtml(data.setup.settingsPath ?? '~/.claude/settings.json')}</code>; the chip fills in ` +
         'once a Claude Code session has answered a message.</p>' +
         snippet +
         '<p class="pu-detail">Already added? Then the status line cannot reach this server — ' +
@@ -162,7 +165,9 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
     (stale ? ` (${escapeHtml(age)} ago)` : '') +
     '. Readings arrive while a Claude Code session is open; job runs do not send them.</p>';
 
-  return { summary, body: rows + footer, level, stale };
+  // Whose plan: with two logins, the attached session's account.
+  const whose = data.account ? `<p class="pu-detail">Account: ${escapeHtml(data.account)}</p>` : '';
+  return { summary, body: whose + rows + footer, level, stale };
 }
 
 /** Polls the server and keeps the sidebar chip current. */
@@ -198,9 +203,19 @@ export class PlanUsageChip {
     document.removeEventListener('visibilitychange', this.onVisibility);
   }
 
+  /** The account whose limits to show: the attached session's (null: the default account). */
+  private account: string | null = null;
+
+  setAccount(account: string | null | undefined): void {
+    const next = account ?? null;
+    if (next === this.account) return;
+    this.account = next;
+    void this.refresh();
+  }
+
   async refresh(): Promise<void> {
     try {
-      const res = await fetch('/api/plan-usage');
+      const res = await fetch(this.account ? `/api/plan-usage?account=${encodeURIComponent(this.account)}` : '/api/plan-usage');
       if (!res.ok) return;
       this.data = (await res.json()) as PlanUsage;
       this.render();

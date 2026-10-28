@@ -42,7 +42,7 @@ function statusText(payload) {
 }
 
 /**
- * Post the limits — only the limits. The payload also carries the working
+ * Post the limits — only the limits, and the config folder they belong to. The payload also carries the working
  * directory, transcript path, session id and cost, none of which the server
  * reads, and CLAUDE_REMOTE_URL may point at another machine.
  *
@@ -54,7 +54,9 @@ async function relay(payload) {
     await fetch(`${SERVER}/api/plan-usage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate_limits: payload?.rate_limits ?? null }),
+      // Which login's limits: each account has its own (docs/accounts.md). Empty is
+      // Claude Code's default ~/.claude.
+      body: JSON.stringify({ rate_limits: payload?.rate_limits ?? null, config_dir: process.env.CLAUDE_CONFIG_DIR || null }),
       signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
     });
   } catch {

@@ -2,7 +2,29 @@ import { escapeHtml, escapeAttr } from './html-utils.js';
 import { TrackPicker } from './track-picker.js';
 
 export interface NewSessionModalHost {
-  createSession(name?: string, cwd?: string, notice?: string): void;
+  createSession(name?: string, cwd?: string, notice?: string, account?: string): void;
+}
+
+/** GET /api/accounts: the accounts a session can run under (docs/accounts.md). */
+export interface AccountsResponse {
+  defaultAccount: string;
+  accounts: { name: string; ready: boolean }[];
+}
+
+/**
+ * The Account picker's options. The first, empty value lets the server pick: the
+ * project's default account, else the configured one. An account whose folder
+ * holds the wrong login is marked, and still pickable: picking it is refused with
+ * Log in / Clean up.
+ */
+export function accountOptionsHtml(data: AccountsResponse | null): string {
+  const def = data?.defaultAccount ?? 'personal';
+  const options = [`<option value="">Default (project's, else ${escapeHtml(def)})</option>`];
+  for (const a of data?.accounts ?? []) {
+    const note = a.ready ? '' : ' — not logged in as expected';
+    options.push(`<option value="${escapeAttr(a.name)}">${escapeHtml(a.name)}${note}</option>`);
+  }
+  return options.join('');
 }
 
 /**
@@ -28,6 +50,7 @@ export class NewSessionModal {
       (document.getElementById('session-cwd-input') as HTMLInputElement).value = prefillCwd ?? '';
       this.hideCwdSuggestions();
       void this.loadRecentPaths();
+      void this.loadAccounts();
       void this.trackPicker.refresh();
       document.getElementById('session-name-input')?.focus();
     }
@@ -36,6 +59,20 @@ export class NewSessionModal {
   hide(): void {
     document.getElementById('new-session-modal')?.classList.add('hidden');
     this.hideCwdSuggestions();
+  }
+
+  private async loadAccounts(): Promise<void> {
+    const select = document.getElementById('session-account-select') as HTMLSelectElement | null;
+    if (!select) return;
+    let data: AccountsResponse | null = null;
+    try {
+      const res = await fetch('/api/accounts');
+      if (res.ok) data = (await res.json()) as AccountsResponse;
+    } catch {
+      // The server's default still applies: the picker offers only that.
+    }
+    select.innerHTML = accountOptionsHtml(data);
+    select.value = '';
   }
 
   // Recent working-directory suggestions
@@ -165,6 +202,7 @@ export class NewSessionModal {
 
     let name = nameInput.value.trim() || undefined;
     let cwd = cwdInput.value.trim() || undefined;
+    const account = (document.getElementById('session-account-select') as HTMLSelectElement | null)?.value || undefined;
 
     // Disabled as well as guarded, so the wait doesn't look like a dead button.
     const confirm = document.getElementById('new-session-confirm') as HTMLButtonElement | null;
@@ -183,7 +221,7 @@ export class NewSessionModal {
       name = name ?? picked.track;
     }
 
-    this.host.createSession(name, cwd, picked?.notice);
+    this.host.createSession(name, cwd, picked?.notice, account);
     this.hide();
   }
 }

@@ -12,10 +12,18 @@ import type { AddressInfo } from 'net';
 
 const SCRIPT = join(__dirname, '..', 'scripts', 'statusline.mjs');
 
-function run(stdin: string, url: string): Promise<{ stdout: string; ms: number; code: number | null }> {
+function run(
+  stdin: string,
+  url: string,
+  configDir?: string
+): Promise<{ stdout: string; ms: number; code: number | null }> {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn(process.execPath, [SCRIPT], { env: { ...process.env, CLAUDE_REMOTE_URL: url } });
+    // CLAUDE_CONFIG_DIR as the session's `claude` has it: unset for the default ~/.claude.
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_REMOTE_URL: url };
+    delete env.CLAUDE_CONFIG_DIR;
+    if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    const child = spawn(process.execPath, [SCRIPT], { env });
     let stdout = '';
     child.stdout.on('data', (d) => (stdout += String(d)));
     child.on('close', (code) => resolve({ stdout, ms: Date.now() - started, code }));
@@ -72,7 +80,7 @@ describe('statusline.mjs', () => {
       }),
       url
     );
-    expect(Object.keys(JSON.parse(received[0]))).toEqual(['rate_limits']);
+    expect(Object.keys(JSON.parse(received[0]))).toEqual(['rate_limits', 'config_dir']);
     expect(received[0]).not.toContain('secret-project');
   });
 
@@ -82,7 +90,14 @@ describe('statusline.mjs', () => {
     const url = await listen((b) => received.push(b));
     const out = await run(JSON.stringify({ model: { display_name: 'Opus 5' } }), url);
     expect(out.stdout).toBe('Opus 5\n');
-    expect(received).toEqual(['{"rate_limits":null}']);
+    expect(received).toEqual(['{"rate_limits":null,"config_dir":null}']);
+  });
+
+  it("says which account's folder the limits belong to", async () => {
+    const received: string[] = [];
+    const url = await listen((b) => received.push(b));
+    await run(JSON.stringify(PAYLOAD), url, 'C:/Users/me/.claude-personal');
+    expect(JSON.parse(received[0]).config_dir).toBe('C:/Users/me/.claude-personal');
   });
 
   it('still prints, promptly, when the server is down', async () => {

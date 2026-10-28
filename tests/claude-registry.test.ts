@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { readClaudeNames } from '../src/server/sessions/claude-registry.js';
@@ -56,6 +56,15 @@ describe('readClaudeNames', () => {
     writeFileSync(join(dir, '4.json'), JSON.stringify({ pid: 4, sessionId: 'ddd' }));
     writeFileSync(join(dir, '5.abc.key'), '{"peerToken":"x"}');
     expect(Object.fromEntries(readClaudeNames(dir, () => true))).toEqual({ aaa: 'ok' });
+  });
+
+  it("reads every account's registry folder, a missing one included", () => {
+    entry(1, 'aaa', 'work-one');
+    const other = join(dir, 'personal-sessions');
+    mkdirSync(other);
+    writeFileSync(join(other, '2.json'), JSON.stringify({ pid: 2, sessionId: 'bbb', name: 'personal-one' }));
+    const names = readClaudeNames([dir, other, join(dir, 'nope')], () => true);
+    expect(Object.fromEntries(names)).toEqual({ aaa: 'work-one', bbb: 'personal-one' });
   });
 
   it('returns nothing for a missing folder', () => {

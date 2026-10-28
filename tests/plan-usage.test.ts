@@ -35,6 +35,11 @@ const { registerPlanUsageRoutes, statuslineCommand } = await import('../src/serv
 const NOW = Date.now();
 const inHours = (h: number) => Math.round(NOW / 1000 + h * 3600);
 const snapshotFile = join(dataDir, 'plan-usage.json');
+/** The default folder's account's entry in the file: readings with no folder named are its. */
+const onDiskOf = (text: string) => JSON.parse(text).accounts.work;
+/** The account these readings are recorded under: the default folder's, as a relay post without `config_dir`. */
+const A = 'work';
+const onDisk = () => onDiskOf(readFileSync(snapshotFile, 'utf8'));
 
 /** A status line payload, trimmed to what matters. */
 function payload(five: number | null, seven: number | null, fiveResets = inHours(2), sevenResets = inHours(96)) {
@@ -56,41 +61,41 @@ beforeEach(() => {
 
 describe('recording readings', () => {
   it('stores both windows from a status line payload', () => {
-    expect(plan.recordReading(payload(55, 22), NOW)).toBe(true);
-    const snap = plan.getSnapshot()!;
+    expect(plan.recordReading(payload(55, 22), A, NOW)).toBe(true);
+    const snap = plan.getSnapshot(A)!;
     expect(snap.fiveHour).toMatchObject({ usedPercentage: 55, resetsAt: inHours(2) });
     expect(snap.sevenDay).toMatchObject({ usedPercentage: 22, resetsAt: inHours(96) });
   });
 
   it('ignores a payload with no limits — normal before a session’s first response', () => {
-    expect(plan.recordReading({ model: { display_name: 'Opus 5' } }, NOW)).toBe(false);
-    expect(plan.getSnapshot()).toBeNull();
+    expect(plan.recordReading({ model: { display_name: 'Opus 5' } }, A, NOW)).toBe(false);
+    expect(plan.getSnapshot(A)).toBeNull();
   });
 
   it('never lets a stale session lower the figure within a window', () => {
-    plan.recordReading(payload(55, 22), NOW);
-    plan.recordReading(payload(30, 10), NOW + 60_000); // an idle session's cached limits
-    expect(plan.getSnapshot()!.fiveHour!.usedPercentage).toBe(55);
-    expect(plan.getSnapshot()!.sevenDay!.usedPercentage).toBe(22);
+    plan.recordReading(payload(55, 22), A, NOW);
+    plan.recordReading(payload(30, 10), A, NOW + 60_000); // an idle session's cached limits
+    expect(plan.getSnapshot(A)!.fiveHour!.usedPercentage).toBe(55);
+    expect(plan.getSnapshot(A)!.sevenDay!.usedPercentage).toBe(22);
   });
 
   it('lets a new window replace the old one, even at a lower percentage', () => {
-    plan.recordReading(payload(90, 22), NOW);
-    plan.recordReading(payload(3, 22, inHours(7)), NOW + 60_000);
-    expect(plan.getSnapshot()!.fiveHour).toMatchObject({ usedPercentage: 3, resetsAt: inHours(7) });
+    plan.recordReading(payload(90, 22), A, NOW);
+    plan.recordReading(payload(3, 22, inHours(7)), A, NOW + 60_000);
+    expect(plan.getSnapshot(A)!.fiveHour).toMatchObject({ usedPercentage: 3, resetsAt: inHours(7) });
   });
 
   it('refreshes the observation time when a reading confirms the value', () => {
-    plan.recordReading(payload(55, 22), NOW);
-    plan.recordReading(payload(55, 22), NOW + 5 * 60_000);
-    expect(plan.getSnapshot()!.fiveHour!.observedAt).toBe(new Date(NOW + 5 * 60_000).toISOString());
+    plan.recordReading(payload(55, 22), A, NOW);
+    plan.recordReading(payload(55, 22), A, NOW + 5 * 60_000);
+    expect(plan.getSnapshot(A)!.fiveHour!.observedAt).toBe(new Date(NOW + 5 * 60_000).toISOString());
   });
 
   it('keeps a window the next payload omits', () => {
-    plan.recordReading(payload(55, 22), NOW);
-    plan.recordReading(payload(60, null), NOW + 60_000);
-    expect(plan.getSnapshot()!.sevenDay!.usedPercentage).toBe(22);
-    expect(plan.getSnapshot()!.fiveHour!.usedPercentage).toBe(60);
+    plan.recordReading(payload(55, 22), A, NOW);
+    plan.recordReading(payload(60, null), A, NOW + 60_000);
+    expect(plan.getSnapshot(A)!.sevenDay!.usedPercentage).toBe(22);
+    expect(plan.getSnapshot(A)!.fiveHour!.usedPercentage).toBe(60);
   });
 
   it.each([
@@ -101,24 +106,24 @@ describe('recording readings', () => {
     ['a reset time long past', payload(55, null, inHours(-48))],
     ['a reset time in milliseconds', payload(55, null, inHours(2) * 1000)],
   ])('rejects %s and leaves the snapshot alone', (_label, body) => {
-    plan.recordReading(payload(40, 20), NOW);
-    plan.recordReading(body, NOW + 60_000);
-    expect(plan.getSnapshot()!.fiveHour!.usedPercentage).toBe(40);
+    plan.recordReading(payload(40, 20), A, NOW);
+    plan.recordReading(body, A, NOW + 60_000);
+    expect(plan.getSnapshot(A)!.fiveHour!.usedPercentage).toBe(40);
   });
 });
 
 describe('persistence', () => {
   it('survives a restart', () => {
-    plan.recordReading(payload(55, 22, inHours(2), inHours(96)), Date.now());
+    plan.recordReading(payload(55, 22, inHours(2), inHours(96)), A, Date.now());
     expect(existsSync(snapshotFile)).toBe(true);
     plan.loadSnapshot();
-    expect(plan.getSnapshot()!.fiveHour!.usedPercentage).toBe(55);
+    expect(plan.getSnapshot(A)!.fiveHour!.usedPercentage).toBe(55);
   });
 
   it('starts empty from an unreadable file rather than failing', () => {
     writeFileSync(snapshotFile, '{ not json');
     plan.loadSnapshot();
-    expect(plan.getSnapshot()).toBeNull();
+    expect(plan.getSnapshot(A)).toBeNull();
   });
 
   it('re-validates what it reads back', () => {
@@ -127,7 +132,7 @@ describe('persistence', () => {
       JSON.stringify({ fiveHour: { usedPercentage: 400, resetsAt: inHours(2), observedAt: 'x' }, sevenDay: null })
     );
     plan.loadSnapshot();
-    expect(plan.getSnapshot()).toBeNull();
+    expect(plan.getSnapshot(A)).toBeNull();
     expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).fiveHour.usedPercentage).toBe(400);
   });
 });
@@ -136,65 +141,76 @@ describe('writing the snapshot', () => {
   it('writes when a figure changes, not on every render that re-confirms it', () => {
     // Every session's status line posts on every render; only a changed
     // percentage or reset time is worth a synchronous write and rename.
-    plan.recordReading(payload(55, 22), NOW);
+    plan.recordReading(payload(55, 22), A, NOW);
     const afterFirst = writes();
-    for (let i = 1; i <= 20; i++) plan.recordReading(payload(55, 22), NOW + i * 1000);
+    for (let i = 1; i <= 20; i++) plan.recordReading(payload(55, 22), A, NOW + i * 1000);
     expect(writes()).toBe(afterFirst);
 
-    plan.recordReading(payload(56, 22), NOW + 30_000);
+    plan.recordReading(payload(56, 22), A, NOW + 30_000);
     expect(writes()).toBe(afterFirst + 1);
-    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).fiveHour.usedPercentage).toBe(56);
+    expect(onDisk().fiveHour.usedPercentage).toBe(56);
   });
 
   it('does not write for a stale reading the merge throws away', () => {
-    plan.recordReading(payload(55, 22), NOW);
+    plan.recordReading(payload(55, 22), A, NOW);
     const before = writes();
-    plan.recordReading(payload(30, 10), NOW + 1000);
+    plan.recordReading(payload(30, 10), A, NOW + 1000);
     expect(writes()).toBe(before);
   });
 
   it('does not rewrite an unchanged file after a restart', () => {
-    plan.recordReading(payload(55, 22), NOW);
+    plan.recordReading(payload(55, 22), A, NOW);
     plan.loadSnapshot();
     const before = writes();
-    plan.recordReading(payload(55, 22), NOW + 1000);
+    plan.recordReading(payload(55, 22), A, NOW + 1000);
     expect(writes()).toBe(before);
   });
 });
 
 describe('relay contact', () => {
   it('counts a post without limits as contact, without inventing a reading', () => {
-    expect(plan.recordReading({ rate_limits: null }, NOW)).toBe(false);
-    expect(plan.getSnapshot()).toBeNull();
-    expect(plan.getRelaySeenAt()).toBe(new Date(NOW).toISOString());
+    expect(plan.recordReading({ rate_limits: null }, A, NOW)).toBe(false);
+    expect(plan.getSnapshot(A)).toBeNull();
+    expect(plan.getRelaySeenAt(A)).toBe(new Date(NOW).toISOString());
   });
 
   it('persists contact the first time, then at most hourly — the relay posts on every render', () => {
-    plan.recordReading({ rate_limits: null }, NOW);
+    plan.recordReading({ rate_limits: null }, A, NOW);
     const first = readFileSync(snapshotFile, 'utf8');
-    expect(JSON.parse(first).relaySeenAt).toBe(new Date(NOW).toISOString());
+    expect(onDiskOf(first).relaySeenAt).toBe(new Date(NOW).toISOString());
 
-    plan.recordReading({ rate_limits: null }, NOW + 10 * 60_000);
+    plan.recordReading({ rate_limits: null }, A, NOW + 10 * 60_000);
     expect(readFileSync(snapshotFile, 'utf8')).toBe(first); // not rewritten
-    expect(plan.getRelaySeenAt()).toBe(new Date(NOW + 10 * 60_000).toISOString()); // but current in memory
+    expect(plan.getRelaySeenAt(A)).toBe(new Date(NOW + 10 * 60_000).toISOString()); // but current in memory
 
-    plan.recordReading({ rate_limits: null }, NOW + 70 * 60_000);
-    expect(JSON.parse(readFileSync(snapshotFile, 'utf8')).relaySeenAt).toBe(
+    plan.recordReading({ rate_limits: null }, A, NOW + 70 * 60_000);
+    expect(onDisk().relaySeenAt).toBe(
       new Date(NOW + 70 * 60_000).toISOString()
     );
   });
 
   it('remembers contact across a restart, even with no reading', () => {
-    plan.recordReading({ rate_limits: null }, NOW);
+    plan.recordReading({ rate_limits: null }, A, NOW);
     plan.loadSnapshot();
-    expect(plan.getSnapshot()).toBeNull();
-    expect(plan.getRelaySeenAt()).toBe(new Date(NOW).toISOString());
+    expect(plan.getSnapshot(A)).toBeNull();
+    expect(plan.getRelaySeenAt(A)).toBe(new Date(NOW).toISOString());
+  });
+
+  it('restores a file from before accounts as the default folder account\'s', () => {
+    const soon = Math.round(Date.now() / 1000);
+    writeFileSync(
+      snapshotFile,
+      JSON.stringify({ fiveHour: { usedPercentage: 42, resetsAt: soon + 3600, observedAt: new Date().toISOString() }, sevenDay: null })
+    );
+    plan.loadSnapshot();
+    expect(plan.getSnapshot('work')!.fiveHour!.usedPercentage).toBe(42);
+    expect(plan.getSnapshot('personal')).toBeNull();
   });
 
   it('ignores a malformed contact time on disk', () => {
     writeFileSync(snapshotFile, JSON.stringify({ relaySeenAt: 'yesterday-ish' }));
     plan.loadSnapshot();
-    expect(plan.getRelaySeenAt()).toBeNull();
+    expect(plan.getRelaySeenAt(A)).toBeNull();
   });
 });
 
@@ -209,13 +225,38 @@ describe('routes', () => {
   it('relays a reading in and serves it back with the setup command', async () => {
     const a = await app();
     const body = payload(55, 22, Math.round(Date.now() / 1000) + 3600, Math.round(Date.now() / 1000) + 86400);
+    // No config_dir: the default ~/.claude, which is `work` in the default config.
     const post = await a.inject({ method: 'POST', url: '/api/plan-usage', payload: body });
-    expect(post.json()).toEqual({ stored: true });
+    expect(post.json()).toEqual({ stored: true, account: 'work' });
 
-    const get = (await a.inject({ method: 'GET', url: '/api/plan-usage' })).json();
+    const get = (await a.inject({ method: 'GET', url: '/api/plan-usage?account=work' })).json();
+    expect(get.account).toBe('work');
     expect(get.snapshot.fiveHour.usedPercentage).toBe(55);
     expect(typeof get.relaySeenAt).toBe('string');
     expect(get.setup.command).toMatch(/^node ".*\/scripts\/statusline\.mjs"$/);
+    expect(get.setup.settingsPath).toMatch(/[\\/]\.claude[\\/]settings\.json$/);
+    await a.close();
+  });
+
+  it("keeps each account's limits apart, and drops a folder no account uses", async () => {
+    const a = await app();
+    const soon = Math.round(Date.now() / 1000);
+    await a.inject({ method: 'POST', url: '/api/plan-usage', payload: payload(90, 50, soon + 3600, soon + 86400) });
+    const personal = await a.inject({
+      method: 'POST',
+      url: '/api/plan-usage',
+      payload: { ...payload(10, 5, soon + 3600, soon + 86400), config_dir: '~/.claude-personal' },
+    });
+    expect(personal.json()).toEqual({ stored: true, account: 'personal' });
+    const stray = await a.inject({ method: 'POST', url: '/api/plan-usage', payload: { ...payload(1, 1), config_dir: 'C:/nowhere' } });
+    expect(stray.json()).toEqual({ stored: false, account: null });
+
+    const get = async (account: string) => (await a.inject({ method: 'GET', url: `/api/plan-usage?account=${account}` })).json();
+    expect((await get('work')).snapshot.fiveHour.usedPercentage).toBe(90);
+    expect((await get('personal')).snapshot.fiveHour.usedPercentage).toBe(10);
+    expect((await get('personal')).setup.settingsPath).toMatch(/\.claude-personal[\\/]settings\.json$/);
+    // No account asked: the default account's.
+    expect((await get('nobody')).account).toBe('personal');
     await a.close();
   });
 

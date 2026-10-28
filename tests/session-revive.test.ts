@@ -32,6 +32,12 @@ const createPty = vi.fn(() => {
 
 const writeToPty = vi.fn();
 
+// Preflight reads the account's real login; these tests launch nothing real.
+vi.mock('../src/server/accounts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
+  assertAccountReady: vi.fn(),
+}));
+
 vi.mock('../src/server/sessions/pty-handler.js', async () => {
   // ScrollbackBuffer is real: the seeding assertion is only meaningful against the real one.
   const actual = await vi.importActual<typeof import('../src/server/sessions/pty-handler.js')>(
@@ -59,6 +65,7 @@ const launchProfileForTranscript = vi.fn((_id: string): { permissionMode: string
 vi.mock('../src/server/db/queries.js', () => ({
   insertSession: (...args: unknown[]) => insertSession(...(args as [])),
   launchProfileForTranscript: (id: string) => launchProfileForTranscript(id),
+  accountForTranscript: vi.fn(() => null),
   updateSession: (...args: unknown[]) => updateSession(...(args as [string, Record<string, unknown>])),
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),
@@ -135,6 +142,7 @@ function staleRow(overrides: Record<string, unknown> = {}) {
     claudeSessionId: null,
     isFork: false,
     forkJsonlPath: null,
+    account: 'personal',
     ...overrides,
   };
 }
