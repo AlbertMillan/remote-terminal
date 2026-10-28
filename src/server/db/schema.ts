@@ -383,6 +383,19 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN account TEXT NOT NULL DEFAULT 'personal';
       `,
     },
+    {
+      // The login that ran each message (docs/token-usage-feature.md). Not the
+      // folder its transcript lives in: transcripts moved into an account's
+      // folder ran under the default folder's login. NULL is unattributed.
+      // Older rows, and rows stored while their login was unknown, are backfilled
+      // by every ledger pass (backfillMessageAccounts): it needs the accounts config
+      // and each login's creation time, neither available to SQL.
+      name: '020_usage_message_account',
+      sql: `
+        ALTER TABLE usage_messages ADD COLUMN account TEXT;
+        CREATE INDEX IF NOT EXISTS idx_usage_messages_account ON usage_messages(account, ts);
+      `,
+    },
   ];
 
   const appliedMigrations = database

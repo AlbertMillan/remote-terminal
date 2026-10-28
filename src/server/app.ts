@@ -203,7 +203,7 @@ export async function createApp(): Promise<FastifyInstance> {
   registerProjectRoutes(app);
   // Pipeline jobs: worktree-isolated stages with approval gates.
   registerJobRoutes(app);
-  registerPlanUsageRoutes(app);
+  registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);

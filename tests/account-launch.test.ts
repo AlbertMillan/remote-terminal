@@ -41,7 +41,7 @@ vi.mock('node-pty', () => ({
 const { loadConfig } = await import('../src/server/config.js');
 const accounts = await import('../src/server/accounts.js');
 const { createPty } = await import('../src/server/sessions/pty-handler.js');
-const { checkSessionAccounts, stopAccountWatch } = await import('../src/server/sessions/account-watch.js');
+const { accountLogin, checkSessionAccounts, stopAccountWatch } = await import('../src/server/sessions/account-watch.js');
 const { sessionErrorPayload } = await import('../src/server/websocket/handlers/sessions.js');
 loadConfig();
 
@@ -285,5 +285,25 @@ describe('the identity watch', () => {
   it('skips a session whose account was removed from the config', () => {
     const r = checkSessionAccounts([{ id: 'x', name: 'x', account: 'gone' }], check(home));
     expect(r).toEqual({ warnings: {}, flagged: [], changed: false });
+  });
+
+  it('caches each account\'s login for the plan-usage relay, refreshed by a check or after a minute', () => {
+    // The relay asks on every status line render: never a preflight per post.
+    login(personalDir, { accountUuid: 'acc-personal' });
+    const spy = vi.fn(check(home));
+    const t0 = 1_000_000;
+    expect(accountLogin('personal', t0, spy)?.ok).toBe(true);
+    expect(accountLogin('personal', t0 + 59_000, spy)?.ok).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    login(personalDir, { accountUuid: 'acc-other' });
+    expect(accountLogin('personal', t0 + 61_000, spy)?.ok).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // A watch tick refreshes it for every running session's account.
+    login(personalDir, { accountUuid: 'acc-personal' });
+    checkSessionAccounts(sessions.slice(0, 1), check(home), t0 + 62_000);
+    expect(accountLogin('personal', t0 + 63_000, spy)?.ok).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });

@@ -28,7 +28,8 @@ afterAll(() => rmSync(ACCOUNTS_DIR, { recursive: true, force: true }));
 function run(
   stdin: string,
   url: string,
-  configDir?: string
+  configDir?: string,
+  sessionId?: string
 ): Promise<{ stdout: string; ms: number; code: number | null }> {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -36,6 +37,9 @@ function run(
     const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_REMOTE_URL: url, CLAUDE_REMOTE_CONFIG: ACCOUNTS_CONFIG };
     delete env.CLAUDE_CONFIG_DIR;
     if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    // As a claude-remote PTY sets it (sessionEnv); these tests may run inside one.
+    delete env.CLAUDE_REMOTE_SESSION_ID;
+    if (sessionId) env.CLAUDE_REMOTE_SESSION_ID = sessionId;
     const child = spawn(process.execPath, [SCRIPT], { env });
     let stdout = '';
     child.stdout.on('data', (d) => (stdout += String(d)));
@@ -93,7 +97,8 @@ describe('statusline.mjs', () => {
       }),
       url
     );
-    expect(Object.keys(JSON.parse(received[0]))).toEqual(['rate_limits', 'config_dir']);
+    expect(Object.keys(JSON.parse(received[0]))).toEqual(['rate_limits', 'config_dir', 'session_id']);
+    expect(JSON.parse(received[0]).session_id).toBeNull(); // Claude's own id is not ours
     expect(received[0]).not.toContain('secret-project');
   });
 
@@ -103,7 +108,7 @@ describe('statusline.mjs', () => {
     const url = await listen((b) => received.push(b));
     const out = await run(JSON.stringify({ model: { display_name: 'Opus 5' } }), url);
     expect(out.stdout).toBe('Opus 5\n');
-    expect(received).toEqual(['{"rate_limits":null,"config_dir":null}']);
+    expect(received).toEqual(['{"rate_limits":null,"config_dir":null,"session_id":null}']);
   });
 
   it("says which account's folder the limits belong to", async () => {
@@ -111,6 +116,13 @@ describe('statusline.mjs', () => {
     const url = await listen((b) => received.push(b));
     await run(JSON.stringify(PAYLOAD), url, 'C:/Users/me/.claude-personal');
     expect(JSON.parse(received[0]).config_dir).toBe('C:/Users/me/.claude-personal');
+  });
+
+  it('sends the claude-remote session it runs in, so the server can verify the login', async () => {
+    const received: string[] = [];
+    const url = await listen((b) => received.push(b));
+    await run(JSON.stringify({ ...PAYLOAD, session_id: 'claude-own-id' }), url, undefined, 'cr-session-1');
+    expect(JSON.parse(received[0]).session_id).toBe('cr-session-1');
   });
 
   it("names the account whose folder this claude runs on, matched however it's spelled", async () => {

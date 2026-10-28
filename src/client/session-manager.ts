@@ -6,6 +6,7 @@ import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
 import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
+import { AccountUsageModal } from './account-usage-modal.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
 import { BUILD_CHANGED_EVENT, BuildChip, ServerRestartControl } from './server-restart.js';
@@ -161,6 +162,8 @@ class SessionManager {
    */
   private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
   private planUsage = new PlanUsageChip();
+  /** The per-account usage page, opened from the chip (docs/plan-usage.md); a discard refreshes the chip's counts. */
+  private accountUsage = new AccountUsageModal(() => void this.planUsage.refresh());
   /** The Projects tab: the PROJECT.md board plus the SESSION-LOG.md history/plan-progress view. */
   private projectLogView = new ProjectLogView({
     workspace: this.workspace,
@@ -178,6 +181,8 @@ class SessionManager {
     this.shortcutsModal.renderWelcomeShortcuts();
     this.setupPipButton();
     this.jobOverlay.attach();
+    this.planUsage.openBreakdown = () => void this.accountUsage.open(this.planUsage.latest());
+    this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
     this.planUsage.attach();
     this.buildChip.start();
     this.initBrowserNotifications();
@@ -816,8 +821,8 @@ class SessionManager {
     this.currentSessionId = payload.session.id;
     this.attachingSessionId = null; // Clear in-flight flag
     this.sessions.set(payload.session.id, payload.session);
-    // The plan chip shows this session's login's limits (docs/accounts.md).
-    this.planUsage.setAccount(payload.session.account);
+    // The plan chip tags this session's account, and its project's jobs account (docs/plan-usage.md).
+    this.planUsage.setAccount(payload.session.account, payload.session.cwd);
 
     // Clear notification for this session
     this.sessionNotifications.delete(payload.session.id);

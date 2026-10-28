@@ -76,6 +76,29 @@ from before runs were recorded) it counts toward the job with no stage. `kind` i
 `session-log`, `migrate` or `qa-generate`; the project split is *pipeline* (has a job),
 *background* (tagged, no job) and *sessions* (untagged).
 
+### Which login ran it (`f-7oap94`)
+
+`usage_messages.account` (migration `020`, nullable) is the Claude account whose login ran
+the message — for the plan-usage chip and the account usage page (`docs/plan-usage.md`).
+
+- Set at insert: the account whose `projectsDir` holds the transcript — **except** a
+  message older than that account's **expected** login's `oauthAccount.accountCreatedAt`
+  (`expectedLoginCreatedAt()`, via `claudeJsonPath()`). Before the login existed its
+  folder could only hold transcripts moved in from the default folder (`f-ilxxdj`), so the
+  message is the default folder's account's (`accountForConfigDir(null)`), the only login
+  there was. Times are compared in epoch ms, at insert and in the backfill alike.
+- Unknown — a folder no account uses, a login with no `accountCreatedAt`, another login
+  swapped into the folder, or `.claude.json` unreadable — is NULL and shown as
+  unattributed, never guessed.
+- **Every** ingest pass first backfills NULL rows (`backfillMessageAccounts`) by the same
+  rule, keyed by `usage_files.path` (a subagent file through its parent's session id): rows
+  from before the column, and any stored while their login was unknown. It touches NULL
+  rows only; the insert's re-home never changes `account`, so nothing flips back.
+- `usageByAccount(account, sinceIso, ownProjectsDir?)` (`store.ts`): messages, the token
+  split, estimated cost, sessions, job runs started since, and how many messages sit in a
+  transcript outside the account's own folder. Cached against the same generation as the
+  other reads.
+
 ## 4. Ingest
 
 - Walks top-level `*.jsonl` and `*/subagents/*.jsonl`; `usage_files` keeps

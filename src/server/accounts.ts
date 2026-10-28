@@ -175,6 +175,48 @@ export function credentialsPath(account: string, home?: string): string {
   return join(configDir(account, home), '.credentials.json');
 }
 
+/**
+ * The login's plan as a label ("Max 5x", "Team"), from its credentials file's
+ * `claudeAiOauth.subscriptionType` and `rateLimitTier` — the only two fields
+ * read. That file holds the login's OAuth tokens: nothing else of it is kept,
+ * returned or logged. Null when either is missing or unreadable.
+ *
+ * Only the label is cached, by the file's mtime and size: the chip asks on every
+ * poll, and re-parsing the file each time would put its tokens in memory as often.
+ */
+export function planLabel(account: string, home?: string): string | null {
+  const path = credentialsPath(account, home);
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    planLabels.delete(path);
+    return null;
+  }
+  const cached = planLabels.get(path);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.label;
+  let type: unknown;
+  let tier: unknown;
+  try {
+    const oauth = (JSON.parse(readFileSync(path, 'utf-8')) as { claudeAiOauth?: Record<string, unknown> })?.claudeAiOauth;
+    type = oauth?.subscriptionType;
+    tier = oauth?.rateLimitTier;
+  } catch {
+    return cached?.label ?? null; // caught mid-write: the last label still holds
+  }
+  let label: string | null = null;
+  if (typeof type === 'string' && /^[a-z0-9_-]{1,40}$/i.test(type)) {
+    const multiple = typeof tier === 'string' ? /(\d+)x\b/i.exec(tier)?.[1] : undefined;
+    const name = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+    label = multiple ? `${name} ${multiple}x` : name;
+  }
+  planLabels.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, label });
+  return label;
+}
+
+/** planLabel's labels by credentials path. Labels only — never anything else from the file. */
+const planLabels = new Map<string, { mtimeMs: number; size: number; label: string | null }>();
+
 /** Each distinct value of `perAccount` over every account, in config order. Two accounts on one folder count once. */
 function distinctPaths(perAccount: (account: string) => string): string[] {
   const seen = new Set<string>();
@@ -280,6 +322,8 @@ export interface Identity {
   organizationUuid?: string;
   emailAddress?: string;
   organizationName?: string;
+  /** When the login was created (ISO): the usage ledger's cut-off for transcripts moved into its folder. */
+  accountCreatedAt?: string;
 }
 
 /**
@@ -350,6 +394,7 @@ function identityOf(parsed: unknown): Identity | null {
     organizationUuid: str(o.organizationUuid),
     emailAddress: str(o.emailAddress),
     organizationName: str(o.organizationName),
+    accountCreatedAt: str(o.accountCreatedAt),
   };
   return identity.accountUuid || identity.organizationUuid ? identity : null;
 }
@@ -387,6 +432,38 @@ function describe(identity: Identity | null): string {
   if (!identity) return 'nobody';
   const who = identity.emailAddress ?? identity.accountUuid ?? 'an unknown login';
   return identity.organizationName ? `${who} (${identity.organizationName})` : who;
+}
+
+/**
+ * Whether `found` is the login the account expects (its configured accountUuid
+ * and/or organizationUuid). False for an account that expects nothing: there is
+ * no expected login to be.
+ */
+export function isExpectedLogin(account: string, found: Identity | null): boolean {
+  const cfg = isAccount(account) ? accountConfigs()[account] : undefined;
+  if (!found || !cfg || (!cfg.accountUuid && !cfg.organizationUuid)) return false;
+  return (
+    (!cfg.accountUuid || found.accountUuid === cfg.accountUuid) &&
+    (!cfg.organizationUuid || found.organizationUuid === cfg.organizationUuid)
+  );
+}
+
+/**
+ * When the account's expected login was created (ISO, normalised), or null —
+ * nobody there, another login there (a `/login` swap: its creation date says
+ * nothing about this account), no date recorded, or the file caught mid-write
+ * with no earlier reading. Where "this account's" usage can start.
+ */
+export function expectedLoginCreatedAt(account: string, home?: string): string | null {
+  let found: Identity | null;
+  try {
+    found = readIdentity(account, home);
+  } catch {
+    return null;
+  }
+  if (!isExpectedLogin(account, found)) return null;
+  const ms = found?.accountCreatedAt ? Date.parse(found.accountCreatedAt) : NaN;
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
 /**
@@ -429,10 +506,7 @@ export function preflight(account: string, home?: string): PreflightResult {
   }
   if (unreadable) return refuse('unreadable', `Account "${account}": ${unreadable.message}`);
   if (!found) return refuse('no-login', `Nobody is logged in to account "${account}" (${dir}): log in there first`);
-  const matches =
-    (!expected.accountUuid || found.accountUuid === expected.accountUuid) &&
-    (!expected.organizationUuid || found.organizationUuid === expected.organizationUuid);
-  if (!matches) {
+  if (!isExpectedLogin(account, found)) {
     const want = expected.accountUuid ? `account ${expected.accountUuid}` : `organization ${expected.organizationUuid}`;
     return refuse('mismatch', `Account "${account}" (${dir}) is logged in as ${describe(found)}, but expects ${want}`);
   }

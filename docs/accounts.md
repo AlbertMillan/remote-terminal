@@ -67,8 +67,10 @@ login's folder for a personal session.
 - `findTranscript(cwd, id, preferred)` — the preferred account's folder first, then any
   other: a read (the session log, history delete) still finds a transcript that was never
   moved. A launch (Fork, Resume) uses only the account's own folder.
-- `usage_files` has no account column: a transcript's account is the one whose
-  `projectsDir` holds its path, and nothing needs it yet.
+- `usage_files` has no account column (a file's folder is still where it lives); the
+  login that ran each message is `usage_messages.account`, set by the ledger
+  (`docs/token-usage-feature.md`, "Which login ran it"). Not simply the folder: a
+  transcript moved into an account's folder ran under the default folder's login.
 - `claudeJsonPath(account)` — the global config file (login, trust, MCP servers). Inside a
   custom folder, but **`~/.claude.json` beside the default `~/.claude`**: an account on
   `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.
@@ -144,12 +146,11 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   The server logs, at boot, every account whose settings lack any of them
   (`accountSetupMissing`); `GET /api/accounts` lists them as `setupMissing`. That route
   (`accountsSummary`) is unauthenticated, so it names no folder or login.
-- **Plan usage** is kept per account: `statusline.mjs` sends its `CLAUDE_CONFIG_DIR`
-  (`config_dir`, empty for `~/.claude`), the server files the reading under the account on
-  that folder (a folder no account uses is dropped), and the chip shows the attached
-  session's account (`GET /api/plan-usage?account=`), naming that account's settings file
-  in its setup hint. A `plan-usage.json` from before accounts is restored as the default
-  folder's account's.
+- **Plan usage** is kept per account: `statusline.mjs` sends its claude-remote session
+  (`session_id`) and `CLAUDE_CONFIG_DIR` (`config_dir`, empty for `~/.claude`); the server
+  files the reading under the session's account, else the folder's, and keeps it only once
+  verified as that account's login — otherwise it is held back (`docs/plan-usage.md`). A
+  `plan-usage.json` from before verification is restored held back.
 - **The status line names the account** (`Opus 5.5 · [personal] · 5h 4%`): `statusline.mjs`
   maps its `CLAUDE_CONFIG_DIR` through `scripts/claude-accounts.mjs` (config.json only, so
   it still prints before any server call). A folder no account uses shows no name.
