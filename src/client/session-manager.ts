@@ -149,8 +149,9 @@ class SessionManager {
    * in a real terminal, inside its worktree — reusing the same resume path the
    * session-history buttons use.
    */
-  private jobBoard = new JobBoard((claudeSessionId, cwd) =>
-    this.openHistorySession(claudeSessionId, cwd, 'resume')
+  private jobBoard = new JobBoard(
+    (claudeSessionId, cwd) => this.openHistorySession(claudeSessionId, cwd, 'resume'),
+    (cwd) => this.workspace.getProject(cwd)?.account?.effective ?? null
   );
   /** Cross-project overview; clicking a row opens that project. */
   private rollup = new RollupView((cwd) => this.projectLogView.showProjectLog(cwd));
@@ -336,6 +337,7 @@ class SessionManager {
     cwdInput?.addEventListener('input', () => {
       this.newSessionModal.renderCwdSuggestions();
       this.newSessionModal.trackPicker.schedule();
+      this.newSessionModal.scheduleDefaultAccount();
     });
     document.getElementById('session-track-select')?.addEventListener('change', () => this.newSessionModal.trackPicker.sync());
     document.getElementById('session-track-new')?.addEventListener('keydown', (e) => {

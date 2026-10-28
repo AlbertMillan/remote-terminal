@@ -124,7 +124,11 @@ export class JobBoard {
    */
   private loadToken = 0;
 
-  constructor(private readonly onTakeOver: (claudeSessionId: string, cwd: string) => void) {}
+  constructor(
+    private readonly onTakeOver: (claudeSessionId: string, cwd: string) => void,
+    /** The account a project's jobs run under (its header's Account); null if unknown. */
+    private readonly accountFor: (cwd: string) => string | null = () => null
+  ) {}
 
   /** Jobs currently shown, for callers that need counts. */
   getJobs(): Job[] {
@@ -296,12 +300,21 @@ export class JobBoard {
     }
     container.innerHTML = `
       <div class="jb-section">
-        <h3 class="project-log-subhead">Jobs</h3>
+        <h3 class="project-log-subhead">Jobs${this.renderRunAs()}</h3>
         ${this.jobs.map((job) => this.renderJob(job)).join('')}
       </div>`;
     this.applyPendingFocus(container);
     this.applyPendingAnchor(container);
     this.applyRefocusDocsHead(container);
+  }
+
+  /** "run as <account>": a job can't pick its account, so the board says which it gets. */
+  private renderRunAs(): string {
+    const account = this.cwd ? this.accountFor(this.cwd) : null;
+    if (!account) return '';
+    return `<span class="jb-run-as" title="Every stage runs under this project's account; change it in the header">run as ${escapeHtml(
+      account
+    )}</span>`;
   }
 
   /** Put focus back on the fold control that its own render just destroyed. */

@@ -30,7 +30,17 @@ user-scope MCP servers are per account.
 
 1. the account the start names (new-session dialog, `cr-session start --account`);
 2. else its project's `account` in `projects.json` (most specific project containing the cwd);
+   a track or job worktree is looked up by its owner's checkout (`projectCwdFor`), since
+   worktrees sit outside every project;
 3. else `defaultAccount`.
+
+The project's `account` is set from the project header's **Account** select
+(`POST /api/projects/account`, `setProjectAccount`): it edits `projects.json` in place like a
+favourite, adding an entry for a project without one (which makes it a roll-up anchor) and,
+on clear, dropping only the key. The board carries `account: { own, effective, source }`;
+an entry inherited from a containing project shows as "Inherited". The new-session dialog's
+empty option names what it resolves to for the typed folder (`GET /api/accounts/resolve`),
+and the dispatch button and job board say which account jobs run as: jobs can't override it.
 
 A named account that doesn't exist is refused, never swapped for another. The account is
 stored on the row (`sessions.account`, migration `019_session_account`, which backfilled
@@ -135,6 +145,9 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   session's account (`GET /api/plan-usage?account=`), naming that account's settings file
   in its setup hint. A `plan-usage.json` from before accounts is restored as the default
   folder's account's.
+- **The status line names the account** (`Opus 5.5 · [personal] · 5h 4%`): `statusline.mjs`
+  maps its `CLAUDE_CONFIG_DIR` through `scripts/claude-accounts.mjs` (config.json only, so
+  it still prints before any server call). A folder no account uses shows no name.
 
 ## SESSION-LOG records the account
 

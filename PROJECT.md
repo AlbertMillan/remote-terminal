@@ -104,3 +104,7 @@ status: active
 - [x] `f-fsx3z3` P2 SESSION-LOG records the account — marker and entry carry it; track attribution reads the account's transcripts → project/accounts.md
 - [x] `f-psbdve` P2 Usage ledger prunes rows for transcripts that no longer exist → project/rename-claude-work.md
 - [ ] `f-fhrnu3` P3 Rename `~/.claude` to `~/.claude-work` — sweep outside references, machine steps, `usage_files` rewrite script → project/rename-claude-work.md
+- [x] `f-w6znvl` P1 Project account in the UI — pick a project's default account from its header; saved to `projects.json` → project/accounts.md
+- [x] `f-hrsrrl` P2 New-session dialog names the resolved default — "Default (work, from project)" for the chosen folder → project/accounts.md
+- [x] `f-8x96pp` P2 Job board shows the account jobs run under — jobs can't override the project's → project/accounts.md
+- [x] `f-tkaa6d` P2 Status line shows the session's account — mapped from `CLAUDE_CONFIG_DIR`, no server call → project/accounts.md

@@ -2797,6 +2797,18 @@ body {
   cursor: help;
   font-weight: 700;
 }
+.pw-badge.account { gap: 6px; }
+.pw-account-select {
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.pw-account-select:disabled { opacity: 0.6; cursor: wait; }
+.pw-account-select option { background: var(--bg-secondary); color: var(--text-primary); }
+.jb-run-as { font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-left: 8px; }
 
 .pw-flash {
   margin: 12px 24px 0;

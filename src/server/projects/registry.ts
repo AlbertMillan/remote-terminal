@@ -118,7 +118,7 @@ function writeFileAtomic(path: string, content: string): void {
 /** projects.json exists but is not a JSON object, so it must not be rewritten. */
 export class RegistryUnreadableError extends Error {
   constructor(readonly path: string) {
-    super(`${path} is not valid JSON — fix it by hand before changing favourites`);
+    super(`${path} is not valid JSON — fix it by hand before changing it here`);
     this.name = 'RegistryUnreadableError';
   }
 }
@@ -142,19 +142,7 @@ export function setFavorite(
   isOnBoard?: (cwd: string) => boolean
 ): string[] {
   const path = getRegistryPath();
-  let raw: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(path, 'utf-8'));
-    } catch {
-      throw new RegistryUnreadableError(path);
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new RegistryUnreadableError(path);
-    }
-    raw = parsed as Record<string, unknown>;
-  }
+  const raw = readRawRegistry(path);
 
   const key = pathKey(cwd);
   const rest = normalizeRegistry(raw).favorites.filter(
@@ -165,6 +153,53 @@ export function setFavorite(
   writeFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
   logger.info({ path, cwd, favorite }, 'registry: favourite saved');
   return favorites;
+}
+
+/**
+ * projects.json as parsed, for an in-place edit (see setFavorite). Missing is
+ * empty; anything that isn't a JSON object throws rather than being overwritten.
+ */
+function readRawRegistry(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch {
+    throw new RegistryUnreadableError(path);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new RegistryUnreadableError(path);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * Set or clear (`null`) the account a project's new sessions and jobs default to
+ * (accounts.ts). Edits the file in place like setFavorite, touching only this
+ * project's entry. A project with no entry gets one — which also makes it a
+ * roll-up anchor, folding its nested folders in; its account covers them anyway.
+ * Clearing only drops `account`: the entry may be a hand-written registration.
+ */
+export function setProjectAccount(cwd: string, account: string | null): void {
+  const path = getRegistryPath();
+  const raw = readRawRegistry(path);
+  const key = pathKey(cwd);
+  const projects = Array.isArray(raw.projects) ? (raw.projects as unknown[]) : [];
+  const entry = projects.find((p): p is Record<string, unknown> => {
+    const e = p as Record<string, unknown> | null;
+    return !!e && typeof e === 'object' && typeof e.cwd === 'string' && pathKey(e.cwd) === key;
+  });
+  if (entry) {
+    if (account) entry.account = account;
+    else delete entry.account;
+  } else if (account) {
+    projects.push({ cwd, account });
+  } else {
+    return; // nothing stored, nothing to clear
+  }
+  raw.projects = projects;
+  writeFileAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
+  logger.info({ path, cwd, account }, 'registry: project account saved');
 }
 
 /** Absolute path to a project's canonical index document. */

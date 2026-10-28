@@ -125,6 +125,11 @@ export interface WorkspaceProject {
   registered: boolean;
   /** Starred in the sidebar; pinned above the rest of the list. */
   favorite: boolean;
+  /**
+   * The account new sessions default to and jobs run under: `own` is this
+   * project's setting; without one, `effective` is a parent's or the configured.
+   */
+  account: { own: string | null; effective: string; source: 'project' | 'parent' | 'default' };
   vcs: VcsCapabilities;
   hasDoc: boolean;
   revision: string;
@@ -217,6 +222,11 @@ export class ProjectWorkspace {
   private collapsedTracks = new Set<string>(loadCollapsedTracks());
   /** Projects whose star toggle is still being saved. */
   private favoriteBusy = new Set<string>();
+  /** The configured account names (`GET /api/accounts`); null until loaded. */
+  private accountNames: string[] | null = null;
+  private accountNamesLoading = false;
+  /** Projects whose account change is still being saved. */
+  private accountBusy = new Set<string>();
   private flashTimer: number | null = null;
   /** Open session clicks still waiting on a branch or an install, keyed by (cwd, track). */
   private openingTrack = new Set<string>();
@@ -228,7 +238,16 @@ export class ProjectWorkspace {
     private readonly onDispatch: (cwd: string, featureId: string, title: string) => void,
     /** Open a terminal in a track's worktree; `notice` is shown at its top. */
     private readonly onOpenTrackSession: (worktreePath: string, trackName: string, notice?: string) => void
-  ) {}
+  ) {
+    // The header's Account select is re-rendered with the badges, so it is
+    // listened to by delegation rather than per render.
+    document.addEventListener('change', (event) => {
+      const select = event.target as HTMLElement | null;
+      if (!(select instanceof HTMLSelectElement) || !select.matches('[data-project-account]')) return;
+      const cwd = select.dataset.cwd;
+      if (cwd) void this.setAccount(cwd, select.value || null);
+    });
+  }
 
   getProject(cwd: string): WorkspaceProject | undefined {
     return this.board.find((p) => p.cwd === cwd);
@@ -841,6 +860,79 @@ export class ProjectWorkspace {
     if (this.selectedCwd !== cwd) return;
     const container = document.getElementById('project-features');
     if (container) this.renderFeatures(container, cwd);
+    const project = this.getProject(cwd);
+    const badges = document.getElementById('project-badges-row');
+    if (project && badges) badges.innerHTML = this.renderHeaderBadges(project);
+  }
+
+  /**
+   * Set or clear (null) the project's default account. Not optimistic: the
+   * select shows what the server saved once the board reloads, and a refusal
+   * re-renders it back to the stored value.
+   */
+  private async setAccount(cwd: string, account: string | null): Promise<void> {
+    if (this.accountBusy.has(cwd)) return;
+    this.accountBusy.add(cwd);
+    try {
+      const res = await fetch('/api/projects/account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd, account }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+    } catch (error) {
+      console.error('Failed to save project account:', error);
+      this.flash(error instanceof Error ? error.message : 'Could not save the project account.');
+    } finally {
+      this.accountBusy.delete(cwd);
+      await this.reload();
+    }
+  }
+
+  /** Fetch the account names once, re-rendering the open header when they land. */
+  private loadAccountNames(): void {
+    if (this.accountNames || this.accountNamesLoading) return;
+    this.accountNamesLoading = true;
+    fetch('/api/accounts')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { accounts?: { name: string }[] } | null) => {
+        if (data?.accounts) this.accountNames = data.accounts.map((a) => a.name);
+      })
+      .catch(() => {
+        // The select keeps showing only the project's own value.
+      })
+      .finally(() => {
+        this.accountNamesLoading = false;
+        if (this.selectedCwd) this.refreshDetail(this.selectedCwd);
+      });
+  }
+
+  /** The header's Account select: default first (naming what it resolves to), then each account. */
+  private renderAccountBadge(project: WorkspaceProject): string {
+    if (!project.account) return ''; // a board from a server without accounts
+    this.loadAccountNames();
+    const { own, effective, source } = project.account;
+    const fallback = own ? null : effective;
+    const names = [...(this.accountNames ?? [])];
+    if (own && !names.includes(own)) names.push(own);
+    const options = [
+      `<option value=""${own ? '' : ' selected'}>${
+        source === 'parent' ? 'Inherited' : 'Default'
+      }${fallback ? ` (${escapeHtml(fallback)})` : ''}</option>`,
+      ...names.map(
+        (n) => `<option value="${escapeAttr(n)}"${n === own ? ' selected' : ''}>${escapeHtml(n)}</option>`
+      ),
+    ].join('');
+    const title =
+      "Claude account this project's new sessions default to and its jobs run under. " +
+      'A new session can still pick another.';
+    return `<label class="pw-badge account" title="${escapeAttr(title)}">Account
+      <select class="pw-account-select" data-project-account data-cwd="${escapeAttr(project.cwd)}"${
+        this.accountBusy.has(project.cwd) ? ' disabled' : ''
+      }>${options}</select></label>`;
   }
 
   /**
@@ -1037,6 +1129,7 @@ export class ProjectWorkspace {
         project.vcs.note || 'Git repository'
       )}">${escapeHtml(project.vcs.kind)}</span>`
     );
+    badges.push(this.renderAccountBadge(project));
     if (project.vcs.note) {
       badges.push(`<span class="pw-badge warn" title="${escapeAttr(project.vcs.note)}">!</span>`);
     }

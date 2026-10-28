@@ -18,6 +18,7 @@ import {
   accountForTranscript,
 } from '../db/queries.js';
 import { assertAccountReady, claudeJsonPath, findTranscript, projectsDir, resolveStartAccount, settingsPath } from '../accounts.js';
+import { projectCwdFor } from '../projects/worktree-owner.js';
 import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
@@ -236,7 +237,7 @@ export async function openClaudeSession(
   const account =
     accountForTranscript(claudeSessionId) ??
     findTranscript(cwd, claudeSessionId)?.account ??
-    resolveStartAccount(options.account, cwd);
+    resolveStartAccount(options.account, projectCwdFor(cwd));
   assertAccountReady(account);
 
   let resumeId = claudeSessionId;

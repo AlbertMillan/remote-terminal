@@ -37,6 +37,10 @@ vi.mock('../src/server/accounts.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
   assertAccountReady: vi.fn(),
 }));
+// Which project a worktree belongs to is read from the DB, which these tests don't open.
+vi.mock('../src/server/projects/worktree-owner.js', () => ({
+  projectCwdFor: vi.fn((cwd: string | undefined) => cwd),
+}));
 
 vi.mock('../src/server/sessions/pty-handler.js', async () => {
   // ScrollbackBuffer is real: the seeding assertion is only meaningful against the real one.

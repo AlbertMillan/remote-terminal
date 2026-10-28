@@ -104,6 +104,23 @@ transcripts, auto-memory, folder trust, user-scope MCP servers.
   a change.
 - Track attribution reads transcripts from the session's account folder.
 
+### Seeing and choosing the account (`f-w6znvl`, `f-hrsrrl`, `f-8x96pp`, `f-tkaa6d`)
+
+- **Project header**: an Account select — "Default (<configured>)" plus every account.
+  `POST /api/projects/account { cwd, account | null }` sets or clears `account` on the
+  project's own `projects.json` entry, editing the file in place like favourites (a
+  malformed file is refused, never rewritten). A project with no entry gets one, which
+  also makes it a roll-up anchor: its nested folders fold into it, as its account already
+  covers them. The header shows an inherited default (a parent entry's) as such.
+- **New-session dialog**: the empty option names what it resolves to for the chosen
+  folder (`GET /api/accounts/resolve?cwd=` → `{ account, source: project | default }`),
+  re-asked as the folder or track changes.
+- **Job board**: "Jobs run as <account>" — stages use `projectAccount(cwd)` and nothing
+  overrides it, so the header select is the way to change it.
+- **Status line**: `statusline.mjs` maps its `CLAUDE_CONFIG_DIR` to an account name through
+  `scripts/claude-accounts.mjs` (config.json only, no server call, so it still prints first)
+  and shows it after the model. A folder no account uses shows nothing.
+
 ## Planned changes
 
 - `src/server/config.ts`: `accounts`, `defaultAccount`, validation (configDir exists or is

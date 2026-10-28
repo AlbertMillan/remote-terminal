@@ -118,6 +118,11 @@ vi.mock('../src/server/utils/logger.js', () => ({
   createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
 }));
 
+// Which project a worktree belongs to is read from the DB, which these tests don't open.
+vi.mock('../src/server/projects/worktree-owner.js', () => ({
+  projectCwdFor: vi.fn((cwd: string | undefined) => cwd),
+}));
+
 import { createSessionManager } from '../src/server/sessions/manager.js';
 import { configureSessionEnv, loopbackUrl, sessionForToken } from '../src/server/sessions/session-env.js';
 import { injectCommand } from '../src/server/sessions/session-open.js';
@@ -125,6 +130,7 @@ import { promptPathFor, writePromptFile } from '../src/server/sessions/prompt-fi
 import type { ActiveSession } from '../src/server/sessions/types.js';
 import { assertAccountReady } from '../src/server/accounts.js';
 import { accountForTranscript } from '../src/server/db/queries.js';
+import { projectCwdFor } from '../src/server/projects/worktree-owner.js';
 
 const CLAUDE_ID = '22222222-2222-4222-8222-222222222222';
 const URL = 'http://127.0.0.1:4399';
@@ -219,6 +225,21 @@ describe("every creation path runs under the session's account", () => {
   it('createSession without one: the default, personal', async () => {
     await manager.createSession({ cwd: dataDir });
     expect(lastAccount()).toBe('personal');
+  });
+
+  it("createSession in a track worktree: its project's account, not the folder's", async () => {
+    // Worktrees sit outside every project; the account is looked up by the owner's checkout.
+    const project = join(dataDir, 'owner-project');
+    const worktree = join(dataDir, 'worktrees', 'tracks', 'owner-ab12cd34');
+    writeFileSync(join(dataDir, 'projects.json'), JSON.stringify({ projects: [{ cwd: project, account: 'work' }] }));
+    vi.mocked(projectCwdFor).mockImplementation((cwd) => (cwd === worktree ? project : cwd));
+    try {
+      await manager.createSession({ cwd: worktree });
+      expect(lastAccount()).toBe('work');
+    } finally {
+      vi.mocked(projectCwdFor).mockImplementation((cwd) => cwd);
+      writeFileSync(join(dataDir, 'projects.json'), '{}');
+    }
   });
 
   it('a refused createSession leaves no row and no PTY', async () => {

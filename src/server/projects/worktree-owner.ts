@@ -32,3 +32,14 @@ export function worktreeOwner(cwd: string): WorktreeOwner | null {
   }
   return null;
 }
+
+/**
+ * The folder whose project settings (its default account) apply to `cwd`: the
+ * owning project's main checkout for a track or job worktree, else `cwd` itself.
+ * Worktrees live under `~/.claude-remote/worktrees`, outside every project, so
+ * without this a track session would skip its project's account.
+ */
+export function projectCwdFor(cwd: string | undefined): string | undefined {
+  if (!cwd) return cwd;
+  return worktreeOwner(cwd)?.projectCwd ?? cwd;
+}

@@ -3,7 +3,7 @@ import { homedir } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { accountConfigProblems, getConfig, type AccountConfig } from './config.js';
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNTS } from './account-defaults.js';
-import { isDescendantOf, loadRegistry } from './projects/registry.js';
+import { isDescendantOf, loadRegistry, type RegistryProject } from './projects/registry.js';
 import { pathKey } from './utils/paths.js';
 import { tryGetTranscriptPath } from './sessions/transcript.js';
 
@@ -49,13 +49,27 @@ export function defaultAccount(): string {
  * projects.json entry that is `cwd` or contains it. A shortcut only — a start
  * that names an account wins. Unknown names are ignored, not fatal.
  */
-export function projectDefaultAccount(cwd: string | undefined): string | null {
+export function projectDefaultAccount(cwd: string | undefined, registered?: RegistryProject[]): string | null {
+  return projectAccountEntry(cwd, registered)?.account ?? null;
+}
+
+/**
+ * The projects.json entry projectDefaultAccount reads its answer from — `cwd`'s
+ * own, or a parent's (the header shows that one as inherited). `registered`
+ * saves re-reading the file when the caller has it.
+ */
+export function projectAccountEntry(
+  cwd: string | undefined,
+  registered?: RegistryProject[]
+): { cwd: string; account: string } | null {
   if (!cwd) return null;
-  let projects;
-  try {
-    projects = loadRegistry().projects;
-  } catch {
-    return null; // no data folder configured yet: there is no project default to find
+  let projects = registered;
+  if (!projects) {
+    try {
+      projects = loadRegistry().projects;
+    } catch {
+      return null; // no data folder configured yet: there is no project default to find
+    }
   }
   let best: { cwd: string; account: string } | null = null;
   for (const project of projects) {
@@ -65,7 +79,7 @@ export function projectDefaultAccount(cwd: string | undefined): string | null {
       best = { cwd: project.cwd, account: project.account };
     }
   }
-  return best?.account ?? null;
+  return best;
 }
 
 /**

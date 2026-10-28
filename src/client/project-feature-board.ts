@@ -335,7 +335,9 @@ export function renderFeatureRow(
         project.vcs.canDispatch
           ? `<button class="pw-dispatch" data-cwd="${cwd}" data-id="${id}"
                      data-title="${escapeAttr(f.title)}"
-                     title="Dispatch this feature to the pipeline">▸</button>`
+                     title="Dispatch this feature to the pipeline${
+                       project.account ? ` (runs as ${escapeAttr(project.account.effective)})` : ''
+                     }">▸</button>`
           : `<span class="pw-dispatch disabled" title="${escapeAttr(
               project.vcs.note || 'Dispatch unavailable'
             )}">▸</span>`

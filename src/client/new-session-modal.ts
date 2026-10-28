@@ -27,6 +27,17 @@ export function accountOptionsHtml(data: AccountsResponse | null): string {
   return options.join('');
 }
 
+/** GET /api/accounts/resolve: what the empty option means for a folder. */
+export interface ResolvedAccount {
+  account: string;
+  source: 'project' | 'default';
+}
+
+/** The empty option's label, naming the account it resolves to for the chosen folder. */
+export function defaultAccountLabel(resolved: ResolvedAccount): string {
+  return `Default (${resolved.account}${resolved.source === 'project' ? ', from project' : ''})`;
+}
+
 /**
  * The "New Session" modal: name/cwd fields, recent-path suggestions, and the
  * Track picker (track-picker.ts).
@@ -39,6 +50,9 @@ export class NewSessionModal {
   private creating = false;
   /** The New Session dialog's Track picker (track-picker.ts). */
   readonly trackPicker = new TrackPicker();
+  private defaultAccountTimer: number | null = null;
+  /** Bumped per lookup, so a slow answer for an older folder never overwrites a newer one. */
+  private defaultAccountSeq = 0;
 
   constructor(private readonly host: NewSessionModalHost) {}
 
@@ -73,6 +87,35 @@ export class NewSessionModal {
     }
     select.innerHTML = accountOptionsHtml(data);
     select.value = '';
+    void this.refreshDefaultAccount();
+  }
+
+  /** Re-label the Default option once typing in the folder field pauses. */
+  scheduleDefaultAccount(): void {
+    if (this.defaultAccountTimer !== null) window.clearTimeout(this.defaultAccountTimer);
+    this.defaultAccountTimer = window.setTimeout(() => {
+      this.defaultAccountTimer = null;
+      void this.refreshDefaultAccount();
+    }, 300);
+  }
+
+  /**
+   * Name what Default resolves to for the folder in the field: its project's
+   * account, else the configured one. On failure the generic label stays.
+   */
+  private async refreshDefaultAccount(): Promise<void> {
+    const seq = ++this.defaultAccountSeq;
+    const cwd = (document.getElementById('session-cwd-input') as HTMLInputElement | null)?.value.trim() ?? '';
+    let resolved: ResolvedAccount | null = null;
+    try {
+      const res = await fetch(`/api/accounts/resolve?cwd=${encodeURIComponent(cwd)}`);
+      if (res.ok) resolved = (await res.json()) as ResolvedAccount;
+    } catch {
+      // Keep the label accountOptionsHtml gave it.
+    }
+    if (seq !== this.defaultAccountSeq || !resolved) return;
+    const option = (document.getElementById('session-account-select') as HTMLSelectElement | null)?.options[0];
+    if (option && option.value === '') option.textContent = defaultAccountLabel(resolved);
   }
 
   // Recent working-directory suggestions
@@ -158,6 +201,7 @@ export class NewSessionModal {
     if (input && path) input.value = path;
     this.hideCwdSuggestions();
     void this.trackPicker.refresh();
+    void this.refreshDefaultAccount();
     input?.focus();
   }
 

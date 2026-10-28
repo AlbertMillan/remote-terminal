@@ -6,7 +6,14 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
-import { accountNames, accountProblems, accountSetupMissing, accountsSummary } from './accounts.js';
+import {
+  accountNames,
+  accountProblems,
+  accountSetupMissing,
+  accountsSummary,
+  defaultAccount,
+  projectDefaultAccount,
+} from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
@@ -25,6 +32,7 @@ import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delet
 import { getRecentPaths } from './sessions/recent-paths.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { migrateBranchedPlans } from './projects/track-branches.js';
+import { projectCwdFor } from './projects/worktree-owner.js';
 import { sweepLeftoverWorktrees } from './jobs/worktree.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
@@ -178,6 +186,14 @@ export async function createApp(): Promise<FastifyInstance> {
   // The accounts a new session can run under, for the New Session picker. Readiness only:
   // who is logged in where is said by a refusal, to the client that asked to launch.
   app.get('/api/accounts', async () => accountsSummary());
+  // What "Default" means for a new session in `cwd`: its project's account, else the
+  // configured one. A name only, like the route above.
+  app.get<{ Querystring: { cwd?: string } }>('/api/accounts/resolve', async (request) => {
+    const fromProject = projectDefaultAccount(projectCwdFor(request.query?.cwd || undefined));
+    return fromProject
+      ? { account: fromProject, source: 'project' as const }
+      : { account: defaultAccount(), source: 'default' as const };
+  });
 
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };

@@ -34,6 +34,7 @@ import {
 import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './session-env.js';
 import { deletePromptFile } from './prompt-file.js';
 import { assertAccountReady, resolveStartAccount } from '../accounts.js';
+import { projectCwdFor } from '../projects/worktree-owner.js';
 
 const logger = createLogger('session-manager');
 
@@ -125,7 +126,7 @@ class SessionManager {
     const cols = options.cols || 80;
     const rows = options.rows || 24;
     const now = new Date();
-    const account = resolveStartAccount(options.account, cwd);
+    const account = resolveStartAccount(options.account, projectCwdFor(cwd));
     // Before anything exists: a refused start leaves no row and no PTY. A Log in session
     // skips it — it is how the login gets there.
     if (!options.skipPreflight) assertAccountReady(account);

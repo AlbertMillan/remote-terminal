@@ -1,6 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import { spawn } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { createServer, type Server } from 'http';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import type { AddressInfo } from 'net';
 
@@ -12,6 +14,17 @@ import type { AddressInfo } from 'net';
 
 const SCRIPT = join(__dirname, '..', 'scripts', 'statusline.mjs');
 
+// The accounts the script maps CLAUDE_CONFIG_DIR against: pinned, so this machine's
+// own config.json never decides the output. Neither is the default ~/.claude.
+const ACCOUNTS_DIR = mkdtempSync(join(tmpdir(), 'cr-statusline-'));
+const WORK_DIR = join(ACCOUNTS_DIR, 'work');
+const ACCOUNTS_CONFIG = join(ACCOUNTS_DIR, 'config.json');
+writeFileSync(
+  ACCOUNTS_CONFIG,
+  JSON.stringify({ accounts: { personal: { configDir: join(ACCOUNTS_DIR, 'personal') }, work: { configDir: WORK_DIR } } })
+);
+afterAll(() => rmSync(ACCOUNTS_DIR, { recursive: true, force: true }));
+
 function run(
   stdin: string,
   url: string,
@@ -20,7 +33,7 @@ function run(
   return new Promise((resolve) => {
     const started = Date.now();
     // CLAUDE_CONFIG_DIR as the session's `claude` has it: unset for the default ~/.claude.
-    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_REMOTE_URL: url };
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_REMOTE_URL: url, CLAUDE_REMOTE_CONFIG: ACCOUNTS_CONFIG };
     delete env.CLAUDE_CONFIG_DIR;
     if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
     const child = spawn(process.execPath, [SCRIPT], { env });
@@ -98,6 +111,20 @@ describe('statusline.mjs', () => {
     const url = await listen((b) => received.push(b));
     await run(JSON.stringify(PAYLOAD), url, 'C:/Users/me/.claude-personal');
     expect(JSON.parse(received[0]).config_dir).toBe('C:/Users/me/.claude-personal');
+  });
+
+  it("names the account whose folder this claude runs on, matched however it's spelled", async () => {
+    const out = await run(JSON.stringify(PAYLOAD), 'http://127.0.0.1:1', WORK_DIR.toUpperCase() + '/');
+    expect(out.stdout).toBe(
+      process.platform === 'win32' ? 'Opus 5 · [work] · 5h 55% · wk 22%\n' : 'Opus 5 · 5h 55% · wk 22%\n'
+    );
+    const exact = await run(JSON.stringify(PAYLOAD), 'http://127.0.0.1:1', WORK_DIR);
+    expect(exact.stdout).toBe('Opus 5 · [work] · 5h 55% · wk 22%\n');
+  });
+
+  it('names no account for a folder none uses', async () => {
+    const out = await run(JSON.stringify(PAYLOAD), 'http://127.0.0.1:1', join(ACCOUNTS_DIR, 'other'));
+    expect(out.stdout).toBe('Opus 5 · 5h 55% · wk 22%\n');
   });
 
   it('still prints, promptly, when the server is down', async () => {

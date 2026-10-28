@@ -9,6 +9,7 @@ import {
   normalizeRegistry,
   saveRegistry,
   setFavorite,
+  setProjectAccount,
   type RegistryProject,
 } from './registry.js';
 import { migrateProject } from './migrate.js';
@@ -43,6 +44,7 @@ import {
 } from './project-doc-format.js';
 import { withProjectUsage } from '../usage/store.js';
 import { replyWithError, type StatusError } from '../utils/http-errors.js';
+import { isAccount } from '../accounts.js';
 
 const logger = createLogger('project-routes');
 
@@ -167,6 +169,30 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         }
         logger.error({ error }, 'registry: favourite save failed');
         return reply.status(500).send({ error: 'Failed to save favourite' });
+      }
+    }
+  );
+
+  // Set (or clear, `account: null`) the account a project's new sessions default
+  // to and its jobs run under. In place, like a favourite: only this entry changes.
+  app.post<{ Body?: { cwd?: string; account?: unknown } }>(
+    '/api/projects/account',
+    async (request, reply) => {
+      const { cwd, account } = request.body ?? {};
+      if (typeof cwd !== 'string' || !cwd || (account !== null && !isAccount(account))) {
+        return reply.status(400).send({ error: 'cwd and account (a configured account, or null) required' });
+      }
+      const target = listBoardCwds().find((c) => pathKey(c) === pathKey(cwd));
+      if (!target) return reply.status(404).send({ error: 'Unknown project' });
+      try {
+        setProjectAccount(target, account);
+        return { cwd: target, account };
+      } catch (error) {
+        if (error instanceof RegistryUnreadableError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        logger.error({ error }, 'registry: project account save failed');
+        return reply.status(500).send({ error: 'Failed to save the project account' });
       }
     }
   );

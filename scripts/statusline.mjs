@@ -11,6 +11,10 @@
  * Claude Code runs this through bash on Windows too, with no jq to lean on.
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { configuredAccounts, expandHome } from './claude-accounts.mjs';
+
 const SERVER = process.env.CLAUDE_REMOTE_URL || 'http://localhost:4220';
 const RELAY_TIMEOUT_MS = 300;
 
@@ -30,11 +34,39 @@ function windowText(label, w) {
   return `${label} ${Math.round(w.used_percentage)}%`;
 }
 
-function statusText(payload) {
+/** Paths compared as Windows compares them: separators and case don't matter. */
+function pathKey(p) {
+  const n = p.replace(/[\\/]+/g, '/').replace(/\/$/, '');
+  return process.platform === 'win32' ? n.toLowerCase() : n;
+}
+
+/**
+ * The claude-remote account whose folder this `claude` runs on (docs/accounts.md),
+ * from its CLAUDE_CONFIG_DIR — unset is Claude Code's default ~/.claude. Read from
+ * config.json, never the server: the line is printed before any network call.
+ * Null for a folder no account uses, or on any failure.
+ */
+function accountName() {
+  try {
+    const dir = process.env.CLAUDE_CONFIG_DIR;
+    const target = pathKey(dir ? expandHome(dir) : join(homedir(), '.claude'));
+    const accounts = configuredAccounts();
+    return (
+      Object.keys(accounts).find(
+        (name) => typeof accounts[name]?.configDir === 'string' && pathKey(expandHome(accounts[name].configDir)) === target
+      ) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function statusText(payload, account = accountName()) {
   const model = payload?.model?.display_name;
   const limits = payload?.rate_limits;
   const parts = [
     typeof model === 'string' && model ? model : null,
+    account ? `[${account}]` : null,
     windowText('5h', limits?.five_hour),
     windowText('wk', limits?.seven_day),
   ].filter(Boolean);

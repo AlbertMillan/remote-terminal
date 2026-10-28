@@ -6,7 +6,7 @@ import { sessionsInWorktree } from '../utils/paths.js';
 import { discoverProjects, pathKey } from '../sessions/project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
 import { worktreeRoot } from '../jobs/worktree.js';
-import { allProjectsDirs } from '../accounts.js';
+import { allProjectsDirs, defaultAccount, projectAccountEntry } from '../accounts.js';
 import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } from './registry.js';
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';
 import { hasProjectDoc, readProjectDoc } from './project-store.js';
@@ -70,6 +70,12 @@ export interface WorkspaceProject {
   registered: boolean;
   /** Starred in the sidebar (projects.json `favorites`). */
   favorite: boolean;
+  /**
+   * The account its new sessions default to and its jobs run under (accounts.ts):
+   * `own` is this project's projects.json `account`; without one, `effective`
+   * comes from a containing entry (`parent`) or the configured `default`.
+   */
+  account: { own: string | null; effective: string; source: 'project' | 'parent' | 'default' };
   vcs: VcsCapabilities;
 
   hasDoc: boolean;
@@ -247,6 +253,13 @@ export interface BoardOptions {
   runningSessions?: { cwd: string }[];
 }
 
+function accountFor(cwd: string, registered: RegistryProject[]): WorkspaceProject['account'] {
+  const entry = projectAccountEntry(cwd, registered);
+  if (!entry) return { own: null, effective: defaultAccount(), source: 'default' };
+  const own = pathKey(entry.cwd) === pathKey(cwd);
+  return { own: own ? entry.account : null, effective: entry.account, source: own ? 'project' : 'parent' };
+}
+
 export function getWorkspaceBoard(options: BoardOptions = {}): WorkspaceProject[] {
   const registry = options.registry ?? loadRegistry();
   const runningSessions = options.runningSessions ?? [];
@@ -350,6 +363,7 @@ export function getWorkspaceBoard(options: BoardOptions = {}): WorkspaceProject[
       nested,
       registered: registeredKeys.has(key),
       favorite: favoriteKeys.has(key),
+      account: accountFor(cwd, registry.projects),
       vcs: capabilitiesFor(vcsKind),
       hasDoc: state?.exists ?? hasProjectDoc(entry),
       revision: state?.revision ?? 'absent',
