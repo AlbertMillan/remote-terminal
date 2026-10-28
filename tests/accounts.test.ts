@@ -59,6 +59,17 @@ describe('config', () => {
     expect(accounts.accountProblems()).toEqual([]);
   });
 
+  it('names an empty accounts block, while still running on the defaults', () => {
+    const written = getConfig().accounts;
+    getConfig().accounts = {};
+    try {
+      expect(accounts.accountProblems()).toEqual([expect.stringContaining('accounts is empty')]);
+      expect(accounts.accountNames()).toEqual(['personal', 'work']);
+    } finally {
+      getConfig().accounts = written;
+    }
+  });
+
   it('names an account with no identity, or both, and an unknown default', () => {
     const problems = accountConfigProblems({
       accounts: {
@@ -164,14 +175,6 @@ describe('per-account paths', () => {
   it('list every account for scans, each folder once', () => {
     expect(accounts.allProjectsDirs()).toEqual([join(personal, 'projects'), join(work, 'projects')]);
     expect(accounts.allSessionsDirs()).toEqual([join(personal, 'sessions'), join(work, 'sessions')]);
-  });
-
-  it('infer the account from a transcript path', () => {
-    expect(accounts.accountForTranscriptPath(join(work, 'projects', 'C--p', 'abc.jsonl'))).toBe('work');
-    expect(accounts.accountForTranscriptPath(join(personal, 'projects', 'C--p', 'abc', 'subagents', 'x.jsonl'))).toBe('personal');
-    expect(accounts.accountForTranscriptPath(join(dataDir, 'elsewhere', 'abc.jsonl'))).toBeNull();
-    // A sibling folder that merely starts with the same name is not inside it.
-    expect(accounts.accountForTranscriptPath(join(`${work}-old`, 'projects', 'C--p', 'abc.jsonl'))).toBeNull();
   });
 
   it('find a transcript in the preferred account first, then any other', () => {

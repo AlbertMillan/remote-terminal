@@ -9,6 +9,42 @@ import type { AccountIdentity, AccountRefusal } from './session-types.js';
  * `/logout` then `/login`). The original start is retried once that session exits.
  */
 
+/**
+ * The refused launch waiting on a Log in session: keyed by the `session.create`
+ * message id until the server answers, then by the new session's id until
+ * `session.loginEnded`. Each retry runs at most once.
+ */
+export class LoginRetries {
+  private byMessage = new Map<string, () => void>();
+  private bySession = new Map<string, () => void>();
+
+  /** A Log in `session.create` went out as `messageId`. */
+  requested(messageId: string, retry: () => void): void {
+    this.byMessage.set(messageId, retry);
+  }
+
+  /** The server answered `messageId` with `sessionId`. A no-op for any other launch. */
+  created(messageId: string, sessionId: string): void {
+    const retry = this.byMessage.get(messageId);
+    if (!retry) return;
+    this.byMessage.delete(messageId);
+    this.bySession.set(sessionId, retry);
+  }
+
+  /** `messageId` failed: no Log in session, nothing to retry. */
+  failed(messageId: string): void {
+    this.byMessage.delete(messageId);
+  }
+
+  /** The Log in session `sessionId` exited: run its retry, once. */
+  ended(sessionId: string): void {
+    const retry = this.bySession.get(sessionId);
+    if (!retry) return;
+    this.bySession.delete(sessionId);
+    retry();
+  }
+}
+
 export interface AccountRefusalHost {
   /** Open the Log in session; `retry` runs once it exits. */
   logIn(account: string, cleanup: boolean, retry: () => void): void;
@@ -29,7 +65,7 @@ function describeExpected(expected: AccountRefusal['expected']): string {
 
 /** Clean up applies only to an account that expects no organization (personal). */
 export function canCleanUp(refusal: AccountRefusal): boolean {
-  return !refusal.expected.organizationUuid;
+  return refusal.reason !== 'unreadable' && !refusal.expected.organizationUuid;
 }
 
 export class AccountRefusalModal {
@@ -86,11 +122,19 @@ export class AccountRefusalModal {
       });
       cleanup.title = 'Delete the org-pushed settings in this folder, then log in: run /logout, then /login with the right account';
     }
-    const login = button('Log in', 'btn-primary account-refusal-login', () => {
-      this.hide();
-      this.host.logIn(refusal.account, false, retry);
-    });
-    login.title = 'Open claude in this account’s folder: run /login, then exit; the start is tried again';
+    if (refusal.reason === 'unreadable') {
+      // Its .claude.json was caught mid-write: the login is likely fine.
+      button('Try again', 'btn-primary account-refusal-retry', () => {
+        this.hide();
+        retry();
+      });
+    } else {
+      const login = button('Log in', 'btn-primary account-refusal-login', () => {
+        this.hide();
+        this.host.logIn(refusal.account, false, retry);
+      });
+      login.title = 'Open claude in this account’s folder: run /login, then exit; the start is tried again';
+    }
 
     content.append(title, message, detail, actions);
     modal.append(content);

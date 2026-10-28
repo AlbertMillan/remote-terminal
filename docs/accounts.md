@@ -52,8 +52,8 @@ login's folder for a personal session.
 - `findTranscript(cwd, id, preferred)` — the preferred account's folder first, then any
   other: a read (the session log, history delete) still finds a transcript that was never
   moved. A launch (Fork, Resume) uses only the account's own folder.
-- `accountForTranscriptPath` — the account is inferable from a transcript's path, so
-  `usage_files` has no account column.
+- `usage_files` has no account column: a transcript's account is the one whose
+  `projectsDir` holds its path, and nothing needs it yet.
 - `claudeJsonPath(account)` — the global config file (login, trust, MCP servers). Inside a
   custom folder, but **`~/.claude.json` beside the default `~/.claude`**: an account on
   `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.
@@ -122,7 +122,8 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   node scripts/install-account-setup.mjs --from ~/.claude/settings.json --to ~/.claude-personal/settings.json
   ```
   The server logs, at boot, every account whose settings lack any of them
-  (`accountSetupMissing`); `GET /api/accounts` lists them as `setupMissing`.
+  (`accountSetupMissing`); `GET /api/accounts` lists them as `setupMissing`. That route
+  (`accountsSummary`) is unauthenticated, so it names no folder or login.
 - **Plan usage** is kept per account: `statusline.mjs` sends its `CLAUDE_CONFIG_DIR`
   (`config_dir`, empty for `~/.claude`), the server files the reading under the account on
   that folder (a folder no account uses is dropped), and the chip shows the attached

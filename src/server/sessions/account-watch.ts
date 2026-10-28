@@ -54,6 +54,12 @@ export function checkSessionAccounts(
       }
     }
     const result = byAccount.get(s.account);
+    if (result && !result.ok && result.reason === 'unreadable') {
+      // Caught mid-write, with no earlier reading to fall back on: no news either way.
+      const previous = warnings.get(s.id);
+      if (previous) next.set(s.id, previous);
+      continue;
+    }
     if (!result || result.ok) continue;
     next.set(s.id, result.message);
     if (warnings.get(s.id) !== result.message) flagged.push({ id: s.id, name: s.name, detail: result.message });

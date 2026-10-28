@@ -35,6 +35,7 @@ import {
   sessionToInfo,
   broadcastSessionUpdate,
   broadcastSessionKept,
+  broadcastLoginEnded,
   broadcastSessionMoved,
   broadcastSessionReordered,
   logger,
@@ -148,6 +149,11 @@ async function createLoginSession(
     ...dims,
   });
   injectCommand(session, 'claude');
+  // `terminal.exit` reaches only attached connections; the retry waits on this instead.
+  const off = sessionManager.onExit(session.id, (exitCode) => {
+    off();
+    broadcastLoginEnded({ sessionId: session.id, exitCode });
+  });
   return session;
 }
 

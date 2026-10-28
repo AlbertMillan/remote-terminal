@@ -118,11 +118,12 @@ function stateOf(account: string): AccountState {
 }
 
 /**
- * The account a reading belongs to when nothing says: the one on Claude Code's
- * default folder (a status line with no CLAUDE_CONFIG_DIR runs there), else the
- * configured default.
+ * Whose a snapshot file from before accounts was: the login on Claude Code's
+ * default folder, the only one there was, else the configured default. Only
+ * loadSnapshot uses it: every reading and lookup names its account, so nothing
+ * here can pick a different default than the route does.
  */
-function unscopedAccount(): string {
+function legacyFileAccount(): string {
   return accountForConfigDir(null) ?? defaultAccount();
 }
 
@@ -141,7 +142,7 @@ function snapshotPath(): string {
  * whether it carried limits (their absence is normal: plans without limits, and
  * a session before its first response, send none).
  */
-export function recordReading(body: unknown, now = Date.now(), account: string = unscopedAccount()): boolean {
+export function recordReading(body: unknown, account: string, now = Date.now()): boolean {
   const state = stateOf(account);
   state.relaySeenAt = new Date(now).toISOString();
   const reading = parseReading(body, now);
@@ -158,11 +159,11 @@ export function recordReading(body: unknown, now = Date.now(), account: string =
   return reading !== null;
 }
 
-export function getSnapshot(account: string = unscopedAccount()): PlanUsageSnapshot | null {
+export function getSnapshot(account: string): PlanUsageSnapshot | null {
   return states.get(account)?.snapshot ?? null;
 }
 
-export function getRelaySeenAt(account: string = unscopedAccount()): string | null {
+export function getRelaySeenAt(account: string): string | null {
   return states.get(account)?.relaySeenAt ?? null;
 }
 
@@ -217,7 +218,7 @@ export function loadSnapshot(): void {
         if (entry && typeof entry === 'object') states.set(name, restoreState(entry as Record<string, unknown>));
       }
     } else {
-      states.set(unscopedAccount(), restoreState(raw));
+      states.set(legacyFileAccount(), restoreState(raw));
     }
   } catch (error) {
     logger.warn({ error, path }, 'plan-usage: ignoring unreadable snapshot');

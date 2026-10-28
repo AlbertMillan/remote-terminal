@@ -107,3 +107,24 @@ describe('accountSetupMissing', () => {
     expect(accountSetupMissing('personal')).toEqual([]);
   });
 });
+
+describe("the scripts' copy of the account defaults", () => {
+  it('matches the server: the same default accounts, the same ~ expansion, an empty block taken as none', async () => {
+    // @ts-expect-error -- a plain .mjs script with no type declarations
+    const scripts = await import('../scripts/claude-accounts.mjs');
+    const { DEFAULT_ACCOUNTS, DEFAULT_ACCOUNT } = await import('../src/server/account-defaults.js');
+    const { expandHome } = await import('../src/server/accounts.js');
+    expect(scripts.DEFAULT_ACCOUNTS).toEqual(DEFAULT_ACCOUNTS);
+    expect(scripts.DEFAULT_ACCOUNT).toBe(DEFAULT_ACCOUNT);
+    const home = join(makeTmpDataDir('expand-home'), 'me');
+    for (const p of ['~', '~/.claude-personal', '.claude-work', join(home, 'elsewhere')]) {
+      expect(scripts.expandHome(p, home)).toBe(expandHome(p, home));
+    }
+
+    const config = join(makeTmpDataDir('accounts-config'), 'config.json');
+    writeFileSync(config, JSON.stringify({ accounts: {} }));
+    expect(scripts.configuredAccounts(config)).toEqual(DEFAULT_ACCOUNTS);
+    writeFileSync(config, JSON.stringify({ accounts: { solo: { configDir: '~/.solo' } } }));
+    expect(Object.keys(scripts.configuredAccounts(config))).toEqual(['solo']);
+  });
+});

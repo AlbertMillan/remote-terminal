@@ -8,7 +8,7 @@ export interface NewSessionModalHost {
 /** GET /api/accounts: the accounts a session can run under (docs/accounts.md). */
 export interface AccountsResponse {
   defaultAccount: string;
-  accounts: { name: string; configDir: string; ready: boolean }[];
+  accounts: { name: string; ready: boolean }[];
 }
 
 /**

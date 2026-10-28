@@ -46,7 +46,7 @@ export interface AccountRefusal {
   ok: false;
   account: string;
   configDir: string;
-  reason: 'no-expected-identity' | 'no-login' | 'mismatch' | 'org-settings';
+  reason: 'no-expected-identity' | 'unreadable' | 'no-login' | 'mismatch' | 'org-settings';
   found: AccountIdentity | null;
   expected: { accountUuid?: string; organizationUuid?: string };
   remoteSettings?: string[];
@@ -55,6 +55,12 @@ export interface AccountRefusal {
 
 export interface SessionAccountWarningsPayload {
   warnings: Record<string, string>;
+}
+
+/** A Log in session exited (sent to every connection): retry the launch it was opened for. */
+export interface SessionLoginEndedPayload {
+  sessionId: string;
+  exitCode: number;
 }
 
 export interface AccountChangedNotificationPayload {
@@ -247,6 +253,7 @@ export type ServerMessage =
   | { type: 'session.renamed'; id?: string; payload: SessionRenamedPayload }
   | { type: 'session.claudeNames'; id?: string; payload: SessionClaudeNamesPayload }
   | { type: 'session.accountWarnings'; id?: string; payload: SessionAccountWarningsPayload }
+  | { type: 'session.loginEnded'; id?: string; payload: SessionLoginEndedPayload }
   | { type: 'session.moved'; id?: string; payload: SessionMovedPayload }
   | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
   | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }

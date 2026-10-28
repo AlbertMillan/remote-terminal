@@ -56,7 +56,7 @@ export function registerPlanUsageRoutes(app: FastifyInstance): void {
     const dir = typeof body?.config_dir === 'string' ? body.config_dir : null;
     const account = accountForConfigDir(dir);
     if (!account) return { stored: false, account: null };
-    return { stored: recordReading(request.body, Date.now(), account), account };
+    return { stored: recordReading(request.body, account), account };
   });
 
   // `?account=` picks whose limits: the chip asks for the attached session's.

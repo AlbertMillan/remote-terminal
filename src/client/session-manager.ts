@@ -22,7 +22,7 @@ import {
 } from './land-result.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
-import { AccountRefusalModal } from './account-refusal-modal.js';
+import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
 import { SessionListView } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
@@ -31,6 +31,7 @@ import type {
   SessionMovedPayload,
   SessionClaudeNamesPayload,
   SessionAccountWarningsPayload,
+  SessionLoginEndedPayload,
   AccountChangedNotificationPayload,
   AccountRefusal,
   SessionReorderedPayload,
@@ -117,10 +118,8 @@ class SessionManager {
   });
   /** How to send a launch (create, open, revive) again, by its message id, until it is answered. */
   private launchRetries = new Map<string, () => void>();
-  /** A Log in session's create request, by message id -> the launch to retry once it exits. */
-  private pendingLogins = new Map<string, () => void>();
-  /** A running Log in session's id -> the launch to retry once it exits. */
-  private loginRetries = new Map<string, () => void>();
+  /** Launches waiting on a Log in session, retried once it exits (`session.loginEnded`). */
+  private loginRetries = new LoginRetries();
 
   /** The keyboard shortcuts modal and the welcome-screen hints. */
   private shortcutsModal = new ShortcutsModal();
@@ -658,6 +657,9 @@ class SessionManager {
       case 'session.accountWarnings':
         this.handleAccountWarnings(message.payload);
         break;
+      case 'session.loginEnded':
+        this.handleLoginEnded(message.payload);
+        break;
       case 'session.moved':
         this.handleSessionMoved(message.payload);
         break;
@@ -722,11 +724,12 @@ class SessionManager {
   private trackLaunchAnswered(messageId: string | undefined, sessionId: string): void {
     if (!messageId) return;
     this.launchRetries.delete(messageId);
-    const retry = this.pendingLogins.get(messageId);
-    if (retry) {
-      this.pendingLogins.delete(messageId);
-      this.loginRetries.set(sessionId, retry);
-    }
+    this.loginRetries.created(messageId, sessionId);
+  }
+
+  /** A Log in session ended -- broadcast, so this arrives even after switching away from it. */
+  private handleLoginEnded(payload: SessionLoginEndedPayload): void {
+    this.loginRetries.ended(payload.sessionId);
   }
 
   private handleAccountWarnings(payload: SessionAccountWarningsPayload): void {
@@ -741,7 +744,7 @@ class SessionManager {
     const retry = messageId ? this.launchRetries.get(messageId) : undefined;
     if (messageId) {
       this.launchRetries.delete(messageId);
-      this.pendingLogins.delete(messageId);
+      this.loginRetries.failed(messageId);
     }
     // Release the in-flight attach flag. It is otherwise only cleared by a successful
     // session.attached or a socket close, so a rejected attach pins it to that session id
@@ -993,12 +996,6 @@ class SessionManager {
   private handleTerminalExit(payload: { sessionId: string; exitCode: number }): void {
     if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
       this.terminalMgr.writeln(`\r\n[Process exited with code ${payload.exitCode}]`);
-    }
-    // A Log in session ended: try the launch it was opened for again.
-    const retry = this.loginRetries.get(payload.sessionId);
-    if (retry) {
-      this.loginRetries.delete(payload.sessionId);
-      retry();
     }
   }
 
@@ -1338,7 +1335,7 @@ class SessionManager {
   private startLogin(account: string, cleanup: boolean, retry: () => void): void {
     const dims = this.terminalMgr.getDimensions();
     const id = this.send('session.create', { account, login: true, cleanup, cols: dims.cols, rows: dims.rows });
-    this.pendingLogins.set(id, retry);
+    this.loginRetries.requested(id, retry);
   }
 
   // Open a Claude session from a project's session history: `resume` continues the original

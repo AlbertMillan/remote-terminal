@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -58,6 +58,7 @@ beforeEach(() => {
   rmSync(home, { recursive: true, force: true });
   mkdirSync(home, { recursive: true });
   stopAccountWatch();
+  accounts.clearIdentityCache();
 });
 
 describe('preflight', () => {
@@ -104,6 +105,37 @@ describe('preflight', () => {
     login(home, { organizationUuid: 'org-work' });
     writeFileSync(join(workDir, 'remote-settings.json'), '{}');
     expect(accounts.preflight('work', home).ok).toBe(true);
+  });
+
+  it('reads a .claude.json caught mid-write as the last good login, not as a logout', () => {
+    login(personalDir, { accountUuid: 'acc-personal' });
+    expect(accounts.preflight('personal', home).ok).toBe(true);
+    // Claude Code rewrites the file in place: a read can see half of it.
+    writeFileSync(join(personalDir, '.claude.json'), '{"oauthAccount":{"accountUu');
+    expect(accounts.preflight('personal', home).ok).toBe(true);
+  });
+
+  it('refuses as unreadable, never as no-login, when there is no earlier reading to fall back on', () => {
+    mkdirSync(personalDir, { recursive: true });
+    writeFileSync(join(personalDir, '.claude.json'), '{"oauthAccount":{"accountUu');
+    expect(accounts.preflight('personal', home)).toMatchObject({ ok: false, reason: 'unreadable', found: null });
+    expect(() => accounts.readIdentity('personal', home)).toThrow(accounts.IdentityUnreadableError);
+  });
+
+  it('parses .claude.json once until it changes', () => {
+    login(personalDir, { accountUuid: 'acc-personal' });
+    const file = join(personalDir, '.claude.json');
+    // A whole-second mtime, so it can be put back exactly.
+    const at = new Date('2026-01-01T00:00:00Z');
+    utimesSync(file, at, at);
+    expect(accounts.readIdentity('personal', home)?.accountUuid).toBe('acc-personal');
+    // Same size and mtime: the cached reading answers, the content is not read again.
+    writeFileSync(file, JSON.stringify({ oauthAccount: { accountUuid: 'acc-xxxxxxxx' }, projects: {} }));
+    utimesSync(file, at, at);
+    expect(accounts.readIdentity('personal', home)?.accountUuid).toBe('acc-personal');
+    // A real change (here the size) is read.
+    login(personalDir, { accountUuid: 'acc-someone-else' });
+    expect(accounts.readIdentity('personal', home)?.accountUuid).toBe('acc-someone-else');
   });
 
   it('assertAccountReady throws the refusal, with status 409', () => {
@@ -186,6 +218,23 @@ describe('launch environment', () => {
   });
 });
 
+describe('GET /api/accounts', () => {
+  it('says which accounts are ready, without naming a folder or a login', () => {
+    login(personalDir, { accountUuid: 'acc-personal', emailAddress: 'me@home.example' });
+    const summary = accounts.accountsSummary(home);
+    expect(summary.defaultAccount).toBe('personal');
+    expect(summary.accounts.map((a) => [a.name, a.ready])).toEqual([
+      ['personal', true],
+      ['work', false],
+      ['unset', false],
+    ]);
+    const text = JSON.stringify(summary);
+    expect(text).not.toContain('.claude');
+    expect(text).not.toContain('me@home.example');
+    expect(text).not.toContain('acc-personal');
+  });
+});
+
 describe('the identity watch', () => {
   const sessions = [
     { id: 's1', name: 'one', account: 'personal' },
@@ -215,6 +264,22 @@ describe('the identity watch', () => {
     // Logged back in: the warnings clear.
     login(personalDir, { accountUuid: 'acc-personal' });
     expect(checkSessionAccounts(sessions, check(home))).toEqual({ warnings: {}, flagged: [], changed: true });
+  });
+
+  it('neither flags nor clears a session while its account\'s .claude.json cannot be read', () => {
+    mkdirSync(personalDir, { recursive: true });
+    writeFileSync(join(personalDir, '.claude.json'), '{"oauthAc');
+    const personalOnly = sessions.slice(0, 1);
+    expect(checkSessionAccounts(personalOnly, check(home))).toEqual({ warnings: {}, flagged: [], changed: false });
+
+    // A real mismatch is flagged, and an unreadable moment after it keeps the warning.
+    login(personalDir, { accountUuid: 'acc-other' });
+    expect(checkSessionAccounts(personalOnly, check(home)).flagged).toHaveLength(1);
+    accounts.clearIdentityCache();
+    writeFileSync(join(personalDir, '.claude.json'), '{"oauthAc');
+    const during = checkSessionAccounts(personalOnly, check(home));
+    expect(during).toMatchObject({ flagged: [], changed: false });
+    expect(Object.keys(during.warnings)).toEqual(['s1']);
   });
 
   it('skips a session whose account was removed from the config', () => {

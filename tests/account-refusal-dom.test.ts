@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { AccountRefusalModal } from '../src/client/account-refusal-modal.js';
+import { AccountRefusalModal, LoginRetries } from '../src/client/account-refusal-modal.js';
 import { accountOptionsHtml } from '../src/client/new-session-modal.js';
 import type { AccountRefusal } from '../src/client/session-types.js';
 
@@ -57,6 +57,50 @@ describe('AccountRefusalModal', () => {
   it('says nobody is logged in for a folder without a login', () => {
     new AccountRefusalModal({ logIn: vi.fn() }).show({ ...MISMATCH, reason: 'no-login', found: null }, vi.fn());
     expect(document.querySelector('.account-refusal-modal')!.textContent).toContain('Nobody is logged in');
+  });
+
+  it('offers Try again, not Log in or Clean up, for a .claude.json caught mid-write', () => {
+    const logIn = vi.fn();
+    const retry = vi.fn();
+    new AccountRefusalModal({ logIn }).show({ ...MISMATCH, reason: 'unreadable', found: null }, retry);
+    expect(document.querySelector('.account-refusal-login')).toBeNull();
+    expect(document.querySelector('.account-refusal-cleanup')).toBeNull();
+    (document.querySelector('.account-refusal-retry') as HTMLButtonElement).click();
+    expect(retry).toHaveBeenCalledOnce();
+    expect(logIn).not.toHaveBeenCalled();
+    expect(document.querySelector('.account-refusal-modal')).toBeNull();
+  });
+});
+
+describe('LoginRetries', () => {
+  it('retries the refused launch once its Log in session ends, whichever session is shown by then', () => {
+    const retries = new LoginRetries();
+    const retry = vi.fn();
+    retries.requested('m1', retry);
+    retries.ended('login-1'); // not known as a Log in session yet
+    expect(retry).not.toHaveBeenCalled();
+
+    retries.created('m1', 'login-1');
+    retries.ended('login-1');
+    expect(retry).toHaveBeenCalledOnce();
+    retries.ended('login-1');
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('drops the retry when the Log in session could not be created', () => {
+    const retries = new LoginRetries();
+    const retry = vi.fn();
+    retries.requested('m1', retry);
+    retries.failed('m1');
+    retries.created('m1', 'login-1');
+    retries.ended('login-1');
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('ignores the answer to any other launch', () => {
+    const retries = new LoginRetries();
+    retries.created('m-other', 's-other');
+    expect(() => retries.ended('s-other')).not.toThrow();
   });
 });
 

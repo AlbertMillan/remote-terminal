@@ -9,6 +9,7 @@ import {
   type PromptMissingNotificationPayload,
   type SessionClaudeNamesPayload,
   type SessionAccountWarningsPayload,
+  type SessionLoginEndedPayload,
   type AccountChangedNotificationPayload,
 } from './protocol.js';
 import { sessionManager } from '../sessions/manager.js';
@@ -161,6 +162,15 @@ export function broadcastAccountWarnings(warnings: Record<string, string>): void
   for (const conn of connections.values()) {
     if (conn.ws.readyState === WS_OPEN) {
       conn.ws.send(createMessage('session.accountWarnings', payload));
+    }
+  }
+}
+
+/** A Log in session exited: to every connection, so its retry survives a session switch. */
+export function broadcastLoginEnded(payload: SessionLoginEndedPayload): void {
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) {
+      conn.ws.send(createMessage('session.loginEnded', payload));
     }
   }
 }

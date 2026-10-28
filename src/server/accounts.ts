@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'path';
 import { accountConfigProblems, getConfig, type AccountConfig } from './config.js';
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNTS } from './account-defaults.js';
 import { isDescendantOf, loadRegistry } from './projects/registry.js';
-import { isInside, pathKey } from './utils/paths.js';
+import { pathKey } from './utils/paths.js';
 import { tryGetTranscriptPath } from './sessions/transcript.js';
 
 /**
@@ -21,7 +21,10 @@ export class UnknownAccountError extends Error {
   }
 }
 
-/** The configured accounts. A config without any (tests' mocks) gets the defaults. */
+/**
+ * The configured accounts. A config without any (tests' mocks, or an empty
+ * `accounts: {}`, which accountProblems reports at boot) gets the defaults.
+ */
 export function accountConfigs(): Record<string, AccountConfig> {
   const accounts = getConfig().accounts;
   return accounts && Object.keys(accounts).length > 0 ? accounts : DEFAULT_ACCOUNTS;
@@ -99,7 +102,11 @@ export function expandHome(path: string, home: string = homedir()): string {
  * parent is missing). Logged at boot; each bad account refuses its own launches.
  */
 export function accountProblems(home: string = homedir()): string[] {
-  const problems = accountConfigProblems({ accounts: accountConfigs(), defaultAccount: getConfig().defaultAccount ?? DEFAULT_ACCOUNT });
+  // The accounts as written, so an empty `accounts: {}` is named rather than hidden by the defaults.
+  const problems = accountConfigProblems({
+    accounts: getConfig().accounts ?? accountConfigs(),
+    defaultAccount: getConfig().defaultAccount ?? DEFAULT_ACCOUNT,
+  });
   for (const [name, account] of Object.entries(accountConfigs())) {
     if (typeof account?.configDir !== 'string' || !account.configDir.trim()) continue;
     const dir = expandHome(account.configDir, home);
@@ -184,15 +191,6 @@ export function allSessionsDirs(home?: string): string[] {
 }
 
 /**
- * The account a transcript belongs to: the one whose projects folder holds it.
- * `usage_files` needs no account column because of this. Null for a path in
- * no account's folder.
- */
-export function accountForTranscriptPath(path: string, home?: string): string | null {
-  return accountNames().find((account) => isInside(projectsDir(account, home), path)) ?? null;
-}
-
-/**
  * A conversation's transcript, looked for in `preferred`'s folder first, then in
  * every other account's. Null when no account has it.
  */
@@ -270,14 +268,65 @@ export interface Identity {
   organizationName?: string;
 }
 
-/** The account's login, or null when nobody is logged in there (or the file is unreadable). */
-export function readIdentity(account: string, home?: string): Identity | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(claudeJsonPath(account, home), 'utf-8'));
-  } catch {
-    return null;
+/**
+ * `.claude.json` exists but could not be parsed. Claude Code rewrites it in place
+ * (not via rename), so a read can land mid-write: that is not a logout, and must
+ * neither refuse a launch as `no-login` nor flag every running session.
+ */
+export class IdentityUnreadableError extends Error {
+  constructor(readonly path: string) {
+    super(`Could not read ${path} (Claude Code may be writing it): try again`);
+    this.name = 'IdentityUnreadableError';
   }
+}
+
+/**
+ * Last good reading per `.claude.json`, keyed by its mtime and size: every launch,
+ * hook call and watch tick asks, and the file is often hundreds of KB (project
+ * history) for a few fields.
+ */
+const identityCache = new Map<string, { mtimeMs: number; size: number; identity: Identity | null }>();
+
+/** Forget cached logins (tests that rewrite a `.claude.json` faster than its mtime moves). */
+export function clearIdentityCache(): void {
+  identityCache.clear();
+}
+
+/** How often a parse is retried at once before falling back to the last good reading. */
+const READ_ATTEMPTS = 3;
+
+/**
+ * The account's login, or null when nobody is logged in there (no file, or no
+ * `oauthAccount` in it). A file caught mid-write gives the last good reading of it;
+ * with none, IdentityUnreadableError.
+ */
+export function readIdentity(account: string, home?: string): Identity | null {
+  const path = claudeJsonPath(account, home);
+  const cached = identityCache.get(path);
+  for (let attempt = 0; attempt < READ_ATTEMPTS; attempt++) {
+    let stat;
+    try {
+      stat = statSync(path);
+    } catch {
+      identityCache.delete(path);
+      return null; // no file: nobody has logged in there
+    }
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.identity;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      continue; // caught mid-write: look again
+    }
+    const identity = identityOf(parsed);
+    identityCache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, identity });
+    return identity;
+  }
+  if (cached) return cached.identity;
+  throw new IdentityUnreadableError(path);
+}
+
+function identityOf(parsed: unknown): Identity | null {
   const oauth = (parsed as { oauthAccount?: unknown } | null)?.oauthAccount;
   if (!oauth || typeof oauth !== 'object') return null;
   const o = oauth as Record<string, unknown>;
@@ -303,7 +352,7 @@ export function remoteSettingsFiles(account: string, home?: string): string[] {
   }
 }
 
-export type RefusalReason = 'no-expected-identity' | 'no-login' | 'mismatch' | 'org-settings';
+export type RefusalReason = 'no-expected-identity' | 'unreadable' | 'no-login' | 'mismatch' | 'org-settings';
 
 export interface PreflightRefusal {
   ok: false;
@@ -339,7 +388,14 @@ export function preflight(account: string, home?: string): PreflightResult {
     ...(cfg.accountUuid ? { accountUuid: cfg.accountUuid } : {}),
     ...(cfg.organizationUuid ? { organizationUuid: cfg.organizationUuid } : {}),
   };
-  const found = readIdentity(account, home);
+  let found: Identity | null = null;
+  let unreadable: IdentityUnreadableError | null = null;
+  try {
+    found = readIdentity(account, home);
+  } catch (error) {
+    if (!(error instanceof IdentityUnreadableError)) throw error;
+    unreadable = error;
+  }
   const refuse = (reason: RefusalReason, message: string, extra: Partial<PreflightRefusal> = {}): PreflightRefusal => ({
     ok: false,
     account,
@@ -357,6 +413,7 @@ export function preflight(account: string, home?: string): PreflightResult {
       `Account "${account}" has no expected identity: set accountUuid or organizationUuid for it in config.json (docs/accounts.md)`
     );
   }
+  if (unreadable) return refuse('unreadable', `Account "${account}": ${unreadable.message}`);
   if (!found) return refuse('no-login', `Nobody is logged in to account "${account}" (${dir}): log in there first`);
   const matches =
     (!expected.accountUuid || found.accountUuid === expected.accountUuid) &&
@@ -450,4 +507,23 @@ export function accountSetupMissing(account: string, home?: string): string[] {
   const statusLine = settings.statusLine?.command;
   if (typeof statusLine !== 'string' || !statusLine.includes('statusline.mjs')) missing.push('plan-usage statusLine');
   return missing;
+}
+
+/**
+ * `GET /api/accounts`: what the Account picker needs, and nothing about where the
+ * logins live. That route is unauthenticated on `0.0.0.0` like the rest of `/api/*`,
+ * so it names no folder, identity or email.
+ */
+export function accountsSummary(home?: string): {
+  defaultAccount: string;
+  accounts: { name: string; ready: boolean; setupMissing: string[] }[];
+} {
+  return {
+    defaultAccount: defaultAccount(),
+    accounts: accountNames().map((name) => ({
+      name,
+      ready: preflight(name, home).ok,
+      setupMissing: accountSetupMissing(name, home),
+    })),
+  };
 }

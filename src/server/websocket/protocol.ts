@@ -47,6 +47,7 @@ export type ServerMessageType =
   | 'session.kept'
   | 'session.claudeNames'
   | 'session.accountWarnings'
+  | 'session.loginEnded'
   | 'session.error'
   | 'terminal.data'
   | 'terminal.exit'
@@ -378,6 +379,16 @@ export interface AccountChangedNotificationPayload {
 /** Every running session whose account is on the wrong login, by id → why. */
 export interface SessionAccountWarningsPayload {
   warnings: Record<string, string>;
+}
+
+/**
+ * A Log in session's process exited: the client that opened it retries the launch
+ * it was opened for. Sent to every connection, not just attached ones (unlike
+ * `terminal.exit`), so switching sessions during the login doesn't lose the retry.
+ */
+export interface SessionLoginEndedPayload {
+  sessionId: string;
+  exitCode: number;
 }
 
 /** `session.error`; `refusal` when a launch was refused by preflight (accounts.ts). */

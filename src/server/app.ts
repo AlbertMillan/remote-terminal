@@ -6,7 +6,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getConfig, loadConfig } from './config.js';
-import { accountNames, accountProblems, accountSetupMissing, defaultAccount, preflight } from './accounts.js';
+import { accountNames, accountProblems, accountSetupMissing, accountsSummary } from './accounts.js';
 import { createLogger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './db/schema.js';
 import { handleConnection, closeAllConnections } from './websocket/handler.js';
@@ -177,13 +177,7 @@ export async function createApp(): Promise<FastifyInstance> {
   // Recent working directories (for the new-session path dropdown)
   // The accounts a new session can run under, for the New Session picker. Readiness only:
   // who is logged in where is said by a refusal, to the client that asked to launch.
-  app.get('/api/accounts', async () => ({
-    defaultAccount: defaultAccount(),
-    accounts: accountNames().map((name) => {
-      const result = preflight(name);
-      return { name, configDir: result.configDir, ready: result.ok, setupMissing: accountSetupMissing(name) };
-    }),
-  }));
+  app.get('/api/accounts', async () => accountsSummary());
 
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };

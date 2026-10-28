@@ -176,6 +176,10 @@ export function getConfig(): Config {
 export function accountConfigProblems(config: Pick<Config, 'accounts' | 'defaultAccount'>): string[] {
   const problems: string[] = [];
   const accounts = config.accounts ?? {};
+  if (Object.keys(accounts).length === 0) {
+    // accounts.ts falls back to the built-in defaults rather than having no account at all.
+    return ['accounts is empty: the built-in defaults (personal, work) are used instead; define your accounts (docs/accounts.md)'];
+  }
   for (const [name, account] of Object.entries(accounts)) {
     if (!account || typeof account.configDir !== 'string' || !account.configDir.trim()) {
       problems.push(`accounts.${name}: configDir is required`);

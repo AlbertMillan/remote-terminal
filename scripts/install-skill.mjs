@@ -10,9 +10,9 @@
 // (CLAUDE_REMOTE_CONFIG, else ~/.claude-remote/config.json); without any there, the
 // two default accounts' folders, ~/.claude-personal and ~/.claude.
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configuredAccounts, expandHome } from './claude-accounts.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const srcRoot = join(root, 'skills');
@@ -20,23 +20,9 @@ const srcRoot = join(root, 'skills');
 const args = process.argv.slice(2);
 const dests = args.flatMap((a, i) => (a === '--dest' && args[i + 1] ? [args[i + 1]] : []));
 
-/** `~/x` against the home folder, as accounts.ts expandHome does. */
-function expandHome(p) {
-  if (p === '~') return homedir();
-  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
-  return resolve(homedir(), p);
-}
-
 /** Every account's skills folder, from claude-remote's config. */
 function accountSkillDirs() {
-  const configPath = process.env.CLAUDE_REMOTE_CONFIG || join(homedir(), '.claude-remote', 'config.json');
-  let accounts = null;
-  try {
-    accounts = JSON.parse(readFileSync(configPath, 'utf-8')).accounts ?? null;
-  } catch {
-    // No config: the defaults.
-  }
-  const dirs = Object.values(accounts && typeof accounts === 'object' ? accounts : { personal: { configDir: '~/.claude-personal' }, work: { configDir: '~/.claude' } })
+  const dirs = Object.values(configuredAccounts())
     .map((a) => (a && typeof a.configDir === 'string' ? join(expandHome(a.configDir), 'skills') : null))
     .filter(Boolean);
   return [...new Set(dirs)];
