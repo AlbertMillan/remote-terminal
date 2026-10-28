@@ -94,3 +94,13 @@ status: active
 - [x] `f-yjegeg` P2 Behind main, and Update from main — the track heading shows how far behind it is and what would conflict; one click merges main in without losing the track's plan → project/track-update-from-main.md
 - [x] `f-jd0ocw` P3 A track's session can ask to Land it — preflight while the agent is alive, then close and land, outcome as a notification → project/session-requests-land.md
 - [x] `f-jidoir` P3 A track's session can ask to Update it from main — `cr-session update [--track]`, same lock and refusals as the board, reinstalls when main changed the lockfile, and the skill warns off a plain `git merge main` → project/session-requests-update.md
+
+## Track: Claude accounts
+- [ ] `f-dfgnx2` P1 Accounts in config — named accounts with a config folder and expected identity; sessions store their account; default and existing sessions are `personal` → project/accounts.md
+- [ ] `f-ygg1cl` P1 Per-account paths — one helper replaces every hardcoded `~/.claude`; a session's data uses its account, scans cover all accounts → project/accounts.md
+- [ ] `f-pd3yag` P1 Launch under the right login — `CLAUDE_CONFIG_DIR`, stripped auth/telemetry env, identity preflight, Log in and Clean up from claude-remote → project/accounts.md
+- [ ] `f-ilxxdj` P2 Existing sessions move to personal — their transcripts move to `~/.claude-personal` and `usage_files` is repointed, after one canary resume → project/accounts.md
+- [ ] `f-zig3f6` P2 Per-account setup — hooks, statusLine, skills and plan usage per account folder → project/accounts.md
+- [ ] `f-fsx3z3` P2 SESSION-LOG records the account — marker and entry carry it; track attribution reads the account's transcripts → project/accounts.md
+- [ ] `f-psbdve` P2 Usage ledger prunes rows for transcripts that no longer exist → project/rename-claude-work.md
+- [ ] `f-fhrnu3` P3 Rename `~/.claude` to `~/.claude-work` — sweep outside references, machine steps, `usage_files` rewrite script → project/rename-claude-work.md
