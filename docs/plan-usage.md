@@ -110,6 +110,20 @@ still renders (and the client reads such an answer as a one-account list).
   "As of … · n running sessions", "jobs run here", held-back count) and "Per-account
   breakdown →", which opens the usage page.
 
+## The account usage page (`f-7y1fcz`)
+
+`src/client/account-usage-modal.ts`, structure static in `index.html`
+(`#account-usage-modal`), opened by the chip's "Per-account breakdown →" with the chip's
+last answer. One card per account: plan, verified/attached/"jobs run here" tags, both
+windows large, the token table (this 5h window; this week — "Since login" when the login
+is younger than the week — messages, input, output, cache read/write, est. cost,
+sessions, job runs), how many of the week's messages sit in another account's folder
+(moved transcripts), and running sessions. Below, **Readings held back**
+(`GET /api/plan-usage/held`): arrived, filed under, window → reset, value, the reason in
+plain words, and Discard (`POST /api/plan-usage/held/discard`, then the chip refreshes);
+hidden when empty. Everything goes through `escapeHtml`; cards stack and tables scroll in
+a box at phone width.
+
 ## What the chip can and cannot tell you
 
 - Readings arrive only while an interactive Claude Code session renders its status line,

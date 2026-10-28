@@ -113,4 +113,4 @@ status: active
 - [x] `f-jzpmyk` P1 Plan-usage readings verified against the login that produced them — relay sends its session, mismatches and legacy readings are held back instead of pinning → project/per-account-usage.md
 - [x] `f-7oap94` P1 Usage ledger attributes messages to the login that ran them — `usage_messages.account`, moved transcripts back to work, `usageByAccount()` → project/per-account-usage.md
 - [x] `f-dnapj1` P1 Plan-usage chip shows every account — one line each, plan, verified state, tokens this window → project/per-account-usage.md
-- [ ] `f-7y1fcz` P2 Account usage page — per-account cards, token table, held-back readings with Discard → project/per-account-usage.md
+- [x] `f-7y1fcz` P2 Account usage page — per-account cards, token table, held-back readings with Discard → project/per-account-usage.md

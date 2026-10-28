@@ -345,6 +345,29 @@
     </div>
   </div>
 
+  <!-- Account usage: per-login limits, tokens and held-back readings; see account-usage-modal.ts. -->
+  <div id="account-usage-modal" class="modal hidden" role="dialog" aria-labelledby="account-usage-title">
+    <div class="modal-content account-usage-content">
+      <h3 id="account-usage-title">Account usage</h3>
+      <div class="account-usage-cards"></div>
+      <section class="account-usage-held" hidden>
+        <h4>Readings held back</h4>
+        <p class="pu-detail">Not shown on the chip: they could not be verified as their account's login.</p>
+        <div class="account-usage-scroll">
+          <table class="account-usage-table">
+            <thead>
+              <tr><th>Arrived</th><th>Filed under</th><th>Window → reset</th><th>Value</th><th>Reason</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary account-usage-close">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Delete History Entry Modal -->
   <div id="delete-entry-modal" class="modal hidden">
     <div class="modal-content">
