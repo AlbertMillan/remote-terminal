@@ -62,8 +62,10 @@ login's folder for a personal session.
 - `findTranscript(cwd, id, preferred)` — the preferred account's folder first, then any
   other: a read (the session log, history delete) still finds a transcript that was never
   moved. A launch (Fork, Resume) uses only the account's own folder.
-- `usage_files` has no account column: a transcript's account is the one whose
-  `projectsDir` holds its path, and nothing needs it yet.
+- `usage_files` has no account column (a file's folder is still where it lives); the
+  login that ran each message is `usage_messages.account`, set by the ledger
+  (`docs/token-usage-feature.md`, "Which login ran it"). Not simply the folder: a
+  transcript moved into an account's folder ran under the default folder's login.
 - `claudeJsonPath(account)` — the global config file (login, trust, MCP servers). Inside a
   custom folder, but **`~/.claude.json` beside the default `~/.claude`**: an account on
   `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.

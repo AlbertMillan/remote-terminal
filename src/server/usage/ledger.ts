@@ -9,7 +9,7 @@ import { worktreeRoot } from '../jobs/worktree.js';
 import { jobEvents } from '../jobs/events.js';
 import { onRunSettled } from '../agent/run-events.js';
 import { invalidateUsageCache } from './store.js';
-import { allProjectsDirs } from '../accounts.js';
+import { accountForConfigDir, accountNames, allProjectsDirs, projectsDir as accountProjectsDir, readIdentity } from '../accounts.js';
 
 const logger = createLogger('usage-ledger');
 
@@ -47,6 +47,8 @@ export interface IngestOptions {
   docProjects?: string[];
   /** Bytes per read step (tests, to put a chunk boundary where they want it). */
   readChunkBytes?: number;
+  /** The home folder accounts' `~` resolve against (tests). */
+  home?: string;
 }
 
 export interface IngestStats {
@@ -112,10 +114,12 @@ function prepare(db: Database.Database) {
      * ids, and whichever file a pass happens to read first would otherwise own
      * the row, stripping a stage run's messages of their run window.
      */
+    // The account is set once, at insert (or by the boot backfill): a re-home
+    // moves a response to the run that made it, not to another login.
     insert: db.prepare(
       `INSERT INTO usage_messages (message_id, session_id, project_cwd, job_id, track_id, model, speed, ts,
-         input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, account)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(message_id) DO UPDATE SET
          session_id = excluded.session_id, project_cwd = excluded.project_cwd,
          job_id = excluded.job_id, track_id = excluded.track_id
@@ -354,6 +358,109 @@ function passOf(c: { parentSessionId: string | null; cwd: string | null }): numb
   return c.cwd && SCRATCHPAD.test(c.cwd) ? 1 : 0;
 }
 
+// --- Which login ran it ---------------------------------------------------------
+
+/**
+ * The login behind the messages of one transcript, from the folder it lives in
+ * (docs/token-usage-feature.md). A message older than `cutoff` — the folder's
+ * login's `accountCreatedAt` — can't have run under that login: before it
+ * existed, its folder could only hold transcripts moved in from the default
+ * folder (`f-ilxxdj`), so it is `before`'s, the default folder's account.
+ */
+interface FolderLogin {
+  account: string;
+  cutoff: string | null;
+  before: string | null;
+}
+
+/**
+ * Where each account's transcripts live and from when its login holds. Read
+ * once per pass. An account whose login's creation time is unknown is left out
+ * — its messages stay unattributed rather than guessed — except the default
+ * folder's, which needs none: everything older is its own anyway.
+ */
+function folderLogins(home?: string): { key: string; login: FolderLogin }[] {
+  const defaultFolder = accountForConfigDir(null, home);
+  const out: { key: string; login: FolderLogin }[] = [];
+  for (const account of accountNames()) {
+    const key = pathKey(accountProjectsDir(account, home));
+    if (out.some((f) => f.key === key)) continue; // two accounts on one folder: the first owns it
+    if (account === defaultFolder) {
+      out.push({ key, login: { account, cutoff: null, before: null } });
+      continue;
+    }
+    let created: string | undefined;
+    try {
+      created = readIdentity(account, home)?.accountCreatedAt;
+    } catch {
+      created = undefined; // caught mid-write with no earlier reading: unknown this pass
+    }
+    const ms = created ? Date.parse(created) : NaN;
+    if (Number.isNaN(ms)) continue;
+    out.push({ key, login: { account, cutoff: new Date(ms).toISOString(), before: defaultFolder } });
+  }
+  return out;
+}
+
+function loginOfPath(path: string, folders: { key: string; login: FolderLogin }[]): FolderLogin | null {
+  const key = pathKey(path);
+  let best: { key: string; login: FolderLogin } | null = null;
+  for (const f of folders) {
+    if (key.startsWith(f.key + SEP) && (!best || f.key.length > best.key.length)) best = f;
+  }
+  return best?.login ?? null;
+}
+
+/** The account a message at `ts` ran under, or null (unattributed). */
+function accountOfMessage(login: FolderLogin | null, ts: string): string | null {
+  if (!login) return null;
+  if (login.cutoff && Date.parse(ts) < Date.parse(login.cutoff)) return login.before;
+  return login.account;
+}
+
+/**
+ * Give every unattributed message its account, by the same rule as ingest,
+ * keyed by the `usage_files` path its session was read from. Idempotent: only
+ * NULL rows are touched, so it never flips an attribution, and a message whose
+ * login is unknown stays NULL. Run on the ledger's first pass after boot.
+ * Returns how many rows it set.
+ */
+export function backfillMessageAccounts(home?: string): number {
+  const db = getDatabase();
+  const folders = folderLogins(home);
+  if (folders.length === 0) return 0;
+  const files = db
+    .prepare('SELECT path, session_id, parent_session_id FROM usage_files')
+    .all() as { path: string; session_id: string; parent_session_id: string | null }[];
+  // Messages carry the parent's session id for a subagent file.
+  const update = db.prepare(
+    `UPDATE usage_messages
+        SET account = CASE WHEN @cutoff IS NOT NULL AND ts < @cutoff THEN @before ELSE @account END
+      WHERE account IS NULL AND session_id = @session`
+  );
+  let changed = 0;
+  db.transaction(() => {
+    for (const f of files) {
+      const login = loginOfPath(f.path, folders);
+      if (!login) continue;
+      changed += update.run({
+        cutoff: login.cutoff,
+        before: login.before,
+        account: login.account,
+        session: f.parent_session_id ?? f.session_id,
+      }).changes;
+    }
+  })();
+  if (changed > 0) {
+    invalidateUsageCache();
+    logger.info({ attributed: changed }, 'usage: attributed earlier messages to their accounts');
+  }
+  return changed;
+}
+
+/** Whether this process has backfilled yet: once per boot is enough, new rows are attributed at insert. */
+let backfilled = false;
+
 // --- Reading -------------------------------------------------------------------
 
 interface UsageLine {
@@ -386,6 +493,7 @@ async function readFrom(
   offset: number,
   sessionId: string,
   attr: Attribution,
+  login: FolderLogin | null,
   stmts: Statements,
   chunkBytes: number
 ): Promise<{ offset: number; inserted: number }> {
@@ -424,7 +532,8 @@ async function readFrom(
         int(u.output_tokens),
         int(u.cache_read_input_tokens),
         write5m,
-        write1h
+        write1h,
+        accountOfMessage(login, j.timestamp)
       );
       inserted += info.changes;
     }
@@ -451,6 +560,12 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
   const projectsDirs = opts.projectsDirs ?? allProjectsDirs();
   const docList = opts.docProjects ?? (await defaultDocProjects());
   const docs = new Map(docList.map((cwd) => [pathKey(cwd), cwd]));
+
+  if (!backfilled) {
+    backfillMessageAccounts(opts.home);
+    backfilled = true;
+  }
+  const folders = folderLogins(opts.home);
 
   const known = new Map(
     (db.prepare('SELECT * FROM usage_files').all() as FileRow[]).map((r) => [r.path, r])
@@ -488,7 +603,7 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
         // A subagent's rows carry the parent's session id, so they fall inside
         // the parent's run windows and land on that run's stage.
         const sessionId = c.parentSessionId ?? c.sessionId;
-        const result = await readFrom(c, offset, sessionId, attr, stmts, chunkBytes);
+        const result = await readFrom(c, offset, sessionId, attr, loginOfPath(c.path, folders), stmts, chunkBytes);
         offset = result.offset;
         stats.read++;
         stats.inserted += result.inserted;

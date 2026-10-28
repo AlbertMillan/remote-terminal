@@ -280,6 +280,8 @@ export interface Identity {
   organizationUuid?: string;
   emailAddress?: string;
   organizationName?: string;
+  /** When the login was created (ISO): the usage ledger's cut-off for transcripts moved into its folder. */
+  accountCreatedAt?: string;
 }
 
 /**
@@ -350,6 +352,7 @@ function identityOf(parsed: unknown): Identity | null {
     organizationUuid: str(o.organizationUuid),
     emailAddress: str(o.emailAddress),
     organizationName: str(o.organizationName),
+    accountCreatedAt: str(o.accountCreatedAt),
   };
   return identity.accountUuid || identity.organizationUuid ? identity : null;
 }

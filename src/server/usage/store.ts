@@ -286,3 +286,111 @@ function readProjectUsage(): Map<string, ProjectUsage> | null {
     return null;
   }
 }
+
+// --- Per account ---------------------------------------------------------------
+
+/**
+ * What one login spent since a time (docs/token-usage-feature.md): by
+ * `usage_messages.account`, the login that ran each message — not the folder
+ * its transcript lives in. Counts stay split, like Usage.
+ */
+export interface AccountUsage {
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  /** 5-minute and 1-hour writes together. */
+  cacheWriteTokens: number;
+  /** Estimate at API list price, as everywhere in the ledger. */
+  costUsd: number;
+  unpriced: boolean;
+  /** Distinct sessions (subagents count as their parent's). */
+  sessions: number;
+  /** Agent runs of a job, started since, whose session ran under this login. */
+  jobRuns: number;
+  /** Of `messages`, how many sit in a transcript outside `ownProjectsDir` (moved in or out). 0 when no folder is given. */
+  elsewhere: number;
+}
+
+let accountCache: { generation: number; value: Map<string, AccountUsage> } | null = null;
+
+/**
+ * One account's usage since `sinceIso` (null: unattributed messages). Served
+ * from memory until the ledger changes, like the other reads; the chip asks
+ * for the same window starts on every poll. Never throws: null when the ledger
+ * can't be read. Shared with the cache: never mutate.
+ */
+export function usageByAccount(account: string | null, sinceIso: string, ownProjectsDir?: string): AccountUsage | null {
+  if (!accountCache || accountCache.generation !== generation) accountCache = { generation, value: new Map() };
+  const key = JSON.stringify([account, sinceIso, ownProjectsDir ?? null]);
+  const cached = accountCache.value.get(key);
+  if (cached) return cached;
+  const value = readAccountUsage(account, sinceIso, ownProjectsDir);
+  if (value) accountCache.value.set(key, value);
+  return value;
+}
+
+function readAccountUsage(account: string | null, sinceIso: string, ownProjectsDir?: string): AccountUsage | null {
+  try {
+    const db = getDatabase();
+    const rows = db
+      .prepare(
+        `SELECT m.model AS model, m.speed AS speed, COUNT(*) AS messages, ${TOKEN_SUMS}
+           FROM usage_messages m
+          WHERE m.account IS ? AND m.ts >= ?
+          GROUP BY model, speed`
+      )
+      .all(account, sinceIso) as (TokenRow & { messages: number })[];
+    const out: AccountUsage = {
+      messages: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+      unpriced: false,
+      sessions: 0,
+      jobRuns: 0,
+      elsewhere: 0,
+    };
+    for (const row of rows) {
+      const u = usageOfRow(row);
+      out.messages += row.messages;
+      out.inputTokens += u.inputTokens;
+      out.outputTokens += u.outputTokens;
+      out.cacheReadTokens += u.cacheReadTokens;
+      out.cacheWriteTokens += u.cacheCreationTokens;
+      out.costUsd += u.costUsd;
+      out.unpriced = out.unpriced || u.unpriced;
+    }
+    const bySession = db
+      .prepare(
+        `SELECT m.session_id AS session_id, COUNT(*) AS n,
+                (SELECT f.path FROM usage_files f WHERE f.session_id = m.session_id AND f.parent_session_id IS NULL LIMIT 1) AS path
+           FROM usage_messages m
+          WHERE m.account IS ? AND m.ts >= ?
+          GROUP BY m.session_id`
+      )
+      .all(account, sinceIso) as { session_id: string; n: number; path: string | null }[];
+    out.sessions = bySession.length;
+    if (ownProjectsDir) {
+      const own = pathKey(ownProjectsDir);
+      for (const s of bySession) {
+        if (s.path && !pathKey(s.path).startsWith(`${own}\\`)) out.elsewhere += s.n;
+      }
+    }
+    out.jobRuns = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM agent_runs r
+            WHERE r.job_id IS NOT NULL AND r.started_at >= ?
+              AND EXISTS (SELECT 1 FROM usage_messages m WHERE m.session_id = r.session_id AND m.account IS ?)`
+        )
+        .get(sinceIso, account) as { n: number }
+    ).n;
+    return out;
+  } catch (error) {
+    logger.warn({ error, account }, 'usage: could not read account usage');
+    return null;
+  }
+}
