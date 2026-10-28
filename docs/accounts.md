@@ -104,8 +104,13 @@ warning (`session.accountWarnings`) and a toast/notification (`account-changed`)
 - Fill in `accounts.*.accountUuid` / `organizationUuid` in `config.json`, or every launch
   is refused (`no-expected-identity`).
 - Existing sessions are `personal`, but their transcripts are still in the work folder
-  until `f-ilxxdj` moves them: reads fall back to other folders, but a revive or Resume of
-  one runs `claude --resume` in `~/.claude-personal`, which doesn't have it.
+  until they are moved: reads fall back to other folders, but a revive or Resume of one
+  runs `claude --resume` in `~/.claude-personal`, which doesn't have it. Move them with
+  `node scripts/move-session-transcripts.mjs [--also <claudeSessionId>]... [--dry-run]`
+  (`f-ilxxdj`): it resumes one moved transcript first (forked) and moves it back on a
+  refusal, then moves the rest with their `<id>/` folders and repoints `usage_files`.
+  Only ids on session rows move (plus `--also`); a transcript a running `claude` holds
+  open is reported, so rerun once it exits.
 
 ## Per-account setup
 
