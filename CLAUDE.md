@@ -17,9 +17,10 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
 - Port **4220** is the user's live server. In a track or job worktree, **never ask for a
   restart to test your code**: 4220 runs main's `dist/`, so it loads none of it and closes
   every terminal. Use the isolated boot (`project/QA.md`, Flow 3).
-- ESM, `@server/*`/`@client/*` aliases, Node 20+, esbuild for production. Data and the live
-  log: `~/.claude-remote/` (`logs/server.log`, JSON; read with `npx pino-pretty`). Tests
-  write no log; an isolated boot logs next to its `CLAUDE_REMOTE_CONFIG`.
+- ESM, `@server/*`/`@client/*` aliases, Node 22.12+ (runs on 26 LTS), esbuild for
+  production. Data and the live log: `~/.claude-remote/` (`logs/server.log`, JSON; read
+  with `npx pino-pretty`). Tests write no log; an isolated boot logs next to its
+  `CLAUDE_REMOTE_CONFIG`.
 
 ## Map
 
