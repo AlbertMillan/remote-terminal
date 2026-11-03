@@ -44,7 +44,7 @@
             </svg>
             Shortcuts
           </button>
-          <button id="settings-btn" class="settings-btn" title="Notification Settings">
+          <button id="settings-btn" class="settings-btn" title="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -391,7 +391,7 @@
   <!-- Settings Modal -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content">
-      <h3>Notification Settings</h3>
+      <h3>Settings</h3>
       <div class="settings-form">
         <div id="notification-permission-status" class="permission-status default">
           Checking notification permissions...
@@ -447,6 +447,19 @@
               <label><input type="radio" name="job-overlay-placement" value="header"> In the session header</label>
             </div>
           </div>
+        </div>
+
+        <!-- Saved in the server's config, not this browser; see src/client/session-limit-setting.ts. -->
+        <div class="settings-section">
+          <div class="settings-section-title">Sessions</div>
+          <div class="setting-item">
+            <label for="setting-max-sessions">
+              Maximum sessions
+              <div class="setting-description">Every session not closed counts, including ones waiting to be revived after a restart. At the limit new sessions are refused; none are closed. Applies to every device, without a restart. <span id="setting-max-sessions-counted"></span></div>
+            </label>
+            <input type="number" id="setting-max-sessions" step="1" disabled>
+          </div>
+          <div id="setting-max-sessions-status" class="setting-error" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Restart / build & restart; see src/client/server-restart.ts and src/server/server-restart.ts. -->

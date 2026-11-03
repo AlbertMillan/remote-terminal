@@ -97,7 +97,7 @@ Configuration is stored in `~/.claude-remote/config.json`:
     "enabled": false
   },
   "sessions": {
-    "maxSessions": 10,
+    "maxSessions": 30,
     "idleTimeoutMinutes": 0
   },
   "auth": {
@@ -120,7 +120,7 @@ Configuration is stored in `~/.claude-remote/config.json`:
 | `tls.enabled` | Enable HTTPS | false |
 | `tls.certPath` | Path to TLS certificate | auto (Tailscale) |
 | `tls.keyPath` | Path to TLS private key | auto (Tailscale) |
-| `sessions.maxSessions` | Maximum concurrent sessions | 10 |
+| `sessions.maxSessions` | Maximum concurrent sessions (also in Settings → Sessions, 1–100) | 30 |
 | `sessions.defaultShell` | Default shell to use | auto-detected |
 | `sessions.idleTimeoutMinutes` | Auto-terminate idle sessions (0=never) | 0 |
 | `auth.enabled` | Enable Tailscale authentication | false |

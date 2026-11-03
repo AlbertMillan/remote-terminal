@@ -2117,6 +2117,31 @@ body {
   line-height: 1.4;
 }
 
+.setting-item input[type="number"] {
+  width: 72px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.setting-item input[type="number"]:disabled {
+  opacity: 0.45;
+}
+
+.setting-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.setting-error:empty {
+  display: none;
+}
+
 .permission-status {
   font-family: var(--font-mono);
   font-size: 12px;

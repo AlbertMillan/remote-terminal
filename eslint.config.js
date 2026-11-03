@@ -61,6 +61,7 @@ export default [
         Notification: 'readonly',
         MutationObserver: 'readonly',
         AbortController: 'readonly',
+        AbortSignal: 'readonly',
         WebSocket: 'readonly',
         HTMLElement: 'readonly',
         HTMLInputElement: 'readonly',

@@ -11,7 +11,6 @@ import {
   insertSession,
   updateSession,
   getSession as getSessionMetadata,
-  countActiveSessions,
   logSessionEvent,
   getMaxSessionSortOrder,
   launchProfileForTranscript,
@@ -23,6 +22,7 @@ import { launchFlags, type LaunchProfile } from './launch-profile.js';
 import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
 import { revokeSessionToken, sessionEnv } from './session-env.js';
+import { assertSessionSlot } from './session-limit.js';
 
 const logger = createLogger('session-manager');
 
@@ -98,11 +98,8 @@ export async function forkSession(
     throw new Error('Source session is not active');
   }
 
-  const config = getConfig();
-  const activeCount = countActiveSessions();
-  if (activeCount >= config.sessions.maxSessions) {
-    throw new Error(`Maximum session limit (${config.sessions.maxSessions}) reached`);
-  }
+  // Nothing awaits between this and the insert below, so no other open can slip in.
+  assertSessionSlot();
 
   const sourceMetadata = getSessionMetadata(sourceId);
   if (!sourceMetadata) throw new Error('Source session not found');
@@ -217,12 +214,10 @@ export async function openClaudeSession(
 ): Promise<ActiveSession> {
   const { claudeSessionId, cwd, mode } = options;
 
-  const config = getConfig();
-  const activeCount = countActiveSessions();
-  if (activeCount >= config.sessions.maxSessions) {
-    throw new Error(`Maximum session limit (${config.sessions.maxSessions}) reached`);
-  }
+  // Nothing awaits between this and the insert below, so no other open can slip in.
+  assertSessionSlot();
 
+  const config = getConfig();
   const shell = config.sessions.defaultShell || getDefaultShell();
   const cols = options.cols || 80;
   const rows = options.rows || 24;

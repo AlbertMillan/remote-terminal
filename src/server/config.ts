@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { createLogger } from './utils/logger.js';
@@ -83,7 +83,7 @@ const defaultConfig: Config = {
     enabled: false,
   },
   sessions: {
-    maxSessions: 10,
+    maxSessions: 30,
     idleTimeoutMinutes: 0,
   },
   auth: {
@@ -133,6 +133,7 @@ export function loadConfig(): Config {
       if (loaded && typeof loaded.accounts === 'object' && loaded.accounts !== null) {
         currentConfig.accounts = loaded.accounts;
       }
+      currentConfig.sessions = checkedSessions(currentConfig.sessions, configPath);
       logger.info({ path: configPath }, 'Loaded configuration');
     } catch (error) {
       logger.error({ error, path: configPath }, 'Failed to load config, using defaults');
@@ -151,17 +152,66 @@ export function loadConfig(): Config {
   return currentConfig;
 }
 
-export function saveConfig(config: Config): void {
-  const configPath = getConfigPath();
-  const dir = dirname(configPath);
+/**
+ * `sessions` as loaded, with an unusable limit replaced by the default. A string would turn
+ * the limit off (`count >= "abc"` is never true) and 0 would refuse every session. Any
+ * positive whole number stands, even past MAX_SESSIONS_RANGE: that bounds Settings only.
+ */
+function checkedSessions(sessions: unknown, configPath: string): Config['sessions'] {
+  if (!isPlainObject(sessions)) {
+    logger.warn({ path: configPath, sessions }, 'sessions is not an object; using the default session settings');
+    return { ...defaultConfig.sessions };
+  }
+  const checked = sessions as unknown as Config['sessions'];
+  const { maxSessions } = checked;
+  if (typeof maxSessions === 'number' && Number.isInteger(maxSessions) && maxSessions >= 1) return checked;
+  logger.warn(
+    { path: configPath, maxSessions, default: defaultConfig.sessions.maxSessions },
+    'sessions.maxSessions is not a positive whole number; using the default'
+  );
+  return { ...checked, maxSessions: defaultConfig.sessions.maxSessions };
+}
 
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** What Settings accepts. A limit written into config.json by hand isn't held to it. */
+export const MAX_SESSIONS_RANGE = { min: 1, max: 100 };
+
+/**
+ * Change the session limit, effective for the next session opened.
+ *
+ * Patches the one key in the file as it is on disk rather than writing out the merged
+ * config: that would pin every default into the user's file, and a later change to a
+ * default would never reach them. An unparseable file throws instead of being
+ * replaced, or a typo would cost the user their accounts.
+ */
+export function setMaxSessions(maxSessions: number): void {
+  const configPath = getConfigPath();
+  const onDisk: unknown = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf-8')) : {};
+  if (!isPlainObject(onDisk)) {
+    throw new Error(`${configPath} does not hold a JSON object`);
+  }
+  // Not an object (an array, a number): loadConfig ignores it too, so start it afresh.
+  const sessions = isPlainObject(onDisk.sessions) ? onDisk.sessions : {};
+  const next = { ...onDisk, sessions: { ...sessions, maxSessions } };
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  // Through a temp file: a crash mid-write must not leave a truncated config.
+  const tempPath = `${configPath}.tmp`;
+  try {
+    writeFileSync(tempPath, JSON.stringify(next, null, 2) + '\n');
+    renameSync(tempPath, configPath);
+  } catch (error) {
+    // Best-effort: the original error is the one worth reporting.
+    try { rmSync(tempPath, { force: true }); } catch { /* left for the next save to overwrite */ }
+    throw error;
   }
 
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
-  currentConfig = config;
-  logger.info({ path: configPath }, 'Saved configuration');
+  // A new object: `sessions` may still be defaultConfig's own, shared by reference.
+  currentConfig = { ...currentConfig, sessions: { ...currentConfig.sessions, maxSessions } };
+  logger.info({ path: configPath, maxSessions }, 'Saved session limit');
 }
 
 export function getConfig(): Config {

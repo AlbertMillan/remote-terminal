@@ -13,11 +13,11 @@ import {
   getAllSessions as getAllSessionsFromDb,
   deleteSession as deleteSessionFromDb,
   getSession as getSessionMetadata,
-  countActiveSessions,
   logSessionEvent,
   getMaxSessionSortOrder,
   clearForkFlag,
 } from '../db/queries.js';
+import { assertSessionSlot } from './session-limit.js';
 import {
   createTmuxSession,
   killTmuxSession,
@@ -51,6 +51,8 @@ class SessionManager {
   private scrollbackBuffers: Map<string, ScrollbackBuffer> = new Map();
   private touchDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private idleCheckInterval: NodeJS.Timeout | null = null;
+  /** createSession calls past the limit check whose row isn't inserted yet. */
+  private pendingCreates = 0;
 
   constructor() {
     this.startIdleChecker();
@@ -111,14 +113,19 @@ class SessionManager {
   }
 
   async createSession(options: SessionCreateOptions = {}): Promise<ActiveSession> {
-    const config = getConfig();
-
-    // Check session limit
-    const activeCount = countActiveSessions();
-    if (activeCount >= config.sessions.maxSessions) {
-      throw new Error(`Maximum session limit (${config.sessions.maxSessions}) reached`);
+    // Counted in until its row is inserted: on Linux/macOS the tmux awaits below let another
+    // createSession count the table before this row is in it, and both would pass the limit.
+    const activeCount = assertSessionSlot(this.pendingCreates);
+    this.pendingCreates++;
+    try {
+      return await this.createAdmittedSession(options, activeCount);
+    } finally {
+      this.pendingCreates--;
     }
+  }
 
+  private async createAdmittedSession(options: SessionCreateOptions, activeCount: number): Promise<ActiveSession> {
+    const config = getConfig();
     const id = randomUUID();
     const name = options.name || `Session ${activeCount + 1}`;
     const shell = options.shell || config.sessions.defaultShell || getDefaultShell();

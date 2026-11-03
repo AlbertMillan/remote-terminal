@@ -9,7 +9,8 @@ import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
-import { BUILD_CHANGED_EVENT, BuildChip, ServerRestartControl } from './server-restart.js';
+import { BUILD_CHANGED_EVENT, BuildChip } from './server-restart.js';
+import { SettingsModal } from './settings-modal.js';
 import {
   isLandNotification,
   isPromptMissingNotification,
@@ -125,10 +126,8 @@ class SessionManager {
   /** The keyboard shortcuts modal and the welcome-screen hints. */
   private shortcutsModal = new ShortcutsModal();
 
-  /** Restart / Build & restart in the Settings modal. */
-  private serverRestart = new ServerRestartControl();
   /** Says when the running server is behind its build; opens Settings → Server. */
-  private buildChip = new BuildChip(() => void this.showServerSettings());
+  private buildChip = new BuildChip(() => void this.settingsModal.showServer());
   /** A notice for the session being created, until the server names its id. */
   private createNotice: { cwd: string; text: string } | null = null;
   /** Notices to write into a session's terminal on its first attach. */
@@ -161,6 +160,17 @@ class SessionManager {
    * messages, so it stays current while a terminal is in front of it.
    */
   private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
+  /** Notifications, display, the session limit and Restart; after jobOverlay, which it is handed. */
+  private settingsModal = new SettingsModal({
+    notificationPreferences: () => this.notificationPreferences,
+    setNotificationPreferences: (prefs) => this.setNotificationPreferences(prefs),
+    notificationPermission: async () => {
+      if (this.browserNotificationsPermission === 'default') await this.requestNotificationPermission();
+      return this.browserNotificationsPermission;
+    },
+    jobOverlay: this.jobOverlay,
+    syncJobOverlay: () => this.syncJobOverlay(),
+  });
   private planUsage = new PlanUsageChip();
   /** The per-account usage page, opened from the chip (docs/plan-usage.md); a discard refreshes the chip's counts. */
   private accountUsage = new AccountUsageModal(() => void this.planUsage.refresh());
@@ -379,13 +389,8 @@ class SessionManager {
     document.getElementById('delete-entry-cancel')?.addEventListener('click', () => this.projectLogView.hideDeleteEntryModal());
     document.getElementById('delete-entry-confirm')?.addEventListener('click', () => this.projectLogView.confirmDeleteEntry());
 
-    // Settings modal
-    document.getElementById('settings-btn')?.addEventListener('click', () => this.showSettingsModal());
-    document.getElementById('settings-cancel')?.addEventListener('click', () => this.hideSettingsModal());
-    document.getElementById('settings-save')?.addEventListener('click', () => this.saveSettings());
-    document
-      .getElementById('setting-job-overlay')
-      ?.addEventListener('change', () => this.updatePlacementEnabled());
+    // Settings modal (settings-modal.ts)
+    this.settingsModal.bind();
 
     // Keyboard shortcuts modal
     document.getElementById('shortcuts-btn')?.addEventListener('click', () => this.showShortcutsModal());
@@ -403,7 +408,7 @@ class SessionManager {
         this.hideNewSessionModal();
         this.hideRenameModal();
         this.hideCategoryModal();
-        this.hideSettingsModal();
+        this.settingsModal.hide();
         this.hideShortcutsModal();
         this.projectLogView.hideDeleteEntryModal();
       }
@@ -454,9 +459,6 @@ class SessionManager {
     });
     document.getElementById('category-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideCategoryModal();
-    });
-    document.getElementById('settings-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideSettingsModal();
     });
     document.getElementById('shortcuts-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hideShortcutsModal();
@@ -1008,12 +1010,12 @@ class SessionManager {
 
   private handleNotificationPreferences(payload: NotificationPreferencesPayload): void {
     this.notificationPreferences = payload;
-    this.updateSettingsUI();
+    this.settingsModal.updateUI();
   }
 
   private handleNotificationPreferencesUpdated(payload: NotificationPreferencesPayload): void {
     this.notificationPreferences = payload;
-    this.updateSettingsUI();
+    this.settingsModal.updateUI();
   }
 
   private handleNotification(
@@ -1092,39 +1094,6 @@ class SessionManager {
     void this.workspace.refresh();
     // A land of this server's own project leaves it behind its build.
     if (payload.ok) window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
-  }
-
-  private updateSettingsUI(): void {
-    const browserCheckbox = document.getElementById('setting-browser-notifications') as HTMLInputElement;
-    const visualCheckbox = document.getElementById('setting-visual-badges') as HTMLInputElement;
-    const inputCheckbox = document.getElementById('setting-notify-input') as HTMLInputElement;
-    const completedCheckbox = document.getElementById('setting-notify-completed') as HTMLInputElement;
-
-    if (browserCheckbox) browserCheckbox.checked = this.notificationPreferences.browserEnabled;
-    if (visualCheckbox) visualCheckbox.checked = this.notificationPreferences.visualEnabled;
-    if (inputCheckbox) inputCheckbox.checked = this.notificationPreferences.notifyOnInput;
-    if (completedCheckbox) completedCheckbox.checked = this.notificationPreferences.notifyOnCompleted;
-
-    // Display prefs live in localStorage (per device), not in the server's
-    // notification row -- a phone and a desktop want different answers here.
-    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
-    if (overlayCheckbox) overlayCheckbox.checked = this.jobOverlay.isEnabled();
-    const placement = this.jobOverlay.getPlacement();
-    for (const radio of this.placementRadios()) radio.checked = radio.value === placement;
-    this.updatePlacementEnabled();
-  }
-
-  private placementRadios(): HTMLInputElement[] {
-    return [
-      ...document.querySelectorAll<HTMLInputElement>('input[name="job-overlay-placement"]'),
-    ];
-  }
-
-  /** The placement choice means nothing while the panel is switched off. */
-  private updatePlacementEnabled(): void {
-    const on = (document.getElementById('setting-job-overlay') as HTMLInputElement)?.checked ?? true;
-    document.getElementById('setting-job-overlay-placement')?.classList.toggle('disabled', !on);
-    for (const radio of this.placementRadios()) radio.disabled = !on;
   }
 
   /**
@@ -1544,47 +1513,6 @@ class SessionManager {
     this.send('notification.preferences.set', prefs);
   }
 
-  // Settings modal handlers
-
-  private async showSettingsModal(): Promise<void> {
-    const modal = document.getElementById('settings-modal');
-    if (!modal) return;
-
-    // Request browser notification permission if not yet granted
-    if (this.browserNotificationsPermission === 'default') {
-      await this.requestNotificationPermission();
-    }
-
-    // Update permission status display
-    const permissionStatus = document.getElementById('notification-permission-status');
-    if (permissionStatus) {
-      if (this.browserNotificationsPermission === 'granted') {
-        permissionStatus.textContent = 'Browser notifications enabled';
-        permissionStatus.className = 'permission-status granted';
-      } else if (this.browserNotificationsPermission === 'denied') {
-        permissionStatus.textContent = 'Browser notifications blocked';
-        permissionStatus.className = 'permission-status denied';
-      } else {
-        permissionStatus.textContent = 'Browser notifications not enabled';
-        permissionStatus.className = 'permission-status default';
-      }
-    }
-
-    this.updateSettingsUI();
-    modal.classList.remove('hidden');
-    void this.serverRestart.refresh();
-  }
-
-  /** Settings, scrolled to its Server section: where the build chip's restart is confirmed. */
-  private async showServerSettings(): Promise<void> {
-    await this.showSettingsModal();
-    document.getElementById('server-restart-section')?.scrollIntoView({ block: 'nearest' });
-  }
-
-  private hideSettingsModal(): void {
-    document.getElementById('settings-modal')?.classList.add('hidden');
-  }
-
   // Keyboard shortcuts modal — delegates to ShortcutsModal (shortcuts-modal.ts).
 
   private showShortcutsModal(): void {
@@ -1597,30 +1525,6 @@ class SessionManager {
 
   private toggleShortcutsModal(): void {
     this.shortcutsModal.toggleShortcutsModal();
-  }
-
-  private saveSettings(): void {
-    const browserCheckbox = document.getElementById('setting-browser-notifications') as HTMLInputElement;
-    const visualCheckbox = document.getElementById('setting-visual-badges') as HTMLInputElement;
-    const inputCheckbox = document.getElementById('setting-notify-input') as HTMLInputElement;
-    const completedCheckbox = document.getElementById('setting-notify-completed') as HTMLInputElement;
-
-    this.setNotificationPreferences({
-      browserEnabled: browserCheckbox?.checked ?? true,
-      visualEnabled: visualCheckbox?.checked ?? true,
-      notifyOnInput: inputCheckbox?.checked ?? true,
-      notifyOnCompleted: completedCheckbox?.checked ?? true,
-    });
-
-    // Applied on Save rather than on change, so Cancel genuinely cancels.
-    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
-    const placement = this.placementRadios().find((r) => r.checked)?.value === 'header'
-      ? 'header'
-      : 'below';
-    this.jobOverlay.setPreferences(overlayCheckbox?.checked ?? true, placement);
-    this.syncJobOverlay();
-
-    this.hideSettingsModal();
   }
 }
 

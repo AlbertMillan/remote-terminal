@@ -37,6 +37,7 @@ import { sweepLeftoverWorktrees } from './jobs/worktree.js';
 import { registerJobRoutes } from './jobs/routes.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
 import { registerServerRestartRoutes } from './server-restart.js';
+import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
@@ -205,6 +206,7 @@ export async function createApp(): Promise<FastifyInstance> {
   registerJobRoutes(app);
   registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
+  registerServerSettingsRoutes(app);
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);
 
