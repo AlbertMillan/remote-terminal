@@ -203,13 +203,16 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
     expect(permissionRulePath('C:\\Users\\a\\wt')).toBe('//c/Users/a/wt');
     expect(permissionRulePath('D:/x/y/')).toBe('//d/x/y');
     expect(permissionRulePath('/home/a/wt')).toBe('//home/a/wt');
+    // No known rule form: a rule that matched nothing would leave the peer able to edit.
+    expect(() => permissionRulePath('\\\\server\\share\\wt')).toThrow(/network path/);
+    expect(() => permissionRulePath('relative/wt')).toThrow(/not an absolute path/);
   });
 
   it('denies edits in the worktree and allows them in the notes folder, with Edit rules only', () => {
-    expect(peerSettings('C:\\wt', 'C:\\data\\peers\\t')).toEqual({
-      permissions: { deny: ['Edit(//c/wt/**)'], allow: ['Edit(//c/data/peers/t/**)'] },
+    expect(peerSettings(['C:\\wt', 'C:\\p\\demo'], 'C:\\data\\peers\\t')).toEqual({
+      permissions: { deny: ['Edit(//c/wt/**)', 'Edit(//c/p/demo/**)'], allow: ['Edit(//c/data/peers/t/**)'] },
     });
-    expect(peerSettings('C:\\wt', null).permissions.allow).toEqual([]);
+    expect(peerSettings(['C:\\wt', 'C:/wt/'], null)).toEqual({ permissions: { deny: ['Edit(//c/wt/**)'], allow: [] } });
   });
 
   it('adds the settings, the tools it never asks for and the notes folder, after the MCP flags', () => {
@@ -223,7 +226,8 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
     // Under the data dir: never in the worktree (commitAll) nor the prompt folder (the session could rewrite it).
     expect(settings.startsWith(dataDir)).toBe(true);
     expect(settings.startsWith(promptDirFor(SESSION))).toBe(false);
-    expect(JSON.parse(readFileSync(settings, 'utf-8'))).toEqual(peerSettings(worktree, slash(notes)));
+    // The main checkout is denied too: it's the other place a peer could break.
+    expect(JSON.parse(readFileSync(settings, 'utf-8'))).toEqual(peerSettings([worktree, 'C:\\p\\demo'], slash(notes)));
     expect(existsSync(notes)).toBe(true);
   });
 
@@ -258,5 +262,66 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
     // Never walks out of peers/.
     expect(() => deletePeerNotes('../..')).not.toThrow();
     expect(existsSync(dataDir)).toBe(true);
+  });
+});
+
+describe('read-only peers: what the launch reports and how it degrades', () => {
+  const TRACK = 'tb-0002';
+  afterEach(() => {
+    trackBranch = null;
+    deletePromptFile(SESSION);
+    deletePeerNotes(TRACK);
+  });
+
+  it('reports the notes folder it granted, and none for a writer', () => {
+    trackBranch = { id: TRACK, projectCwd: 'C:\\p\\demo', worktreePath: worktree, landedAt: null };
+    const peer = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access: 'read' }, claudeJson());
+    expect(peer.notesDir).toBe(peerNotesDirFor(TRACK).replace(/\\/g, '/'));
+    expect(launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [] }, claudeJson())).not.toHaveProperty('notesDir');
+  });
+
+  it('disallows every file edit, and grants no notes, when a path has no rule form', () => {
+    trackBranch = { id: TRACK, projectCwd: '\\\\server\\share\\demo', worktreePath: worktree, landedAt: null };
+    const { flags, notesDir } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access: 'read' }, claudeJson());
+    expect(flags).toBe('--permission-mode auto --strict-mcp-config --disallowedTools Edit Write NotebookEdit --allowedTools WebFetch WebSearch Read ');
+    expect(notesDir).toBeNull();
+  });
+});
+
+describe('deletePeerNotes', () => {
+  it('retries a busy folder in the background, and stops once it goes', () => {
+    vi.useFakeTimers();
+    try {
+      const rm = vi.fn()
+        .mockImplementationOnce(() => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); })
+        .mockImplementationOnce(() => { throw Object.assign(new Error('busy'), { code: 'EPERM' }); })
+        .mockImplementation(() => {});
+      deletePeerNotes('tb-busy', { rm, retryMs: 1000, attempts: 5 });
+      expect(rm).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1000);
+      expect(rm).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(1000);
+      expect(rm).toHaveBeenCalledTimes(3);
+      vi.advanceTimersByTime(10_000);
+      expect(rm).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up after its attempts, and never retries another error', () => {
+    vi.useFakeTimers();
+    try {
+      const busy = vi.fn(() => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); });
+      deletePeerNotes('tb-busy', { rm: busy, retryMs: 1000, attempts: 3 });
+      vi.advanceTimersByTime(10_000);
+      expect(busy).toHaveBeenCalledTimes(3);
+      const denied = vi.fn(() => { throw Object.assign(new Error('nope'), { code: 'EACCES' }); });
+      deletePeerNotes('tb-busy', { rm: denied, retryMs: 1000, attempts: 3 });
+      vi.advanceTimersByTime(10_000);
+      expect(denied).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -155,24 +155,29 @@ export function writeMcpConfig(
  * An absolute path as a Claude Code permission rule path: `//` then the path, the drive
  * letter as a folder (`C:\x` → `//c/x`). Checked 2026-11-04 with Claude Code 2.1.318 on
  * Windows: `//c/…` and `//C/…` match, `//C:/…` and `/c/…` don't, and the rule is ignored
- * without a word.
+ * without a word. A network path (`\\server\share`) throws: its rule form is unknown, and a
+ * rule that silently matches nothing would leave the peer able to edit.
  */
 export function permissionRulePath(path: string): string {
   const slashed = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (slashed.startsWith('//')) throw new Error(`${path} is a network path, which no permission rule is known to match`);
   const drive = /^([A-Za-z]):(\/.*)?$/.exec(slashed);
   if (drive) return `//${drive[1].toLowerCase()}${drive[2] ?? ''}`;
-  return `/${slashed.startsWith('/') ? '' : '/'}${slashed}`;
+  if (!slashed.startsWith('/')) throw new Error(`${path} is not an absolute path`);
+  return `/${slashed}`;
 }
 
 /**
- * The `--settings` a read-only peer launches with: no file edit in its worktree, edits allowed
- * in its notes folder. Only `Edit(path)` rules are matched by file checks (Claude Code warns
- * that `Write(path)` is not), and they cover Write and NotebookEdit too.
+ * The `--settings` a read-only peer launches with: no file edit in `denied` (its worktree and
+ * the project's main checkout), edits allowed in its notes folder. Only `Edit(path)` rules are
+ * matched by file checks (Claude Code warns that `Write(path)` is not), and they cover Write
+ * and NotebookEdit too. "Nothing but the notes folder" can't be written as rules, since a deny
+ * always beats an allow, so every other path rests on the header's rule.
  */
-export function peerSettings(worktreePath: string, notesDir: string | null): { permissions: { deny: string[]; allow: string[] } } {
+export function peerSettings(denied: string[], notesDir: string | null): { permissions: { deny: string[]; allow: string[] } } {
   return {
     permissions: {
-      deny: [`Edit(${permissionRulePath(worktreePath)}/**)`],
+      deny: [...new Set(denied.map((d) => `Edit(${permissionRulePath(d)}/**)`))],
       allow: notesDir ? [`Edit(${permissionRulePath(notesDir)}/**)`] : [],
     },
   };
@@ -184,20 +189,34 @@ const PEER_ALLOWED_TOOLS = 'WebFetch WebSearch Read';
 const PEER_FALLBACK = '--disallowedTools Edit Write NotebookEdit ';
 
 /**
+ * Where a read-only peer in `cwd` may not write, and its track's notes folder (forward
+ * slashes; null for a cwd in no unlanded track, so a Resume of a landed track's peer never
+ * recreates deleted notes). The one source of the folder: the start's header and result
+ * print what the launch granted.
+ */
+export function peerPaths(cwd: string): { denied: string[]; notesDir: string | null } {
+  const branch = trackBranchContaining(cwd);
+  if (!branch || branch.landedAt !== null) return { denied: [cwd], notesDir: null };
+  return {
+    denied: [branch.worktreePath, branch.projectCwd],
+    notesDir: peerNotesDirFor(branch.id).replace(/\\/g, '/'),
+  };
+}
+
+/**
  * A read-only peer's flags: its `--settings` (written to `<dataDir>/peer-settings/<id>.json`
  * at every launch), the tools it may use without asking, and `--add-dir` for its track's
  * notes folder, created here. When the settings or a path can't be used, every file-editing
- * tool is disallowed instead: the peer loses its notes, never its read-only.
+ * tool is disallowed instead: the peer loses its notes, never its read-only. Returns the
+ * notes folder it granted, or null.
  */
-function readOnlyFlags(sessionId: string, cwd: string): string {
-  let worktreePath = cwd;
+function readOnlyFlags(sessionId: string, cwd: string): { flags: string; notesDir: string | null } {
+  let denied = [cwd];
   let notesDir: string | null = null;
   try {
-    const branch = trackBranchContaining(cwd);
-    // A landed track's notes are gone; a Resume of its peer must not make them again.
-    if (branch && branch.landedAt === null) {
-      worktreePath = branch.worktreePath;
-      notesDir = peerNotesDirFor(branch.id).replace(/\\/g, '/');
+    ({ denied, notesDir } = peerPaths(cwd));
+    if (notesDir) {
+      if (UNSAFE_IN_QUOTES.test(notesDir)) throw new Error(`${notesDir} has a character no shell quotes safely`);
       mkdirSync(notesDir, { recursive: true });
     }
   } catch (error) {
@@ -208,14 +227,14 @@ function readOnlyFlags(sessionId: string, cwd: string): string {
   try {
     const path = peerSettingsPathFor(sessionId);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(peerSettings(worktreePath, notesDir), null, 2), 'utf-8');
+    writeFileSync(path, JSON.stringify(peerSettings(denied, notesDir), null, 2), 'utf-8');
     const settings = path.replace(/\\/g, '/');
     if (UNSAFE_IN_QUOTES.test(settings)) throw new Error(`${settings} has a character no shell quotes safely`);
-    const notes = notesDir && !UNSAFE_IN_QUOTES.test(notesDir) ? `--add-dir "${notesDir}" ` : '';
-    return `--settings "${settings}" ${allowed}${notes}`;
+    const notes = notesDir ? `--add-dir "${notesDir}" ` : '';
+    return { flags: `--settings "${settings}" ${allowed}${notes}`, notesDir };
   } catch (error) {
     logger.error({ sessionId, error }, 'Could not write the peer settings; launching with every file edit disallowed');
-    return `${PEER_FALLBACK}${allowed}`;
+    return { flags: `${PEER_FALLBACK}${allowed}`, notesDir: null };
   }
 }
 
@@ -224,6 +243,8 @@ export interface LaunchFlags {
   flags: string;
   /** The MCP servers this launch actually loads: null is the full roster. */
   mcpServers: string[] | null;
+  /** A read-only peer's notes folder, as granted by `--add-dir` (forward slashes); null otherwise. */
+  notesDir?: string | null;
 }
 
 /**
@@ -241,8 +262,10 @@ export function launchFlags(
   claudeJsonFile?: string
 ): LaunchFlags {
   const mode = permissionModeFlag(profile.permissionMode);
-  const access = profile.access === 'read' ? readOnlyFlags(sessionId, cwd) : '';
-  if (!profile.mcpServers) return { flags: `${mode}${access}`, mcpServers: null };
+  const peer = profile.access === 'read' ? readOnlyFlags(sessionId, cwd) : null;
+  const access = peer?.flags ?? '';
+  const notesDir = peer?.notesDir ?? null;
+  if (!profile.mcpServers) return { flags: `${mode}${access}`, mcpServers: null, ...(peer ? { notesDir } : {}) };
   let scoped = '';
   let loaded: string[] = [];
   if (profile.mcpServers.length > 0) {
@@ -257,6 +280,6 @@ export function launchFlags(
       logger.error({ sessionId, error }, 'Could not write the scoped MCP config; launching with no MCP servers');
     }
   }
-  return { flags: `${mode}--strict-mcp-config ${scoped}${access}`, mcpServers: loaded };
+  return { flags: `${mode}--strict-mcp-config ${scoped}${access}`, mcpServers: loaded, ...(peer ? { notesDir } : {}) };
 }
 

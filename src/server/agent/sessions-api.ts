@@ -6,7 +6,7 @@ import { isInside } from '../utils/paths.js';
 import { replyWithError, type StatusError } from '../utils/http-errors.js';
 import { sessionManager } from '../sessions/manager.js';
 import { sessionForToken } from '../sessions/session-env.js';
-import { peerNotesDirFor, writePromptFile } from '../sessions/prompt-file.js';
+import { writePromptFile } from '../sessions/prompt-file.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
 import { claudeNameFlag, injectCommand } from '../sessions/session-open.js';
 import {
@@ -16,7 +16,7 @@ import {
   type LaunchFlags,
   type LaunchProfile,
 } from '../sessions/launch-profile.js';
-import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
+import { UNSAFE_IN_QUOTES, isSafeQuotedText } from '../utils/shell-quote.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb, setSessionMcpServers } from '../db/queries.js';
 import { getConfig } from '../config.js';
@@ -256,7 +256,7 @@ export interface StartResult {
   mcp: { ok: boolean; servers: string[]; detail?: string };
   /** `read` for a read-only peer, `write` for the track's builder. */
   access: Access;
-  /** A peer's notes folder, shared by the track's peers; the parent can read it. */
+  /** A peer's notes folder (forward slashes), shared by the track's peers; the parent can read it. Absent when the launch couldn't grant one. */
   notesPath?: string;
 }
 
@@ -269,22 +269,34 @@ export const MAX_PEERS = 2;
  * The facts a read-only peer's prompt file starts with, before the parent's brief
  * (project/builder-critic-pairs.md decision 8). The server writes facts only; how
  * to review is the brief's, from the skill's template. Edit/Write/NotebookEdit
- * are denied in the worktree by the launch's `--settings`; Bash can't be fenced
- * by permission patterns, so that part is a rule here and nothing more.
+ * are denied in the worktree and the main checkout by the launch's `--settings`;
+ * Bash, and every other path, can't be fenced by permission rules (a deny always
+ * beats an allow), so those rest on this header and nothing more. `notesPath` is
+ * the folder the launch granted, or null when it couldn't.
  */
-export function peerHeader(o: { worktreePath: string; notesPath: string; writer: string; parent: string }): string {
+export function peerHeader(o: {
+  worktreePath: string;
+  mainCheckout: string;
+  notesPath: string | null;
+  writer: string;
+  parent: string;
+}): string {
   const slash = (p: string) => p.replace(/\\/g, '/');
   return [
     "<!-- claude-remote: read-only peer. The facts below are the server's; the brief after them is your parent's. -->",
     '',
     '# You are a read-only peer',
     '',
-    `- **Read-only in \`${slash(o.worktreePath)}\`.** Edit, Write and NotebookEdit are denied there. ` +
-      'Bash is not fenced, so never use it to write there either: no redirects or file writes into the ' +
-      'worktree, nothing that writes the git index or the tree (`git add`, `commit`, `checkout`, `stash`, ' +
-      '`reset`, `merge`, `restore`), no builds, no installs. Reading, searching and `git log`/`diff`/`show`/`status` are fine.',
-    `- **Your notes folder is \`${slash(o.notesPath)}\`.** Write there freely: references, and the findings ` +
-      "ledger if your brief keeps one. The track's other peer shares it; it is deleted when the track is landed or deleted.",
+    `- **Read-only in \`${slash(o.worktreePath)}\`** (the builder's worktree) **and in \`${slash(o.mainCheckout)}\`** ` +
+      '(the project). Edit, Write and NotebookEdit are denied in both. Write nowhere but your notes folder. ' +
+      'Bash is not fenced, so never use it to write anywhere else either: no redirects or file writes, nothing that ' +
+      'writes the git index or the tree (`git add`, `commit`, `checkout`, `stash`, `reset`, `merge`, `restore`), ' +
+      'no builds, no installs. Reading, searching and `git log`/`diff`/`show`/`status` are fine.',
+    o.notesPath
+      ? `- **Your notes folder is \`${slash(o.notesPath)}\`.** Write there freely: references, and the findings ` +
+        "ledger if your brief keeps one. The track's other peer shares it; it is deleted when the track is landed or deleted."
+      : '- **You have no notes folder this time** (the server could not set one up). Keep your references and ' +
+        'findings in your messages, and tell your parent.',
     `- **The writer is \`${o.writer}\`** (the only session that changes the worktree) **and your parent is ` +
       `\`${o.parent}\`.** Message them with SendMessage by those names. Don't poll the worktree: wait for the ` +
       'writer to message you.',
@@ -293,6 +305,102 @@ export function peerHeader(o: { worktreePath: string; notesPath: string; writer:
     '',
     '',
   ].join('\n');
+}
+
+type ChildRow = SessionMetadata & { attachable: boolean };
+
+/** A name `--name` can carry, made from `base`: an unquotable character dropped rather than the flag. */
+function addressableName(base: string): string {
+  const cleaned = [...base].filter((c) => isSafeQuotedText(c)).join('').trim();
+  return cleaned || 'peer';
+}
+
+/**
+ * The slot a start takes on its track (project/builder-critic-pairs.md), or the
+ * refusal: one writer and at most MAX_PEERS read-only peers per caller and track,
+ * a peer only beside a live writer, and a name no other live session of the caller
+ * has, since agents address each other by name. A peer's default name and mode come
+ * from its writer. Synchronous: the caller books the slot before it next awaits.
+ */
+export function claimTrackSlot(o: {
+  access: Access;
+  track: string;
+  /** The caller's live children: their names must stay distinct. */
+  children: ChildRow[];
+  /** Those on this track. */
+  onTrack: ChildRow[];
+  pending: Record<Access, number>;
+  /** The name the start asked for, or null for the default. */
+  name: string | null;
+  /** The mode the start asked for, or null for the default. */
+  mode: PermissionMode | null;
+  /** What `ListAgents` calls a session, for the header and the default peer name. */
+  agentName(session: ChildRow): string;
+}): { name: string; mode: PermissionMode; writer: ChildRow | null; writerName: string | null } {
+  const { access, track, onTrack, pending } = o;
+  const writer = onTrack.find((s) => s.access !== 'read') ?? null;
+  const peers = onTrack.filter((s) => s.access === 'read');
+  const taken = new Set(o.children.map((s) => s.name));
+  const refuseTaken = (name: string) => {
+    if (taken.has(name)) {
+      throw new AgentSessionError(409, `This session already has a live session named "${name}"; agents message each other by name, so pick another`);
+    }
+  };
+
+  if (access === 'write') {
+    if (pending.write > 0 || writer) {
+      throw new AgentSessionError(
+        409,
+        writer
+          ? `This session already started "${writer.name}" (${writer.id}) on "${track}"; run list`
+          : `A start on "${track}" from this session is still in progress; run list in a minute`
+      );
+    }
+    const name = o.name ?? track;
+    refuseTaken(name);
+    return { name, mode: o.mode ?? DEFAULT_PERMISSION_MODE, writer: null, writerName: null };
+  }
+
+  if (!writer) {
+    throw new AgentSessionError(
+      409,
+      pending.write > 0
+        ? `The builder's start on "${track}" is still in progress; start the peer once list shows it`
+        : `No session this one started is writing on "${track}": start the builder first, then its peers`
+    );
+  }
+  if (peers.length + pending.read >= MAX_PEERS) {
+    throw new AgentSessionError(
+      409,
+      `"${track}" already has ${MAX_PEERS} read-only peers from this session` +
+        (peers.length ? ` (${peers.map((p) => `"${p.name}"`).join(', ')})` : '') +
+        '; more add agreement, not insight'
+    );
+  }
+  const writerName = o.agentName(writer);
+  let name = o.name;
+  if (name !== null) {
+    // The builder messages it by this name: a name `--name` can't carry leaves it unreachable.
+    if (!isSafeQuotedText(name)) {
+      throw new AgentSessionError(400, 'A read-only peer\'s name must not contain ", %, $, `, ! or a backslash: its builder messages it by name');
+    }
+    refuseTaken(name);
+  } else {
+    // `<builder> peer`, then `<builder> peer 2`, so the builder's brief can name both before
+    // either exists. The skill has the parent name each by its job instead.
+    const base = addressableName(writerName);
+    for (let n = peers.length + pending.read + 1; name === null || taken.has(name); n++) {
+      name = `${base} peer${n > 1 ? ` ${n}` : ''}`.slice(0, MAX_NAME_LENGTH);
+    }
+  }
+  // A peer messages its builder: the same mode unless the start names one. Messages pass
+  // between modes (checked 2026-11-04), so this is only the least surprising default.
+  let mode = o.mode;
+  if (mode === null) {
+    const stored = writer.permissionMode ? (MODE_ALIASES[writer.permissionMode] ?? writer.permissionMode) : null;
+    mode = (PERMISSION_MODES as readonly string[]).includes(stored ?? '') ? (stored as PermissionMode) : DEFAULT_PERMISSION_MODE;
+  }
+  return { name, mode, writer, writerName };
 }
 
 // Starts that have passed the limit check but not yet created their session
@@ -347,8 +455,8 @@ export async function startAgentSession(
     }
     permissionMode = mode as PermissionMode;
   }
-  // A peer with no name named gets one from its builder's, below.
-  let name: string | null = access === 'write' ? track : null;
+  // No name: the track's, or for a peer its builder's (claimTrackSlot).
+  let name: string | null = null;
   if (body.name !== undefined) {
     if (typeof body.name !== 'string' || !body.name.trim()) throw new AgentSessionError(400, 'name must be a non-empty string');
     name = body.name.trim().slice(0, MAX_NAME_LENGTH);
@@ -395,61 +503,25 @@ export async function startAgentSession(
     }
   }
 
-  // One writer and at most MAX_PEERS read-only peers per caller and track
-  // (project/builder-critic-pairs.md): two writers in one worktree collide on
-  // builds and the git index however well they talk. Nothing between the limit
-  // check and the bookkeeping below awaits, so concurrent starts cannot both
-  // get past it.
+  // The track's slot. Nothing between the limit check and the bookkeeping below
+  // awaits, so concurrent starts cannot both get past it.
   const trackKey = `${callerId}\0${track}`;
   const branches = deps.trackBranches();
-  const onTrack = children.filter((s) => trackOf(branches, s.cwd) === track);
-  const writer = onTrack.find((s) => s.access !== 'read');
-  const peers = onTrack.filter((s) => s.access === 'read');
   const pending = pendingTracks.get(trackKey) ?? { read: 0, write: 0 };
-  if (access === 'write' && (pending.write > 0 || writer)) {
-    throw new AgentSessionError(
-      409,
-      writer
-        ? `This session already started "${writer.name}" (${writer.id}) on "${track}"; run list`
-        : `A start on "${track}" from this session is still in progress; run list in a minute`
-    );
-  }
-  if (access === 'read') {
-    if (!writer) {
-      throw new AgentSessionError(
-        409,
-        pending.write > 0
-          ? `The builder's start on "${track}" is still in progress; start the peer once list shows it`
-          : `No session this one started is writing on "${track}": start the builder first, then its peers`
-      );
-    }
-    if (peers.length + pending.read >= MAX_PEERS) {
-      throw new AgentSessionError(
-        409,
-        `"${track}" already has ${MAX_PEERS} read-only peers from this session` +
-          (peers.length ? ` (${peers.map((p) => `"${p.name}"`).join(', ')})` : '') +
-          '; more add agreement, not insight'
-      );
-    }
-    // `<builder> peer`, then `<builder> peer 2`, so the builder's brief can name both
-    // before either exists. The skill has the parent name each by its job instead.
-    if (name === null) {
-      const taken = new Set(onTrack.map((s) => s.name));
-      for (let n = peers.length + pending.read + 1; name === null || taken.has(name); n++) {
-        name = `${writer.name} peer${n > 1 ? ` ${n}` : ''}`.slice(0, MAX_NAME_LENGTH);
-      }
-    }
-    // A peer messages its builder: the same mode, unless the start names one, so no
-    // message waits on an approval one side would ask for and the other wouldn't.
-    if (permissionMode === null) {
-      const stored = writer.permissionMode ? (MODE_ALIASES[writer.permissionMode] ?? writer.permissionMode) : null;
-      permissionMode = (PERMISSION_MODES as readonly string[]).includes(stored ?? '')
-        ? (stored as PermissionMode)
-        : DEFAULT_PERMISSION_MODE;
-    }
-  }
-  const sessionName = name ?? track;
-  const mode = permissionMode ?? DEFAULT_PERMISSION_MODE;
+  const slot = claimTrackSlot({
+    access,
+    track,
+    children,
+    onTrack: children.filter((s) => trackOf(branches, s.cwd) === track),
+    pending,
+    name,
+    mode: permissionMode,
+    agentName: (s) => deps.claudeName(s.claudeSessionId) ?? s.name,
+  });
+  const sessionName = slot.name;
+  const mode = slot.mode;
+  // What the row and every launch store: NULL is write.
+  const storedAccess = access === 'read' ? 'read' : null;
 
   pendingStarts.set(callerId, (pendingStarts.get(callerId) ?? 0) + 1);
   pendingTracks.set(trackKey, { ...pending, [access]: pending[access] + 1 });
@@ -467,8 +539,6 @@ export async function startAgentSession(
     // the session asks again for every MCP server the user already approved.
     await deps.ensureLocalClaudeSettings(project.cwd, worktreePath);
 
-    const notesPath = access === 'read' ? peerNotesDirFor(branch.id) : undefined;
-
     let session: ActiveSession;
     try {
       session = await deps.createSession({
@@ -478,7 +548,7 @@ export async function startAgentSession(
         spawnedBy: callerId,
         permissionMode: mode,
         mcpServers,
-        access: access === 'read' ? 'read' : null,
+        access: storedAccess,
         account,
       });
     } catch (error) {
@@ -487,20 +557,25 @@ export async function startAgentSession(
       throw error;
     }
 
+    // Before the prompt file: a peer's header names the notes folder this launch granted.
+    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode: mode, mcpServers, access: storedAccess }, account);
+    const notesPath = access === 'read' ? (launch.notesDir ?? null) : null;
+
     let promptPath: string;
     let promptDir: string;
     try {
-      // Forward slashes, so neither PowerShell nor bash reads a backslash as an escape.
       // A peer's file starts with the server's facts; the parent's brief follows.
       const header =
-        writer && notesPath
+        slot.writerName !== null
           ? peerHeader({
               worktreePath,
+              mainCheckout: project.cwd,
               notesPath,
-              writer: writer.name,
+              writer: slot.writerName,
               parent: deps.claudeName(caller.claudeSessionId) ?? caller.name,
             })
           : '';
+      // Forward slashes, so neither PowerShell nor bash reads a backslash as an escape.
       promptPath = deps.writePromptFile(session.id, header + prompt).replace(/\\/g, '/');
       promptDir = promptPath.slice(0, promptPath.lastIndexOf('/'));
       if (UNSAFE_IN_QUOTES.test(promptPath)) {
@@ -512,12 +587,6 @@ export async function startAgentSession(
       throw error;
     }
 
-    const launch = deps.launchFlags(
-      session.id,
-      worktreePath,
-      { permissionMode: mode, mcpServers, access: access === 'read' ? 'read' : null },
-      account
-    );
     deps.injectCommand(session, startCommand(launch.flags, promptDir, promptPath, session.name));
     // The check above passed, so this is a config edited since, or a file that couldn't be
     // written. Started anyway, like a failed install: the row and `list` say what it really
@@ -537,7 +606,7 @@ export async function startAgentSession(
         attachable: true,
         spawnedBy: callerId,
         permissionMode: mode,
-        access: access === 'read' ? 'read' : null,
+        access: storedAccess,
       })
     );
 
@@ -552,7 +621,7 @@ export async function startAgentSession(
       install,
       mcp,
       access,
-      ...(notesPath ? { notesPath: notesPath.replace(/\\/g, '/') } : {}),
+      ...(notesPath ? { notesPath } : {}),
     };
   } finally {
     const left = (pendingStarts.get(callerId) ?? 1) - 1;

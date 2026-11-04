@@ -87,6 +87,40 @@ export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 
   }
 }
 
+/**
+ * The fields a reply about one session (session.created, session.attached) takes from its
+ * DB row rather than from the live session object, which lacks them. Every such reply goes
+ * through this, so none of them drops one: a revived or resumed read-only peer that came
+ * back without `access` lost its chip until the next list.
+ */
+export function storedSessionFields(row: {
+  categoryId?: string | null;
+  sortOrder?: number;
+  isFork?: boolean;
+  claudeSessionId?: string | null;
+  spawnedBy?: string | null;
+  permissionMode?: string | null;
+  access?: string | null;
+} | null): {
+  categoryId: string | null;
+  sortOrder: number;
+  isFork: boolean;
+  claudeSessionId: string | null;
+  spawnedBy: string | null;
+  permissionMode: string | null;
+  access: string | null;
+} {
+  return {
+    categoryId: row?.categoryId ?? null,
+    sortOrder: row?.sortOrder ?? 0,
+    isFork: row?.isFork ?? false,
+    claudeSessionId: row?.claudeSessionId ?? null,
+    spawnedBy: row?.spawnedBy ?? null,
+    permissionMode: row?.permissionMode ?? null,
+    access: row?.access ?? null,
+  };
+}
+
 export function sessionToInfo(session: { id: string; name: string; shell: string; cwd: string; createdAt: Date | string; lastAccessedAt: Date | string; status: string; cols: number; rows: number; attachable?: boolean; categoryId?: string | null; sortOrder?: number; isFork?: boolean; claudeSessionId?: string | null; spawnedBy?: string | null; permissionMode?: string | null; access?: string | null; account?: string }): SessionInfo {
   return {
     id: session.id,

@@ -273,6 +273,10 @@ build differed from this spec, or a check couldn't run as written:
 - **7, Resume.** The `session.created` reply to a revive or history open now carries
   `access`, so the chip shows at once. That reply was fixed after the live run and checked
   in code only, not live.
+- **After the code review** (same day): the deny rules also cover the project's main
+  checkout; a start whose name a live sibling has is 409, and an unquotable peer name 400;
+  the header names the builder by its Claude name; the header and result print the notes
+  folder the launch actually granted (or say there is none). Unit-tested, not re-run live.
 - **Harness only.** The hooks post to 4220, so on the isolated boot Claude session ids were
   registered by hand for revive, Resume and the session log. The temp folder needed Claude's
   folder-trust prompt accepted.

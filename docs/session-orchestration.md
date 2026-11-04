@@ -329,21 +329,35 @@ server never sees `SendMessage`.
   409, as before); a peer needs a **live** writer (409 "start the builder first", or "still
   in progress" while the builder's start runs); at most `MAX_PEERS` (2) peers, counting
   starts in flight (`pendingTracks` holds a count per access). Peers count toward
-  `maxPerParent`, and the builder still can't start anything (403). A peer with no `--name`
-  is `<builder name> peer`, then `peer 2`, … (skipping live names); with no `--mode` it
-  takes the builder's mode.
-- **The prompt file** starts with `peerHeader()`: read-only in the worktree, the Bash rule
-  (no git writes, builds or installs), the notes folder, the writer's name and the
-  parent's (its Claude name from the registry when known, else its session name). Facts
-  only; the parent's brief follows.
+  `maxPerParent`, and the builder still can't start anything (403). All of it is
+  `claimTrackSlot()`. A peer with no `--name` is `<builder's Claude name> peer`, then
+  `peer 2`, … (skipping live names, unquotable characters dropped); with no `--mode` it takes
+  the builder's mode.
+- **Names stay addressable.** Agents message each other by name, so any start whose name a
+  live session of the same caller already has is 409, and a peer name `--name` can't carry
+  (`"`, `%`, `$`, backtick, `!`, backslash) is 400: its builder could never reach it.
+- **"One writer" is per parent, not per worktree.** Another parent session, or the user
+  opening a session from the Track picker, can still write in the same worktree. The rule
+  stops a parent from putting two builders on one track, nothing more.
+- **The prompt file** starts with `peerHeader()`: read-only in the worktree and the main
+  checkout, write nowhere but the notes folder, the Bash rule (no git writes, builds or
+  installs), the notes folder (or that there is none this time), and the writer's and
+  parent's names as `ListAgents` shows them (the Claude name from the registry when known,
+  else the session name). Facts only; the parent's brief follows. It is written **after**
+  the launch flags, from the notes folder the launch reports (`LaunchFlags.notesDir`), so the
+  header and the start result never name a folder the session wasn't given.
 - **The launch** (`launchFlags()` with `access: 'read'`, so start, revive and history
   Resume alike; `launchProfileForTranscript()` carries `access`):
-  - `--settings "<dataDir>/peer-settings/<id>.json"`: `deny: Edit(<worktree>/**)`,
-    `allow: Edit(<notes>/**)`. Only `Edit(path)` rules are matched by file checks (Claude
+  - `--settings "<dataDir>/peer-settings/<id>.json"`: `deny: Edit(<worktree>/**)` and
+    `Edit(<main checkout>/**)`, `allow: Edit(<notes>/**)` (`peerPaths()`). Nothing broader
+    can be denied: a deny always beats an allow, so "everything but the notes folder" isn't
+    expressible, and other paths rest on the header. Only `Edit(path)` rules are matched by file checks (Claude
     Code warns that `Write(path)` isn't), and they cover Write and NotebookEdit. An absolute
     path is written `//c/Users/…` (`permissionRulePath()`): checked 2026-11-04 on Windows,
     `//C:/…` and `/c/…` are ignored without a word, so a rule in the wrong form denies
-    nothing. Rewritten at every launch; `deletePromptFile()` removes it.
+    nothing. A network path (`\\server\share`) has no known rule form and throws, which
+    falls back to disallowing every edit (below). Rewritten at every launch;
+    `deletePromptFile()` removes it.
   - `--allowedTools WebFetch WebSearch Read`, so gathering references and viewing images
     never stalls an unattended session.
   - `--add-dir "<dataDir>/peers/<track-branch id>"`, the notes folder, created at launch.
@@ -356,7 +370,9 @@ server never sees `SendMessage`.
 - **The notes folder** is keyed by the track branch, so a revived or replacement peer
   keeps the references and the findings ledger, and lives outside every project, so no
   `commitAll` sweeps it in. Land (`landTrack`) and Delete track remove it
-  (`deletePeerNotes()`); Delete only when the branch is actually gone. The start result
+  (`deletePeerNotes()`); Delete only when the branch is actually gone. A folder a closing
+  peer still holds is retried in the background (8 times, 15 s apart) and every failure is
+  logged, so leftover notes never go unnoticed. The start result
   carries `notesPath` so the parent can read it; `list` carries `access`.
 - **Sidebar:** a peer is a child of the parent like any started session, placed right after
   its builder (`peersAfterBuilders()`: the newest writer in the same worktree started

@@ -1,6 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getConfig } from '../config.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('prompt-file');
 
 /**
  * The prompt a started session is told to read (docs/session-orchestration.md).
@@ -51,15 +54,39 @@ export function peerNotesDirFor(trackBranchId: string): string {
   return join(getConfig().persistence.dataDir, 'peers', trackBranchId);
 }
 
-/** Remove a track's peer notes folder, if it has one. Never throws. */
-export function deletePeerNotes(trackBranchId: string): void {
-  try {
-    // Ids are server-generated, but never let one walk out of peers/.
-    if (!/^[\w-]+$/.test(trackBranchId)) return;
-    rmSync(peerNotesDirFor(trackBranchId), { recursive: true, force: true });
-  } catch {
-    /* most tracks never had peers */
-  }
+// A file a peer's dying Claude still holds (Windows) frees within seconds of its exit.
+const BUSY = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+
+/**
+ * Remove a track's peer notes folder, if it has one. Never throws. A busy folder (a peer
+ * closed by Land or Delete still exiting) is retried in the background, `attempts` times
+ * `retryMs` apart, and every failure is logged: a silent one would leave the notes behind
+ * with nothing saying so. A missing folder is not a failure (`force`).
+ */
+export function deletePeerNotes(
+  trackBranchId: string,
+  opts: { attempts?: number; retryMs?: number; rm?: (path: string) => void } = {}
+): void {
+  // Ids are server-generated, but never let one walk out of peers/.
+  if (!/^[\w-]+$/.test(trackBranchId)) return;
+  const path = peerNotesDirFor(trackBranchId);
+  const rm = opts.rm ?? ((p: string) => rmSync(p, { recursive: true, force: true }));
+  const attempts = opts.attempts ?? 8;
+  const retryMs = opts.retryMs ?? 15_000;
+  const attempt = (left: number) => {
+    try {
+      rm(path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (BUSY.has(code) && left > 1) {
+        logger.warn({ path, code }, 'Peer notes folder is busy; retrying');
+        setTimeout(() => attempt(left - 1), retryMs).unref();
+      } else {
+        logger.error({ path, error }, 'Could not remove the peer notes folder; delete it by hand');
+      }
+    }
+  };
+  attempt(attempts);
 }
 
 export function writePromptFile(sessionId: string, prompt: string): string {

@@ -38,6 +38,7 @@ import { revokeSessionToken, sessionEnv, sessionForToken } from '../src/server/s
 import { deletePromptFile, peerNotesDirFor, promptDirFor, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession, SessionMetadata } from '../src/server/sessions/types.js';
 import { launchFlags, type LaunchProfile } from '../src/server/sessions/launch-profile.js';
+import { storedSessionFields } from '../src/server/websocket/connections.js';
 
 const PROJECT = 'C:\\p\\demo';
 const WORKTREE = 'C:\\data\\worktrees\\tracks\\abcd1234';
@@ -47,6 +48,8 @@ mkdirSync(FAKE_HOME, { recursive: true });
 writeFileSync(join(FAKE_HOME, '.claude.json'), JSON.stringify({ mcpServers: { playwright: { command: 'npx' }, everhour: { command: 'eh' } } }));
 const MAIN_ID = '11111111-1111-4111-8111-111111111111';
 const TRACK_ID = 'tb-split-view';
+// The notes folder the stand-in launch grants a peer; null when it couldn't.
+let grantedNotes: string | null = null;
 
 function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetadata & { attachable: boolean } {
   return {
@@ -117,7 +120,12 @@ function makeDeps(): AgentSessionDeps {
     mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
     claudeName: vi.fn(() => null),
     // The real flags, reading a stand-in for the user's Claude config.
-    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'))),
+    // The real flags, reading a stand-in for the user's Claude config. The notes folder is the
+    // one track-store would map the worktree to, which this suite doesn't stand up.
+    launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => {
+      const flags = launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'));
+      return p.access === 'read' ? { ...flags, notesDir: grantedNotes } : flags;
+    }),
     preflight: vi.fn((account: string) => ({ ok: true as const, account, configDir: 'C:\cfg', found: { accountUuid: 'a' } })),
     setMcpServers: vi.fn((id: string, servers: string[]) => {
       const r = rows.get(id);
@@ -136,6 +144,7 @@ function makeDeps(): AgentSessionDeps {
 beforeEach(async () => {
   rows = new Map([[MAIN_ID, row(MAIN_ID)]]);
   created = 0;
+  grantedNotes = peerNotesDirFor(TRACK_ID).replace(/\\/g, '/');
   mainToken = sessionEnv(MAIN_ID).CLAUDE_REMOTE_TOKEN;
   deps = makeDeps();
   app = Fastify({ logger: false });
@@ -612,12 +621,12 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
 
   it("starts the peer's prompt file with the server's header, then the parent's brief", async () => {
     await startBuilder({ name: 'Split view builder' });
-    (deps.claudeName as ReturnType<typeof vi.fn>).mockReturnValue('planner');
+    (deps.claudeName as ReturnType<typeof vi.fn>).mockImplementation((id: string | null) => (id === 'cc-main' ? 'planner' : null));
     rows.set(MAIN_ID, row(MAIN_ID, { claudeSessionId: 'cc-main' }));
     const body = (await start({ ...PEER, name: 'Split view reviewer' })).json();
     const text = readFileSync(promptPathFor(body.sessionId), 'utf-8');
     expect(text).toBe(
-      peerHeader({ worktreePath: WORKTREE, notesPath: peerNotesDirFor(TRACK_ID), writer: 'Split view builder', parent: 'planner' }) + PEER.prompt
+      peerHeader({ worktreePath: WORKTREE, mainCheckout: PROJECT, notesPath: grantedNotes, writer: 'Split view builder', parent: 'planner' }) + PEER.prompt
     );
     expect(deps.claudeName).toHaveBeenCalledWith('cc-main');
   });
@@ -727,8 +736,10 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
 
 describe('peerHeader', () => {
   it('states the read-only rule, the Bash rule, the notes folder, the writer and the parent, with forward slashes', () => {
-    const text = peerHeader({ worktreePath: 'C:\\wt\\abcd', notesPath: 'C:\\data\\peers\\tb', writer: 'Builder', parent: 'planner' });
+    const text = peerHeader({ worktreePath: 'C:\\wt\\abcd', mainCheckout: 'C:\\p\\demo', notesPath: 'C:\\data\\peers\\tb', writer: 'Builder', parent: 'planner' });
     expect(text).toContain('Read-only in `C:/wt/abcd`');
+    expect(text).toContain('and in `C:/p/demo`');
+    expect(text).toContain('Write nowhere but your notes folder');
     expect(text).toMatch(/Edit, Write and NotebookEdit are denied/);
     expect(text).toMatch(/Bash is not fenced/);
     for (const cmd of ['git add', 'commit', 'checkout', 'stash', 'reset']) expect(text).toContain(cmd);
@@ -739,5 +750,79 @@ describe('peerHeader', () => {
     expect(text).not.toContain('\\');
     // The brief follows a rule, so the facts never run into it.
     expect(text.endsWith('---\n\n')).toBe(true);
+  });
+});
+
+describe('read-only peers: names, the notes folder and slots (code review fixes)', () => {
+  const PEER = { ...GOOD, access: 'read', prompt: 'Review it.' };
+  const startBuilder = async (body: Record<string, unknown> = {}) => (await start({ ...GOOD, ...body })).json();
+
+  it('refuses a name a live session of the caller already has with 409, before creating anything', async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder({ name: 'Split view builder' });
+    const res = await start({ ...PEER, name: 'Split view builder' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already has a live session named "Split view builder"/);
+    expect(deps.createSession).toHaveBeenCalledTimes(1);
+    // An exited session's name is free again.
+    rows.set('c9', row('c9', { spawnedBy: MAIN_ID, cwd: 'C:\\elsewhere', name: 'Old', status: 'terminated' }));
+    expect((await start({ ...PEER, name: 'Old' })).statusCode).toBe(200);
+  });
+
+  it("refuses a peer name its builder couldn't message it by with 400", async () => {
+    await startBuilder();
+    for (const name of ['Review!', 'a"b', '50% peer']) {
+      expect((await start({ ...PEER, name })).statusCode).toBe(400);
+    }
+    expect(deps.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the builder by its Claude name in the header and the default peer name, unquotable characters dropped", async () => {
+    const builder = await startBuilder({ name: 'Split view builder' });
+    rows.get(builder.sessionId)!.claudeSessionId = 'cc-builder';
+    (deps.claudeName as ReturnType<typeof vi.fn>).mockImplementation((id: string | null) => (id === 'cc-builder' ? 'wt-8b4c!' : null));
+    const body = (await start(PEER)).json();
+    expect(body.name).toBe('wt-8b4c peer');
+    expect(readFileSync(promptPathFor(body.sessionId), 'utf-8')).toContain('The writer is `wt-8b4c!`');
+  });
+
+  it("says so in the header, and leaves notesPath out, when the launch couldn't grant a notes folder", async () => {
+    await startBuilder();
+    grantedNotes = null;
+    const body = (await start(PEER)).json();
+    expect(body.notesPath).toBeUndefined();
+    const text = readFileSync(promptPathFor(body.sessionId), 'utf-8');
+    expect(text).toContain('You have no notes folder this time');
+    expect(text).not.toContain('Your notes folder is');
+  });
+
+  it("prints the notes folder the launch granted, not one of its own", async () => {
+    await startBuilder();
+    grantedNotes = 'C:/granted/notes';
+    const body = (await start(PEER)).json();
+    expect(body.notesPath).toBe('C:/granted/notes');
+    expect(readFileSync(promptPathFor(body.sessionId), 'utf-8')).toContain('notes folder is `C:/granted/notes`');
+  });
+
+  it('frees the peer slot when a peer start fails, so the track never sticks at two', async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder();
+    (deps.createSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn failed'));
+    expect((await start(PEER)).statusCode).toBe(500);
+    (deps.createSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn failed'));
+    expect((await start(PEER)).statusCode).toBe(500);
+    expect((await start(PEER)).statusCode).toBe(200);
+    expect((await start(PEER)).statusCode).toBe(200);
+  });
+});
+
+describe('storedSessionFields', () => {
+  it("carries every stored field a reply needs, access included, with defaults for a missing row", () => {
+    expect(storedSessionFields({ categoryId: 'c', sortOrder: 3, isFork: true, claudeSessionId: 'x', spawnedBy: 'p', permissionMode: 'plan', access: 'read' })).toEqual({
+      categoryId: 'c', sortOrder: 3, isFork: true, claudeSessionId: 'x', spawnedBy: 'p', permissionMode: 'plan', access: 'read',
+    });
+    expect(storedSessionFields(null)).toEqual({
+      categoryId: null, sortOrder: 0, isFork: false, claudeSessionId: null, spawnedBy: null, permissionMode: null, access: null,
+    });
   });
 });

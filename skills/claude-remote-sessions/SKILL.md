@@ -144,7 +144,9 @@ EOF
 
 - Both names are yours to choose before either session exists, so the builder's prompt
   can name its peers. A peer with no `--name` is called `<builder name> peer`, then
-  `peer 2`.
+  `peer 2`. Every name must differ from your other live sessions' (409), and a peer's may
+  not contain `"`, `%`, `$`, a backtick, `!` or a backslash (400): agents message each
+  other by name.
 - Refusals (409): a peer with no live builder on the track ("start the builder first"),
   a third peer, a second builder. Peers count toward your `maxPerParent`.
 - A peer takes the builder's permission mode unless you pass `--mode`. Messages pass between
@@ -152,9 +154,11 @@ EOF
   peers: nothing held, nothing asked), so pass `--mode` only for a reason of its own.
   `--mode manual` types no flag, so the peer gets the user's own default mode.
 - The result adds `access` (`read`) and `notesPath`, the folder the track's peers share
-  for references and the findings ledger. You can read it. It is deleted when the track
+  for references and the findings ledger. You can read it. No `notesPath` means the server
+  couldn't set one up: the peer is told so, and keeps its findings in its messages. It is deleted when the track
   is landed or deleted. `list` shows each session's `access`.
-- A peer can't edit files in the worktree (the launch denies it), may use `WebFetch`,
+- A peer can't edit files in the worktree or the project's main checkout (the launch denies
+  it), may use `WebFetch`,
   `WebSearch` and `Read` without asking (where Claude Code fetches pages through its
   `web-fetch` subagent instead, that runs without asking too), and loads no MCP server unless you pass `--mcp`
   (e.g. `--mcp playwright` to judge a running UI). Its prompt file starts with a short
