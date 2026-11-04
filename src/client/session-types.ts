@@ -24,6 +24,9 @@ export interface SessionInfo {
   spawnedBy?: string | null;
   /** The `--permission-mode` a started session runs with; a chip when not `default`. */
   permissionMode?: string | null;
+  /** `read` for a read-only peer beside its track's builder: a `read-only` chip, and it
+   *  renders right after that builder. */
+  access?: string | null;
   /** Claude's name for the conversation running here (what `ListAgents` shows and agents
    *  message), or null when none runs. The status line shows it when it differs from
    *  `name`. Kept current by `session.claudeNames`. */

@@ -64,6 +64,23 @@ describe('start', () => {
     expect(JSON.parse(fetchImpl.mock.calls[1][1].body as string)).not.toHaveProperty('account');
   });
 
+  it('sends --read-only as access read, takes no value, and sends nothing without it', async () => {
+    const fetchImpl = okFetch();
+    await run({ argv: ['start', '--track', 'X', '--read-only', '--name', 'X reviewer'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body as string)).toMatchObject({ track: 'X', access: 'read', name: 'X reviewer' });
+    await run({ argv: ['start', '--track', 'X'], fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body as string)).not.toHaveProperty('access');
+  });
+
+  it('refuses --read-only on list, land and update', async () => {
+    for (const command of ['list', 'land', 'update']) {
+      const fetchImpl = okFetch();
+      const res = await run({ argv: [command, '--read-only'], fetchImpl });
+      expect(res.code).toBe(2);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+
   it('refuses --mcp on land and update', async () => {
     for (const command of ['land', 'update']) {
       const fetchImpl = okFetch();

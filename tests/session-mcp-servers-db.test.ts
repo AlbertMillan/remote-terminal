@@ -71,7 +71,7 @@ describe('sessions.mcp_servers', () => {
     expect(launchProfileForTranscript('T1')).toBeNull();
     insertSession(row('old', { claudeSessionId: 'T2', permissionMode: 'plan', mcpServers: [], createdAt: '2026-10-01T00:00:00.000Z' }));
     insertSession(row('new', { claudeSessionId: 'T2', permissionMode: 'auto', mcpServers: ['playwright'] }));
-    expect(launchProfileForTranscript('T2')).toEqual({ permissionMode: 'auto', mcpServers: ['playwright'] });
+    expect(launchProfileForTranscript('T2')).toEqual({ permissionMode: 'auto', mcpServers: ['playwright'], access: null });
     expect(launchProfileForTranscript('nope')).toBeNull();
   });
 

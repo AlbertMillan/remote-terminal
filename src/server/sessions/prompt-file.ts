@@ -32,6 +32,36 @@ export function mcpConfigPathFor(sessionId: string): string {
   return join(getConfig().persistence.dataDir, 'mcp', `${sessionId}.json`);
 }
 
+/**
+ * A read-only peer's `--settings` file (launch-profile.ts), denying edits in its worktree.
+ * Under the data dir like the MCP config: in the worktree `commitAll` would sweep it in, and
+ * in the prompt folder the session could rewrite its own rules.
+ */
+export function peerSettingsPathFor(sessionId: string): string {
+  return join(getConfig().persistence.dataDir, 'peer-settings', `${sessionId}.json`);
+}
+
+/**
+ * The notes folder a track's read-only peers share (project/builder-critic-pairs.md): their
+ * references and findings ledger. Keyed by the track branch, so a revived or replacement
+ * peer finds them; outside every project, so no `commitAll` sweeps it in and no `.gitignore`
+ * is needed. Removed when the track is landed or deleted (deletePeerNotes).
+ */
+export function peerNotesDirFor(trackBranchId: string): string {
+  return join(getConfig().persistence.dataDir, 'peers', trackBranchId);
+}
+
+/** Remove a track's peer notes folder, if it has one. Never throws. */
+export function deletePeerNotes(trackBranchId: string): void {
+  try {
+    // Ids are server-generated, but never let one walk out of peers/.
+    if (!/^[\w-]+$/.test(trackBranchId)) return;
+    rmSync(peerNotesDirFor(trackBranchId), { recursive: true, force: true });
+  } catch {
+    /* most tracks never had peers */
+  }
+}
+
 export function writePromptFile(sessionId: string, prompt: string): string {
   const path = promptPathFor(sessionId);
   mkdirSync(promptDirFor(sessionId), { recursive: true });
@@ -39,13 +69,14 @@ export function writePromptFile(sessionId: string, prompt: string): string {
   return path;
 }
 
-/** Remove a session's prompt folder and MCP config, if it has them. Never throws. */
+/** Remove a session's prompt folder, MCP config and peer settings, if it has them. Never throws. */
 export function deletePromptFile(sessionId: string): void {
   try {
     // Ids are server-generated UUIDs, but never let one walk out of prompts/.
     if (!/^[\w-]+$/.test(sessionId)) return;
     rmSync(promptDirFor(sessionId), { recursive: true, force: true });
     rmSync(mcpConfigPathFor(sessionId), { force: true });
+    rmSync(peerSettingsPathFor(sessionId), { force: true });
   } catch {
     /* most sessions never had one */
   }

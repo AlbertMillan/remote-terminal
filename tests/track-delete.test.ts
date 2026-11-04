@@ -29,6 +29,7 @@ const tracks = await import('../src/server/projects/track-branches.js');
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const store = await import('../src/server/jobs/store.js');
+const { peerNotesDirFor } = await import('../src/server/sessions/prompt-file.js');
 const { jobMergeMessageArgs } = await import('../src/server/jobs/merge-trailers.js');
 
 const DOC = `## Track: Alpha
@@ -145,6 +146,15 @@ describe('a track that was branched but never landed', () => {
     expect(result.committed).toBeNull();
     expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).not.toContain('Alpha');
     expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).toContain('## Track: Beta');
+  });
+
+  it("removes the track's peer notes folder with it", async () => {
+    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
+    const notes = peerNotesDirFor(t.id);
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, 'ledger.md'), 'F1 open\n');
+    await planAndRun({ deleteSpecs: [] });
+    expect(existsSync(notes)).toBe(false);
   });
 });
 

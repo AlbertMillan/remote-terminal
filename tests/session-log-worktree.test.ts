@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, onTestFinished, vi } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -56,6 +56,7 @@ vi.mock('../src/server/agent/claude-run.js', async (importActual) => ({
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const tracks = await import('../src/server/projects/track-branches.js');
+const { peerNotesDirFor } = await import('../src/server/sessions/prompt-file.js');
 /** Land with no running sessions anywhere. */
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { generateSessionLogForced } = await import('../src/server/sessions/project-log.js');
@@ -169,6 +170,42 @@ describe('generateSessionLog for a worktree session', () => {
     expect(await generateSessionLogForced(ctx(t.worktreePath))).toBe('generated');
     expect(runs[0].cwd).toBe(repo);
     expect(runs[0].prompt).toContain(`Branch: ${t.branch}`);
+  });
+
+  it("labels a read-only peer's entry (peer), and says the diff is its builder's", async () => {
+    const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
+    writeFileSync(join(t.worktreePath, 'feature.ts'), 'export const x = 1;\n');
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    expect(await generateSessionLogForced({ ...ctx(t.worktreePath), createdAt: recent, access: 'read' })).toBe('generated');
+    expect(runs[0].prompt).toContain(' · Worktree work (peer) · ');
+    expect(runs[0].prompt).toMatch(/READ-ONLY PEER[^\n]*the builder's, not this session's/);
+    expect(runs[0].globs).toEqual(['SESSION-LOG.md']);
+  });
+
+  it("never lets a peer's log tick plans, even outside a worktree", async () => {
+    writeFileSync(join(repo, 'main.ts'), 'x\n');
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    expect(await generateSessionLogForced({ ...ctx(repo), createdAt: recent, access: 'read' })).toBe('generated');
+    expect(runs[0].globs).toEqual(['SESSION-LOG.md']);
+    expect(runs[0].prompt).toContain('Do not modify plan or design files.');
+  });
+
+  it("labels a builder's entry with its name only", async () => {
+    writeFileSync(join(repo, 'main.ts'), 'x\n');
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    await generateSessionLogForced({ ...ctx(repo), createdAt: recent, access: null });
+    expect(runs[0].prompt).toContain(' · Worktree work · ');
+    expect(runs[0].prompt).not.toContain('(peer)');
+    expect(runs[0].prompt).not.toContain('READ-ONLY PEER');
+  });
+
+  it("removes the track's peer notes folder when it lands", async () => {
+    const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
+    const notes = peerNotesDirFor(t.id);
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, 'ledger.md'), 'F1 open\n');
+    await tracks.landTrack({ cwd: repo }, 'Alpha', NO_SESSIONS);
+    expect(existsSync(notes)).toBe(false);
   });
 
   it('logs a session on main in place, ticking plans as before', async () => {

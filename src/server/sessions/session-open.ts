@@ -77,8 +77,8 @@ export function claudeNameFlag(name: string | null | undefined): string {
 }
 
 /**
- * `profile` is a started session's (launch-profile.ts): its permission mode and the MCP
- * servers it may load. Without it a revived or resumed started session comes back in the
+ * `profile` is a started session's (launch-profile.ts): its permission mode, the MCP
+ * servers it may load, and a read-only peer's access. Without it a revived or resumed started session comes back in the
  * default mode with the user's whole MCP roster, re-read on every turn.
  */
 function injectResumeCommand(session: ActiveSession, resumeId: string, profile?: LaunchProfile): void {
@@ -273,6 +273,7 @@ export async function openClaudeSession(
     forkJsonlPath,
     permissionMode: profile?.permissionMode ?? null,
     mcpServers: profile?.mcpServers ?? null,
+    access: profile?.access ?? null,
     account,
   };
   insertSession(metadata);
@@ -426,6 +427,7 @@ export function reviveSession(
     injectResumeCommand(session, metadata.claudeSessionId, {
       permissionMode: metadata.permissionMode ?? null,
       mcpServers: metadata.mcpServers ?? null,
+      access: metadata.access ?? null,
     });
   }
 

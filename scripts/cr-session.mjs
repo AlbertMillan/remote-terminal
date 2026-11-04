@@ -5,7 +5,7 @@
  * Run by an agent through the Bash tool, via the path the server puts in
  * CLAUDE_REMOTE_CLI:
  *
- *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>] <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--read-only] [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>] <<'EOF'
  *   <prompt>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" list
@@ -22,6 +22,10 @@
  * `--mcp` (repeatable, or comma-separated): the user's whole roster is ~21k
  * tokens of every call (project/lean-started-sessions.md).
  *
+ * `start --read-only` adds a read-only peer beside the session this one already
+ * started on that track (its builder): at most two, and never before the builder
+ * (project/builder-critic-pairs.md). The result carries the peers' notes folder.
+ *
  * A started session runs under the caller's Claude login (docs/accounts.md);
  * `--account` naming any other is refused. `list` shows each one's account.
  *
@@ -36,7 +40,7 @@
 import { pathToFileURL } from 'node:url';
 
 const USAGE = `usage:
-  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>]  (prompt on stdin)
+  node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--read-only] [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]`;
@@ -53,6 +57,11 @@ export function parseArgs(argv) {
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
+    // The only flag without a value.
+    if (arg === '--read-only') {
+      flags.readOnly = true;
+      continue;
+    }
     const m = /^--(track|name|mode|mcp|account)(?:=(.*))?$/.exec(arg);
     if (!m) throw new UsageError(`unknown argument: ${arg}`);
     const value = m[2] !== undefined ? m[2] : rest[++i];
@@ -121,6 +130,7 @@ export async function main({
     if (flags.mode !== undefined) body.permissionMode = flags.mode;
     if (flags.mcp !== undefined) body.mcpServers = flags.mcp;
     if (flags.account !== undefined) body.account = flags.account;
+    if (flags.readOnly) body.access = 'read';
     request = {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },

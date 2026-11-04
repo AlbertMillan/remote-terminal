@@ -29,12 +29,13 @@ vi.mock('../src/server/config.js', async () => {
 
 import {
   checkPromptArrived,
+  peerHeader,
   registerAgentSessionRoutes,
   MAX_PROMPT_BYTES,
   type AgentSessionDeps,
 } from '../src/server/agent/sessions-api.js';
 import { revokeSessionToken, sessionEnv, sessionForToken } from '../src/server/sessions/session-env.js';
-import { deletePromptFile, promptDirFor, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
+import { deletePromptFile, peerNotesDirFor, promptDirFor, promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession, SessionMetadata } from '../src/server/sessions/types.js';
 import { launchFlags, type LaunchProfile } from '../src/server/sessions/launch-profile.js';
 
@@ -45,6 +46,7 @@ const FAKE_HOME = join(dataDir, 'home');
 mkdirSync(FAKE_HOME, { recursive: true });
 writeFileSync(join(FAKE_HOME, '.claude.json'), JSON.stringify({ mcpServers: { playwright: { command: 'npx' }, everhour: { command: 'eh' } } }));
 const MAIN_ID = '11111111-1111-4111-8111-111111111111';
+const TRACK_ID = 'tb-split-view';
 
 function row(id: string, overrides: Partial<SessionMetadata> = {}): SessionMetadata & { attachable: boolean } {
   return {
@@ -86,7 +88,7 @@ function makeDeps(): AgentSessionDeps {
     projectForCwd: (cwd) => (cwd === PROJECT || cwd.startsWith(WORKTREE) ? { cwd: PROJECT } : null),
     trackExists: (_p, track) => track === 'Split view',
     trackBranches: () => [{ worktreePath: WORKTREE, trackName: 'Split view' }],
-    ensureTrackBranch: vi.fn(async () => ({ worktreePath: WORKTREE })),
+    ensureTrackBranch: vi.fn(async () => ({ worktreePath: WORKTREE, id: TRACK_ID })),
     needsInstall: vi.fn(() => false),
     installDependencies: vi.fn(async () => ({ ran: true, ok: false, detail: 'npm ci failed' })),
     ensureLocalClaudeSettings: vi.fn(async () => false),
@@ -100,6 +102,7 @@ function makeDeps(): AgentSessionDeps {
           spawnedBy: opts.spawnedBy ?? null,
           permissionMode: opts.permissionMode ?? null,
           mcpServers: opts.mcpServers ?? null,
+          access: opts.access ?? null,
           account: opts.account ?? 'personal',
           createdAt: `2026-10-01T10:00:0${created}.000Z`,
         })
@@ -112,6 +115,7 @@ function makeDeps(): AgentSessionDeps {
     }),
     writePromptFile,
     mcpServersFor: vi.fn(() => ['playwright', 'everhour']),
+    claudeName: vi.fn(() => null),
     // The real flags, reading a stand-in for the user's Claude config.
     launchFlags: vi.fn((id: string, cwd: string, p: LaunchProfile) => launchFlags(id, cwd, p, join(FAKE_HOME, '.claude.json'))),
     preflight: vi.fn((account: string) => ({ ok: true as const, account, configDir: 'C:\cfg', found: { accountUuid: 'a' } })),
@@ -444,7 +448,7 @@ describe('start', () => {
     const res = await start(GOOD);
     expect(deps.createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [] }));
     expect(rows.get(res.json().sessionId)!.mcpServers).toEqual([]);
-    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [] }, 'personal');
+    expect(deps.launchFlags).toHaveBeenCalledWith(res.json().sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [], access: null }, 'personal');
     expect(deps.mcpServersFor).not.toHaveBeenCalled();
   });
 
@@ -518,8 +522,8 @@ describe('list', () => {
     const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions).toEqual([
-      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], account: 'personal', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
-      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, account: 'personal', notification: null, prompt: { state: 'pending' } },
+      { id: 'c1', name: 'c1', track: 'Split view', status: 'active', attachable: true, permissionMode: 'plan', mcpServers: ['playwright'], account: 'personal', access: 'write', notification: { type: 'needs-input', at: at.toISOString() }, prompt: { state: 'pending' } },
+      { id: 'c2', name: 'c2', track: 'Split view', status: 'terminated', attachable: false, permissionMode: null, mcpServers: null, account: 'personal', access: 'write', notification: null, prompt: { state: 'pending' } },
     ]);
   });
 });
@@ -561,5 +565,179 @@ describe('did the prompt arrive', () => {
       throw new Error('disk gone');
     });
     expect(() => checkPromptArrived(deps, 'c1')).not.toThrow();
+  });
+});
+
+describe('read-only peers (project/builder-critic-pairs.md)', () => {
+  const PEER = { ...GOOD, access: 'read', prompt: 'Review Split view against project/split-view.md.' };
+
+  async function startBuilder(body: Record<string, unknown> = {}) {
+    const res = await start({ ...GOOD, ...body });
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  }
+
+  it('refuses a peer with no live writer on the track with 409, before creating anything', async () => {
+    const res = await start(PEER);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/start the builder first/);
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
+    // An exited builder is no builder.
+    rows.set('c1', row('c1', { spawnedBy: MAIN_ID, cwd: WORKTREE, status: 'terminated' }));
+    expect((await start(PEER)).statusCode).toBe(409);
+    expect(deps.createSession).not.toHaveBeenCalled();
+  });
+
+  it('starts a peer beside the builder: access read, a default name, the notes folder, the read-only launch', async () => {
+    await startBuilder();
+    const res = await start(PEER);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const notes = peerNotesDirFor(TRACK_ID).replace(/\\/g, '/');
+    expect(body).toMatchObject({ name: 'Split view peer', access: 'read', notesPath: notes, worktreePath: WORKTREE });
+    expect(notes.startsWith(dataDir.replace(/\\/g, '/'))).toBe(true);
+    expect(deps.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ access: 'read', spawnedBy: MAIN_ID, cwd: WORKTREE }));
+    expect(rows.get(body.sessionId)!.access).toBe('read');
+    expect(deps.launchFlags).toHaveBeenLastCalledWith(body.sessionId, WORKTREE, { permissionMode: 'auto', mcpServers: [], access: 'read' }, 'personal');
+    expect(deps.broadcastAdded).toHaveBeenLastCalledWith(expect.objectContaining({ id: body.sessionId, access: 'read' }));
+  });
+
+  it('gives the builder access write, no notes folder and no header', async () => {
+    const body = await startBuilder();
+    expect(body.access).toBe('write');
+    expect(body.notesPath).toBeUndefined();
+    expect(rows.get(body.sessionId)!.access ?? null).toBeNull();
+    expect(readFileSync(promptPathFor(body.sessionId), 'utf-8')).toBe(GOOD.prompt);
+  });
+
+  it("starts the peer's prompt file with the server's header, then the parent's brief", async () => {
+    await startBuilder({ name: 'Split view builder' });
+    (deps.claudeName as ReturnType<typeof vi.fn>).mockReturnValue('planner');
+    rows.set(MAIN_ID, row(MAIN_ID, { claudeSessionId: 'cc-main' }));
+    const body = (await start({ ...PEER, name: 'Split view reviewer' })).json();
+    const text = readFileSync(promptPathFor(body.sessionId), 'utf-8');
+    expect(text).toBe(
+      peerHeader({ worktreePath: WORKTREE, notesPath: peerNotesDirFor(TRACK_ID), writer: 'Split view builder', parent: 'planner' }) + PEER.prompt
+    );
+    expect(deps.claudeName).toHaveBeenCalledWith('cc-main');
+  });
+
+  it('names the parent by its session name when no Claude name is known', async () => {
+    await startBuilder();
+    const body = (await start(PEER)).json();
+    expect(readFileSync(promptPathFor(body.sessionId), 'utf-8')).toContain(`your parent is \`${rows.get(MAIN_ID)!.name}\``);
+  });
+
+  it('names the second peer "peer 2", and refuses a third with 409', async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder();
+    expect((await start(PEER)).json().name).toBe('Split view peer');
+    expect((await start(PEER)).json().name).toBe('Split view peer 2');
+    const third = await start(PEER);
+    expect(third.statusCode).toBe(409);
+    expect(third.json().error).toMatch(/already has 2 read-only peers/);
+    expect(deps.createSession).toHaveBeenCalledTimes(3);
+  });
+
+  it('frees a peer slot when a peer exits, never reusing a live name', async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder();
+    const first = (await start(PEER)).json();
+    await start(PEER);
+    rows.get(first.sessionId)!.status = 'terminated';
+    const res = await start(PEER);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe('Split view peer 3');
+  });
+
+  it('still refuses a second writer with 409 while peers run', async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder();
+    await start(PEER);
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already started "Split view"/);
+  });
+
+  it('counts peers toward maxPerParent', async () => {
+    await startBuilder();
+    expect((await start(PEER)).statusCode).toBe(200);
+    expect((await start(PEER)).statusCode).toBe(429);
+  });
+
+  it('refuses a peer from the builder itself (a started session) with 403', async () => {
+    const builder = await startBuilder();
+    const res = await start(PEER, { token: sessionEnv(builder.sessionId).CLAUDE_REMOTE_TOKEN });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("refuses a peer while the builder's start is still running, and a third peer while two are starting", async () => {
+    deps.maxPerParent = () => 5;
+    let release!: () => void;
+    (deps.ensureTrackBranch as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((r) => (release = () => r({ worktreePath: WORKTREE, id: TRACK_ID })))
+    );
+    const builder = start(GOOD);
+    await vi.waitFor(() => expect(deps.ensureTrackBranch).toHaveBeenCalled());
+    const early = await start(PEER);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error).toMatch(/still in progress/);
+    release();
+    expect((await builder).statusCode).toBe(200);
+
+    const releases: (() => void)[] = [];
+    (deps.ensureTrackBranch as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((r) => releases.push(() => r({ worktreePath: WORKTREE, id: TRACK_ID })))
+    );
+    const a = start(PEER);
+    const b = start(PEER);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    expect((await start(PEER)).statusCode).toBe(409);
+    releases.forEach((r) => r());
+    const [ra, rb] = [await a, await b];
+    expect([ra.statusCode, rb.statusCode]).toEqual([200, 200]);
+    // Two starts in flight at once still get different names.
+    expect(new Set([ra.json().name, rb.json().name]).size).toBe(2);
+  });
+
+  it("gives a peer its builder's permission mode unless the start names one", async () => {
+    deps.maxPerParent = () => 5;
+    await startBuilder({ permissionMode: 'acceptEdits' });
+    const inherited = (await start(PEER)).json();
+    expect(rows.get(inherited.sessionId)!.permissionMode).toBe('acceptEdits');
+    const named = (await start({ ...PEER, permissionMode: 'plan' })).json();
+    expect(rows.get(named.sessionId)!.permissionMode).toBe('plan');
+  });
+
+  it('refuses an access other than read or write with 400', async () => {
+    expect((await start({ ...GOOD, access: 'admin' })).statusCode).toBe(400);
+    expect((await start({ ...GOOD, access: 'write' })).statusCode).toBe(200);
+  });
+
+  it('list shows each session as write or read', async () => {
+    await startBuilder();
+    await start(PEER);
+    const res = await app.inject({ method: 'GET', url: '/api/agent/sessions', remoteAddress: '127.0.0.1', headers: { authorization: `Bearer ${mainToken}` } });
+    expect(res.json().sessions.map((s: { name: string; access: string }) => [s.name, s.access])).toEqual([
+      ['Split view', 'write'],
+      ['Split view peer', 'read'],
+    ]);
+  });
+});
+
+describe('peerHeader', () => {
+  it('states the read-only rule, the Bash rule, the notes folder, the writer and the parent, with forward slashes', () => {
+    const text = peerHeader({ worktreePath: 'C:\\wt\\abcd', notesPath: 'C:\\data\\peers\\tb', writer: 'Builder', parent: 'planner' });
+    expect(text).toContain('Read-only in `C:/wt/abcd`');
+    expect(text).toMatch(/Edit, Write and NotebookEdit are denied/);
+    expect(text).toMatch(/Bash is not fenced/);
+    for (const cmd of ['git add', 'commit', 'checkout', 'stash', 'reset']) expect(text).toContain(cmd);
+    expect(text).toMatch(/no builds, no installs/);
+    expect(text).toContain('notes folder is `C:/data/peers/tb`');
+    expect(text).toContain('The writer is `Builder`');
+    expect(text).toContain('your parent is `planner`');
+    expect(text).not.toContain('\\');
+    // The brief follows a rule, so the facts never run into it.
+    expect(text.endsWith('---\n\n')).toBe(true);
   });
 });

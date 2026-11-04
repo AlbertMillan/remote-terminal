@@ -38,8 +38,8 @@ export function clearStatementCache(): void {
 
 export function insertSession(session: SessionMetadata): void {
   executeStatement('insertSession', `
-    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode, mcp_servers, account)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, name, shell, cwd, created_at, last_accessed_at, owner_id, status, cols, rows, tmux_session, category_id, sort_order, claude_session_id, is_fork, fork_jsonl_path, spawned_by, permission_mode, mcp_servers, account, access)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, (stmt) => stmt.run(
     session.id,
     session.name,
@@ -61,6 +61,7 @@ export function insertSession(session: SessionMetadata): void {
     session.permissionMode ?? null,
     session.mcpServers ? JSON.stringify(session.mcpServers) : null,
     session.account,
+    session.access ?? null,
   ));
 }
 
@@ -114,15 +115,15 @@ export function setSessionMcpServers(id: string, servers: string[]): void {
  */
 export function launchProfileForTranscript(
   claudeSessionId: string
-): { permissionMode: string | null; mcpServers: string[] } | null {
+): { permissionMode: string | null; mcpServers: string[]; access: string | null } | null {
   return executeStatement('launchProfileForTranscript', `
-    SELECT permission_mode as permissionMode, mcp_servers as mcpServers FROM sessions
+    SELECT permission_mode as permissionMode, mcp_servers as mcpServers, access FROM sessions
     WHERE claude_session_id = ? AND mcp_servers IS NOT NULL
     ORDER BY created_at DESC LIMIT 1
   `, (stmt) => {
-    const row = stmt.get(claudeSessionId) as { permissionMode: string | null; mcpServers: string } | undefined;
+    const row = stmt.get(claudeSessionId) as { permissionMode: string | null; mcpServers: string; access: string | null } | undefined;
     const mcpServers = row ? decodeMcpServers(row.mcpServers) : null;
-    return row && mcpServers ? { permissionMode: row.permissionMode, mcpServers } : null;
+    return row && mcpServers ? { permissionMode: row.permissionMode, mcpServers, access: row.access ?? null } : null;
   });
 }
 
@@ -157,7 +158,7 @@ export function getSession(id: string): SessionMetadata | null {
            owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
            sort_order as sortOrder, claude_session_id as claudeSessionId,
            is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-           spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers,
+           spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers, access,
            account
     FROM sessions WHERE id = ?
   `, (stmt) => {
@@ -212,9 +213,10 @@ export function getUnloggedSessionsForLog(): {
   claudeSessionId: string;
   createdAt: string;
   account: string;
+  access: string | null;
 }[] {
   return executeStatement('getUnloggedSessionsForLog', `
-    SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt, account
+    SELECT id, name, cwd, claude_session_id as claudeSessionId, created_at as createdAt, account, access
     FROM sessions
     WHERE logged_at IS NULL AND is_fork = 0 AND claude_session_id IS NOT NULL
       AND status != 'idle'
@@ -225,6 +227,7 @@ export function getUnloggedSessionsForLog(): {
     claudeSessionId: string;
     createdAt: string;
     account: string;
+    access: string | null;
   }[]);
 }
 
@@ -233,7 +236,7 @@ const SESSION_SELECT = `
          owner_id as ownerId, status, cols, rows, tmux_session as tmuxSession, category_id as categoryId,
          sort_order as sortOrder, claude_session_id as claudeSessionId,
          is_fork as isFork, fork_jsonl_path as forkJsonlPath,
-         spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers,
+         spawned_by as spawnedBy, permission_mode as permissionMode, mcp_servers as mcpServers, access,
            account
   FROM sessions
 `;

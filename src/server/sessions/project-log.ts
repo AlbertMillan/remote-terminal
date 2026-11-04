@@ -98,6 +98,13 @@ export interface SessionLogContext {
   createdAt: string; // ISO timestamp of session creation
   /** The account it ran under: its transcript is in that account's folder (accounts.ts). */
   account: string;
+  /** `read` for a read-only peer (project/builder-critic-pairs.md): labelled `(peer)`, its diff is the builder's. */
+  access?: string | null;
+}
+
+/** The entry's heading: a read-only peer's reads `(peer)`, so a track's history doesn't read as several builders. */
+export function sessionLogTitle(ctx: Pick<SessionLogContext, 'name' | 'access'>): string {
+  return ctx.access === 'read' ? `${ctx.name} (peer)` : ctx.name;
 }
 
 export type LogOutcome = 'generated' | 'skipped' | 'disabled' | 'error';
@@ -200,7 +207,7 @@ function buildPrompt(opts: {
   const skeleton = buildEntrySkeleton({
     meta: { date: nowIso, session: ctx.name, branch, claudeSessionId: ctx.claudeSessionId, account: ctx.account, blockers: 0, openItems: 0 },
     headingDate: nowIso.slice(0, 10),
-    headingTitle: ctx.name,
+    headingTitle: sessionLogTitle(ctx),
     hints: {
       done: '<ONE concise sentence on what THIS session changed — a delta, not a project summary>',
       changed: '<comma-separated key files/areas>',
@@ -232,8 +239,14 @@ ${existingEntry}
 ${fileName} belongs at the project root above — never create or edit one in the worktree.
 `
     : '';
+  // A peer shares its builder's worktree, so the diff below is the builder's work, not its own.
+  const peerNote = ctx.access === 'read'
+    ? `This session was a READ-ONLY PEER beside the track's builder: it changed no files. The git diff and commits below are the builder's, not this session's; record only what this session reviewed, found or gathered (from its transcript), and never claim the diff as its work.
+`
+    : '';
 
   return `You are recording what a development session accomplished, in a project changelog.
+${peerNote}
 
 Project: ${projectCwd}
 ${workedIn}Branch: ${branch}
@@ -393,7 +406,8 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     // Ticking a worktree session's plan from the main checkout would tick
     // main's copy, which a branched track no longer uses. The session itself,
     // the board and the rebuild stage tick the worktree's instead.
-    const editPlanFiles = cfg.editPlanFiles && !owner;
+    // A peer ticks nothing: the work it would tick is its builder's.
+    const editPlanFiles = cfg.editPlanFiles && !owner && ctx.access !== 'read';
     const prompt = buildPrompt({
       ctx,
       fileName,

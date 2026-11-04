@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
@@ -26,17 +26,28 @@ vi.mock('../src/server/config.js', async () => {
 
 // A worktree maps to its project, whose path keys the local-scope servers.
 let trackProject: string | null = null;
+// A read-only peer's track: its worktree and the id its notes folder is keyed by.
+let trackBranch: { id: string; projectCwd: string; worktreePath: string; landedAt: string | null } | null = null;
 vi.mock('../src/server/projects/track-store.js', () => ({
-  trackBranchContaining: () => (trackProject ? { projectCwd: trackProject } : null),
+  trackBranchContaining: () => trackBranch ?? (trackProject ? { projectCwd: trackProject } : null),
 }));
 
 import {
   availableMcpServers,
   launchFlags,
   parseMcpServers,
+  peerSettings,
   permissionModeFlag,
+  permissionRulePath,
 } from '../src/server/sessions/launch-profile.js';
-import { deletePromptFile, mcpConfigPathFor, promptDirFor } from '../src/server/sessions/prompt-file.js';
+import {
+  deletePeerNotes,
+  deletePromptFile,
+  mcpConfigPathFor,
+  peerNotesDirFor,
+  peerSettingsPathFor,
+  promptDirFor,
+} from '../src/server/sessions/prompt-file.js';
 import { existsSync } from 'fs';
 
 const SESSION = '33333333-3333-4333-8333-333333333333';
@@ -172,5 +183,80 @@ describe('launchFlags', () => {
     // Deleted with the session, like its prompt folder.
     deletePromptFile(SESSION);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('read-only peers (project/builder-critic-pairs.md)', () => {
+  const TRACK = 'tb-0001';
+  const slash = (p: string) => p.replace(/\\/g, '/');
+
+  beforeEach(() => {
+    trackBranch = { id: TRACK, projectCwd: 'C:\\p\\demo', worktreePath: worktree, landedAt: null };
+  });
+  afterEach(() => {
+    trackBranch = null;
+    deletePromptFile(SESSION);
+    deletePeerNotes(TRACK);
+  });
+
+  it('writes an absolute path as a rule path Claude Code matches: // and the drive as a folder', () => {
+    expect(permissionRulePath('C:\\Users\\a\\wt')).toBe('//c/Users/a/wt');
+    expect(permissionRulePath('D:/x/y/')).toBe('//d/x/y');
+    expect(permissionRulePath('/home/a/wt')).toBe('//home/a/wt');
+  });
+
+  it('denies edits in the worktree and allows them in the notes folder, with Edit rules only', () => {
+    expect(peerSettings('C:\\wt', 'C:\\data\\peers\\t')).toEqual({
+      permissions: { deny: ['Edit(//c/wt/**)'], allow: ['Edit(//c/data/peers/t/**)'] },
+    });
+    expect(peerSettings('C:\\wt', null).permissions.allow).toEqual([]);
+  });
+
+  it('adds the settings, the tools it never asks for and the notes folder, after the MCP flags', () => {
+    const { flags } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access: 'read' }, claudeJson());
+    const settings = peerSettingsPathFor(SESSION);
+    const notes = peerNotesDirFor(TRACK);
+    expect(flags).toBe(
+      `--permission-mode auto --strict-mcp-config --settings "${slash(settings)}" --allowedTools WebFetch WebSearch Read --add-dir "${slash(notes)}" `
+    );
+    expect(flags).not.toContain('\\');
+    // Under the data dir: never in the worktree (commitAll) nor the prompt folder (the session could rewrite it).
+    expect(settings.startsWith(dataDir)).toBe(true);
+    expect(settings.startsWith(promptDirFor(SESSION))).toBe(false);
+    expect(JSON.parse(readFileSync(settings, 'utf-8'))).toEqual(peerSettings(worktree, slash(notes)));
+    expect(existsSync(notes)).toBe(true);
+  });
+
+  it('applies to a full-roster profile too (a Resume of a peer with no stored servers)', () => {
+    const { flags } = launchFlags(SESSION, worktree, { permissionMode: null, mcpServers: null, access: 'read' }, claudeJson());
+    expect(flags).toMatch(/^--settings "[^"]+" --allowedTools WebFetch WebSearch Read --add-dir "[^"]+" $/);
+  });
+
+  it('gives a writer none of it', () => {
+    for (const access of [null, undefined, 'write']) {
+      const { flags } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access }, claudeJson());
+      expect(flags).toBe('--permission-mode auto --strict-mcp-config ');
+    }
+    expect(existsSync(peerSettingsPathFor(SESSION))).toBe(false);
+  });
+
+  it('never recreates the notes of a landed track', () => {
+    trackBranch = { id: TRACK, projectCwd: 'C:\\p\\demo', worktreePath: worktree, landedAt: '2026-11-04T00:00:00Z' };
+    const { flags } = launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access: 'read' }, claudeJson());
+    expect(flags).not.toContain('--add-dir');
+    expect(existsSync(peerNotesDirFor(TRACK))).toBe(false);
+    expect(JSON.parse(readFileSync(peerSettingsPathFor(SESSION), 'utf-8')).permissions.deny).toEqual([`Edit(${permissionRulePath(worktree)}/**)`]);
+  });
+
+  it('removes the settings with the session, and the notes with the track', () => {
+    launchFlags(SESSION, worktree, { permissionMode: 'auto', mcpServers: [], access: 'read' }, claudeJson());
+    deletePromptFile(SESSION);
+    expect(existsSync(peerSettingsPathFor(SESSION))).toBe(false);
+    expect(existsSync(peerNotesDirFor(TRACK))).toBe(true);
+    deletePeerNotes(TRACK);
+    expect(existsSync(peerNotesDirFor(TRACK))).toBe(false);
+    // Never walks out of peers/.
+    expect(() => deletePeerNotes('../..')).not.toThrow();
+    expect(existsSync(dataDir)).toBe(true);
   });
 });

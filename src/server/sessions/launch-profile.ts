@@ -4,7 +4,7 @@ import { createLogger } from '../utils/logger.js';
 import { trackBranchContaining } from '../projects/track-store.js';
 import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
 import { pathKey } from './project-discovery.js';
-import { mcpConfigPathFor } from './prompt-file.js';
+import { mcpConfigPathFor, peerNotesDirFor, peerSettingsPathFor } from './prompt-file.js';
 import { claudeJsonPath, defaultAccount } from '../accounts.js';
 
 /**
@@ -16,10 +16,12 @@ import { claudeJsonPath, defaultAccount } from '../accounts.js';
  * every turn, and started sessions don't use it. Skills and built-in tools are left alone.
  *
  * `mcpServers` null is the full profile (every session the user opens); `[]` is no MCP.
+ * `access` `read` is a read-only peer beside its track's builder (project/builder-critic-pairs.md).
  */
 export interface LaunchProfile {
   permissionMode: string | null;
   mcpServers: string[] | null;
+  access?: string | null;
 }
 
 const logger = createLogger('launch-profile');
@@ -149,6 +151,74 @@ export function writeMcpConfig(
   return { path: path.replace(/\\/g, '/'), written: Object.keys(mcpServers) };
 }
 
+/**
+ * An absolute path as a Claude Code permission rule path: `//` then the path, the drive
+ * letter as a folder (`C:\x` → `//c/x`). Checked 2026-11-04 with Claude Code 2.1.318 on
+ * Windows: `//c/…` and `//C/…` match, `//C:/…` and `/c/…` don't, and the rule is ignored
+ * without a word.
+ */
+export function permissionRulePath(path: string): string {
+  const slashed = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  const drive = /^([A-Za-z]):(\/.*)?$/.exec(slashed);
+  if (drive) return `//${drive[1].toLowerCase()}${drive[2] ?? ''}`;
+  return `/${slashed.startsWith('/') ? '' : '/'}${slashed}`;
+}
+
+/**
+ * The `--settings` a read-only peer launches with: no file edit in its worktree, edits allowed
+ * in its notes folder. Only `Edit(path)` rules are matched by file checks (Claude Code warns
+ * that `Write(path)` is not), and they cover Write and NotebookEdit too.
+ */
+export function peerSettings(worktreePath: string, notesDir: string | null): { permissions: { deny: string[]; allow: string[] } } {
+  return {
+    permissions: {
+      deny: [`Edit(${permissionRulePath(worktreePath)}/**)`],
+      allow: notesDir ? [`Edit(${permissionRulePath(notesDir)}/**)`] : [],
+    },
+  };
+}
+
+// Gathering references and looking at images must never stall an unattended peer.
+const PEER_ALLOWED_TOOLS = 'WebFetch WebSearch Read';
+// A peer whose settings couldn't be written still launches read-only, without its notes.
+const PEER_FALLBACK = '--disallowedTools Edit Write NotebookEdit ';
+
+/**
+ * A read-only peer's flags: its `--settings` (written to `<dataDir>/peer-settings/<id>.json`
+ * at every launch), the tools it may use without asking, and `--add-dir` for its track's
+ * notes folder, created here. When the settings or a path can't be used, every file-editing
+ * tool is disallowed instead: the peer loses its notes, never its read-only.
+ */
+function readOnlyFlags(sessionId: string, cwd: string): string {
+  let worktreePath = cwd;
+  let notesDir: string | null = null;
+  try {
+    const branch = trackBranchContaining(cwd);
+    // A landed track's notes are gone; a Resume of its peer must not make them again.
+    if (branch && branch.landedAt === null) {
+      worktreePath = branch.worktreePath;
+      notesDir = peerNotesDirFor(branch.id).replace(/\\/g, '/');
+      mkdirSync(notesDir, { recursive: true });
+    }
+  } catch (error) {
+    logger.warn({ sessionId, cwd, error }, 'Could not find or create the peer notes folder');
+    notesDir = null;
+  }
+  const allowed = `--allowedTools ${PEER_ALLOWED_TOOLS} `;
+  try {
+    const path = peerSettingsPathFor(sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(peerSettings(worktreePath, notesDir), null, 2), 'utf-8');
+    const settings = path.replace(/\\/g, '/');
+    if (UNSAFE_IN_QUOTES.test(settings)) throw new Error(`${settings} has a character no shell quotes safely`);
+    const notes = notesDir && !UNSAFE_IN_QUOTES.test(notesDir) ? `--add-dir "${notesDir}" ` : '';
+    return `--settings "${settings}" ${allowed}${notes}`;
+  } catch (error) {
+    logger.error({ sessionId, error }, 'Could not write the peer settings; launching with every file edit disallowed');
+    return `${PEER_FALLBACK}${allowed}`;
+  }
+}
+
 export interface LaunchFlags {
   /** The flags after `claude`, ending in a space when non-empty. */
   flags: string;
@@ -158,7 +228,8 @@ export interface LaunchFlags {
 
 /**
  * The flags for a launch with this profile: the permission mode, then `--strict-mcp-config` and
- * the scoped `--mcp-config`. A full profile gives only the mode. A config file that can't be
+ * the scoped `--mcp-config`, then a read-only peer's flags (readOnlyFlags). A full profile
+ * gives only the mode (and the peer's flags). A config file that can't be
  * written or quoted safely drops the opt-ins rather than the launch: the session still starts
  * lean, without those servers. `mcpServers` says what it got, so a caller can tell.
  */
@@ -170,7 +241,8 @@ export function launchFlags(
   claudeJsonFile?: string
 ): LaunchFlags {
   const mode = permissionModeFlag(profile.permissionMode);
-  if (!profile.mcpServers) return { flags: mode, mcpServers: null };
+  const access = profile.access === 'read' ? readOnlyFlags(sessionId, cwd) : '';
+  if (!profile.mcpServers) return { flags: `${mode}${access}`, mcpServers: null };
   let scoped = '';
   let loaded: string[] = [];
   if (profile.mcpServers.length > 0) {
@@ -185,6 +257,6 @@ export function launchFlags(
       logger.error({ sessionId, error }, 'Could not write the scoped MCP config; launching with no MCP servers');
     }
   }
-  return { flags: `${mode}--strict-mcp-config ${scoped}`, mcpServers: loaded };
+  return { flags: `${mode}--strict-mcp-config ${scoped}${access}`, mcpServers: loaded };
 }
 

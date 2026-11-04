@@ -24,6 +24,9 @@ export interface ActiveSession extends Session {
   connectedClients: Set<string>;
 }
 
+/** What a session may write: `read` is a read-only peer (project/builder-critic-pairs.md). */
+export type SessionAccess = 'read';
+
 export interface SessionCreateOptions {
   name?: string;
   shell?: string;
@@ -38,6 +41,8 @@ export interface SessionCreateOptions {
   permissionMode?: string;
   /** MCP servers it may load (launch-profile.ts); unset is the user's full roster. */
   mcpServers?: string[] | null;
+  /** `read` for a read-only peer beside its track's builder (launch-profile.ts); unset is write. */
+  access?: SessionAccess | null;
   /** The account it runs under; unset is its project's default, else the configured one. */
   account?: string;
   /** Only for a Log in session (accounts-routes.ts): it runs so the login can be fixed. */
@@ -66,6 +71,8 @@ export interface SessionMetadata {
   permissionMode?: string | null;
   /** The MCP servers every launch of its `claude` gets (launch-profile.ts); null is the full roster. */
   mcpServers?: string[] | null;
+  /** `read` for a read-only peer (project/builder-critic-pairs.md); null is write. */
+  access?: string | null;
   /** The Claude login it runs under (accounts.ts); every revive, Resume and Fork reuses it. */
   account: string;
 }

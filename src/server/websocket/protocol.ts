@@ -187,6 +187,9 @@ export interface SessionInfo {
   spawnedBy: string | null;
   /** The `--permission-mode` a started session's `claude` runs with. */
   permissionMode: string | null;
+  /** `read` for a read-only peer beside its track's builder (project/builder-critic-pairs.md);
+   *  null is write. The sidebar chips it and orders it after its builder. */
+  access?: string | null;
   /** What Claude calls the conversation running here (`ListAgents`' name), or null when
    *  none is running. Kept current by `session.claudeNames`. */
   claudeName: string | null;
