@@ -1,6 +1,6 @@
 ---
 name: claude-remote-sessions
-description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, list their state, update a track from main (merge main in) and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, asks to pull main into a track (update from main, catch up, merge main in), or asks to land a track.
+description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, add read-only peers (a reviewer) beside one, list their state, update a track from main (merge main in) and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, asks to pull main into a track (update from main, catch up, merge main in), or asks to land a track.
 ---
 
 # Start sessions on planned tracks
@@ -53,8 +53,9 @@ EOF
   carries on and starts the session anyway.
 - **After a timeout or any error, run `list` before trying again.** The session
   may already exist. A second `start` on a track you already have a live session
-  on, or one still starting, is refused (409) and names the first.
-- It prints `{ sessionId, name, account, worktreePath, install, mcp }`. If `install.ok` is
+  on, or one still starting, is refused (409) and names the first. Read-only peers
+  beside it are the exception (below).
+- It prints `{ sessionId, name, account, worktreePath, install, mcp, access }`. If `install.ok` is
   false, tell the user: the session started, but its dependencies did not
   install (`install.detail` says why). If `mcp.ok` is false, the session started
   with only the servers in `mcp.servers`: tell the user which it lacks.
@@ -76,7 +77,8 @@ node "$CLAUDE_REMOTE_CLI" list
 
 Prints each session you started: `id`, `name`, `track`, `status`, `attachable`
 (false once its shell has exited or its terminal is gone), `permissionMode`, `mcpServers`
-(`[]` is none, `null` the user's full roster), and `notification` — the
+(`[]` is none, `null` the user's full roster), `access` (`write`, or `read` for a
+read-only peer), and `notification` — the
 last `needs-input` or `completed`, with its time. There is no "working" state:
 no notification means it has not stopped since it started, or the user has
 opened it since.
@@ -95,6 +97,147 @@ send it the task yourself. The user also gets a warning in claude-remote.
 
 Sessions you start show in `ListAgents` under the `name` that `list` prints,
 so message them by that name.
+
+## Read-only peers beside a builder
+
+You can put up to **two read-only peers** beside a session you started on a track (its
+**builder**). The usual peer is a reviewer that judges the builder's work as it goes,
+against a standard. A peer can also gather references, or be a second pair of eyes when
+the builder is stuck. The builder and its peers talk directly with `SendMessage`.
+
+The server enforces one thing: only the builder writes in the worktree. Everything else
+below is a convention you write into the prompts. The server never sees `SendMessage`.
+
+### When to add one
+
+Add a peer only when there is a **concrete standard**, or something runnable to check
+against:
+
+- art or UI judged against reference images;
+- writing judged against a brief or a voice;
+- research checked against its sources;
+- work the user asked to have reviewed as it goes.
+
+Don't add one:
+
+- when the spec's tests are the standard (the test run is the reviewer);
+- for small changes;
+- when you can't write the standard down. A review that rests on opinion alone finds
+  something every time and has nothing to settle it.
+
+A builder with a peer costs at least 2–3× the tokens of the builder alone. Say so when
+you suggest one, and add one only when the user asks for review or agrees to the cost.
+
+### Start them
+
+Start the builder first, as above, then each peer with `--read-only` on the same track.
+Name each by its job:
+
+```bash
+node "$CLAUDE_REMOTE_CLI" start --track "Split view" --name "Split view builder" <<'EOF'
+<the builder's prompt, with the builder lines below>
+EOF
+node "$CLAUDE_REMOTE_CLI" start --track "Split view" --read-only --name "Split view reviewer" <<'EOF'
+<the reviewer brief below>
+EOF
+```
+
+- Both names are yours to choose before either session exists, so the builder's prompt
+  can name its peers. A peer with no `--name` is called `<builder name> peer`, then
+  `peer 2`.
+- Refusals (409): a peer with no live builder on the track ("start the builder first"),
+  a third peer, a second builder. Peers count toward your `maxPerParent`.
+- A peer takes the builder's permission mode unless you pass `--mode`. Messages pass between
+  sessions in different modes (checked with an `auto` builder and `plan` and `acceptEdits`
+  peers: nothing held, nothing asked), so pass `--mode` only for a reason of its own.
+  `--mode manual` types no flag, so the peer gets the user's own default mode.
+- The result adds `access` (`read`) and `notesPath`, the folder the track's peers share
+  for references and the findings ledger. You can read it. It is deleted when the track
+  is landed or deleted. `list` shows each session's `access`.
+- A peer can't edit files in the worktree (the launch denies it), may use `WebFetch`,
+  `WebSearch` and `Read` without asking (where Claude Code fetches pages through its
+  `web-fetch` subagent instead, that runs without asking too), and loads no MCP server unless you pass `--mcp`
+  (e.g. `--mcp playwright` to judge a running UI). Its prompt file starts with a short
+  header from the server: that it is read-only (Bash included: no git writes, builds or
+  installs), its notes folder, the builder's name and yours. Your brief follows it.
+
+### The builder lines
+
+Add these to the builder's prompt, filling in the names:
+
+```
+A read-only reviewer, "<reviewer name>", checks your work against <the standard>.
+- At each checkpoint you choose (a finished step, not every edit): commit, then send
+  "<reviewer name>" one SendMessage with notify_when_idle: true, saying what changed,
+  where to look, the commit, and the evidence: the command or test output, or the renders
+  (below). Then carry on with work that doesn't depend on the verdict.
+- A verdict starts with APPROVED, CHANGES or NOT CONVERGED. Anything else is not an
+  approval.
+- On CHANGES: fix what you accept; for a finding you reject, reply with your reason. It
+  stays recorded. Then send the next checkpoint.
+- If you are told the reviewer went idle or exited without a verdict, don't wait: mark
+  that checkpoint unreviewed, tell "<your parent's name>", and carry on.
+- On NOT CONVERGED: stop that checkpoint's work and wait. "<your parent's name>" decides.
+- You may ask the reviewer for help, references or a second opinion at any time. Only a
+  checkpoint gets a verdict.
+```
+
+### The reviewer brief
+
+The peer's prompt. Fill in the standard; keep the rest:
+
+```
+You review "<builder name>"'s work on <track> against this standard:
+<the standard: the spec's path and the sections that matter, the reference images or
+style guide, the brief, the benchmark. Concrete enough that two reviewers would agree.>
+
+First, read the standard and gather what you need to judge against it into your notes
+folder (references, images, sources). Then wait. "<builder name>" messages you at each
+checkpoint; never poll the worktree.
+
+For each checkpoint:
+1. Judge it fresh. Start a subagent for the verdict and give it only the standard, the
+   checkpoint's evidence, the open findings and your references, not your own history.
+   Don't judge from your long context: a reviewer that already wrote findings defends them.
+2. Keep a findings ledger, `findings.md` in your notes folder. Number findings F1, F2, ...
+   and mark each open, fixed, or rejected (with the builder's reason). A finding the
+   builder accepted but hasn't fixed stays open. Bring a rejected finding back only with
+   new evidence.
+3. Proof both ways. Cite evidence for what passes as well as for what fails: the output,
+   the file and line, the render. A claim with no evidence isn't a finding.
+4. Scope: report only gaps against the standard, never style. Add at most five optional
+   suggestions, marked optional; they never block approval.
+5. Reply to "<builder name>" with one SendMessage whose first word is APPROVED, CHANGES
+   or NOT CONVERGED, then the open findings (all of them, so the builder needs no file),
+   then any optional suggestions.
+6. The end: after about 3 CHANGES rounds on one checkpoint, or one round in which no
+   finding moved to fixed, send NOT CONVERGED to "<parent name>" (and tell
+   "<builder name>"), giving both positions on each open finding. Then wait.
+
+Between checkpoints, help freely when "<builder name>" asks: references, a second
+opinion, debugging ideas. Only a checkpoint gets a verdict.
+```
+
+For a peer that isn't a reviewer (it gathers references, or helps debug), write your own
+brief: what it is for, who it answers to, and when it stops.
+
+### Art and renders
+
+For 3D or other visual work, the evidence is renders, not descriptions:
+
+- The builder renders fixed camera angles headless at each checkpoint (in Blender an
+  EEVEE preview, about a second each) into a folder the project's git ignores. **Check it
+  first with `git check-ignore <folder>`**, or the next commit sweeps the renders in.
+- Name the folder and the camera angles in both prompts. The reviewer's subagent compares
+  only those PNGs with the references, against a rubric you put in the brief (silhouette,
+  proportions, materials, ...).
+- This is the least proven part: treat its verdicts as advice and check one yourself.
+
+### NOT CONVERGED
+
+It comes to you from the reviewer, with both positions. Decide it yourself when the
+standard settles it, and tell both sessions the decision. Otherwise ask the user, quoting
+both positions. Never let the two argue it out further: longer debates get worse.
 
 ## Landing this session's track
 
@@ -188,5 +331,6 @@ node "$CLAUDE_REMOTE_CLI" land --track "Split view"
 
 ## Limits
 
-- Sessions you start cannot start sessions themselves.
+- Sessions you start cannot start sessions themselves, peers included: only you add a peer.
+- One builder and at most two read-only peers per track.
 - At most `agentSessions.maxPerParent` (default 5) of yours can be live at once.

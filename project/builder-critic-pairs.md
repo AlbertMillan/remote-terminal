@@ -251,6 +251,32 @@ It was replaced on 2026-11-04, after the research below:
 9. Unit tests for the 409 slots, the header composition and the read-only launch flags.
 10. The end-to-end checks run on the isolated boot (`project/QA.md`, Flow 3), never on 4220.
 
+### Results (2026-11-04, isolated boot, Claude Code 2.1.318 on Windows)
+
+Items 1–9 pass; details in `docs/session-orchestration.md` ("Read-only peers"). Where the
+build differed from this spec, or a check couldn't run as written:
+
+- **1, modes.** No message waits on a differing permission mode: an `auto` builder and `plan`
+  and `acceptEdits` peers messaged both ways with nothing held or asked. So nothing *requires*
+  the inheritance; a peer still takes its builder's mode by default, and the skill says the
+  modes don't matter for messaging. `--mode manual` types no flag, so it ran in the user's
+  default mode (auto here) and wasn't a stricter mode.
+- **2, liveness.** The idle notice arrived for the checkpoint the peer didn't answer; the
+  answered one got no separate notice. That matches decision 6. "Peer exits" wasn't run
+  separately.
+- **3, tools.** This Claude Code build has no main-session `WebFetch`. The peer fetched
+  through the `web-fetch` subagent, also without a prompt. `--allowedTools` still names
+  `WebFetch` for builds that have it.
+- **4, read-only.** Decision 4's `--settings` became one `Edit(path)` rule each way. Claude
+  Code ignores `Write(path)` for file checks, and `Edit` rules cover Write and NotebookEdit.
+  The path must be written `//c/…`: `//C:/…` and `/c/…` are ignored without a word.
+- **7, Resume.** The `session.created` reply to a revive or history open now carries
+  `access`, so the chip shows at once. That reply was fixed after the live run and checked
+  in code only, not live.
+- **Harness only.** The hooks post to 4220, so on the isolated boot Claude session ids were
+  registered by hand for revive, Resume and the session log. The temp folder needed Claude's
+  folder-trust prompt accepted.
+
 ## Out of scope
 
 - A server-side round counter, verdict parser or message relay. There is no claude-remote

@@ -64,6 +64,10 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   or it reloads the full MCP roster (~21k tokens) on every turn. Its MCP config lives in
   `<dataDir>/mcp/`, never the worktree (`commitAll`) or the prompt folder (`--add-dir`
   lets the session read its keys).
+- A read-only peer (`sessions.access = 'read'`) gets its `--settings` deny rule from
+  `launchFlags()` on every launch, written as `Edit(//c/…/**)` (`permissionRulePath()`):
+  Claude Code ignores `Write(path)` rules and `//C:/…` paths without a word, so a rule in
+  another form lets the peer edit the builder's worktree. → `docs/session-orchestration.md`
 - **Every PTY gets its env from `sessionEnv(id)`**, or its agent can't use the CLI.
 - **Every `claude` claude-remote launches (PTY or `runClaude`) gets its account's
   `accountEnv()` and passes `preflight()`**, or it runs under whatever login `~/.claude`
