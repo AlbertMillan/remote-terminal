@@ -229,7 +229,7 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null, spawnedBy: sessionMetadata?.spawnedBy ?? null, permissionMode: sessionMetadata?.permissionMode ?? null }),
+        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null, spawnedBy: sessionMetadata?.spawnedBy ?? null, permissionMode: sessionMetadata?.permissionMode ?? null, access: sessionMetadata?.access ?? null }),
         scrollback: scrollback.join('\r\n'),
       },
       message.id
@@ -438,6 +438,9 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
             categoryId: sessionMetadata?.categoryId ?? null,
             sortOrder: sessionMetadata?.sortOrder ?? 0,
             isFork: payload.mode === 'fork',
+            // A Resume of a read-only peer's transcript stays read-only: chip it at once.
+            permissionMode: sessionMetadata?.permissionMode ?? null,
+            access: sessionMetadata?.access ?? null,
           }),
         },
         message.id
@@ -486,6 +489,7 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
             claudeSessionId: sessionMetadata?.claudeSessionId ?? null,
             spawnedBy: sessionMetadata?.spawnedBy ?? null,
             permissionMode: sessionMetadata?.permissionMode ?? null,
+            access: sessionMetadata?.access ?? null,
           }),
         },
         message.id
