@@ -87,7 +87,7 @@ status: active
 - [x] `f-u7nq2k` P1 Started sessions run without the user — `auto` by default, the prompt file readable via `--add-dir`, worktrees get a copy of the main checkout's `.claude/settings.local.json` → project/unattended-started-sessions.md
 - [x] `f-cbq80b` P2 Sessions are addressable by their claude-remote name — every typed `claude` gets `--name`, so `ListAgents` shows `planner`; the sidebar shows Claude's name where it differs → project/peer-session-names.md
 - [x] `f-rkppyr` P2 Started sessions load no MCP servers unless asked — `--strict-mcp-config` by default, `start --mcp <name>` scopes one in, and revive and history Resume re-apply the profile → project/lean-started-sessions.md
-- [x] `f-44ibuj` P2 Read-only peers beside a builder — `start --read-only` adds up to two peers to a started session's track; the server enforces one writer, the skill teaches review (fresh judge per checkpoint, findings ledger, verdict and round cap, escalation to the parent) → project/builder-critic-pairs.md
+- [ ] `f-44ibuj` P2 Builder + critic pairs — `start --critic` puts a read-only critic beside a started session on its track; it judges against a standard and talks to the builder, with a round cap and escalation to the parent → project/builder-critic-pairs.md
 
 ## Track: Track workflow polish
 - [x] `f-a3r80m` P2 Server behind the build — show when the running server is older than its `dist/`, so a landed change that needs a restart is visible → project/server-behind-build.md
