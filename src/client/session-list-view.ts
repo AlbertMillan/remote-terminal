@@ -39,7 +39,8 @@ function loadCollapsedGroups(): Set<string> {
  * Sessions grouped under the session that started them (docs/session-orchestration.md).
  * A child renders under its parent, in the parent's category, whatever its own categoryId.
  * One level only: a child whose parent is gone (deleted), or is itself a child, is
- * top-level. Children keep creation order.
+ * top-level. Children keep creation order, except that a read-only peer renders right
+ * after its builder (peersAfterBuilders).
  */
 export function groupStartedSessions(sessions: Map<string, SessionInfo>): {
   childrenOf: Map<string, SessionInfo[]>;
@@ -55,8 +56,33 @@ export function groupStartedSessions(sessions: Map<string, SessionInfo>): {
     childrenOf.set(parent.id, list);
     nested.add(session.id);
   }
-  for (const list of childrenOf.values()) list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const [id, list] of childrenOf) childrenOf.set(id, peersAfterBuilders(list));
   return { childrenOf, nested };
+}
+
+/**
+ * One parent's children in creation order, each read-only peer moved right after its
+ * builder: the newest writer in the same worktree started before it. A peer with no such
+ * builder keeps its place.
+ */
+export function peersAfterBuilders(children: SessionInfo[]): SessionInfo[] {
+  const sorted = [...children].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const builderOf = (peer: SessionInfo): SessionInfo | undefined => {
+    let found: SessionInfo | undefined;
+    for (const s of sorted) {
+      if (s.createdAt > peer.createdAt) break;
+      if (s.access !== 'read' && s.cwd === peer.cwd) found = s;
+    }
+    return found;
+  };
+  const builders = new Map(sorted.filter((s) => s.access === 'read').map((p) => [p.id, builderOf(p)]));
+  const out: SessionInfo[] = [];
+  for (const s of sorted) {
+    if (s.access === 'read' && builders.get(s.id)) continue;
+    out.push(s);
+    if (s.access !== 'read') out.push(...sorted.filter((p) => builders.get(p.id) === s));
+  }
+  return out;
 }
 
 /** The sidebar session list: categories, drag/drop reordering, and session rows. */
@@ -397,6 +423,10 @@ export class SessionListView {
       ? `<span class="session-mode-chip" title="Started in ${escapeAttr(mode)} permission mode">${escapeHtml(mode)}</span>`
       : '';
     // Which login it runs under (docs/accounts.md); a warning when that folder's login changed.
+    // A read-only peer beside its track's builder (project/builder-critic-pairs.md).
+    const accessChipHtml = session.access === 'read'
+      ? '<span class="session-access-chip" title="A read-only peer: it cannot edit its track’s worktree">read-only</span>'
+      : '';
     const accountChipHtml = session.account
       ? `<span class="session-account-chip${session.accountWarning ? ' session-account-warning' : ''}" title="${escapeAttr(
           session.accountWarning ?? `Runs under the ${session.account} Claude account`
@@ -422,7 +452,7 @@ export class SessionListView {
       </span>
       <div class="session-info">
         <div class="session-name">${escapeHtml(session.name)}</div>
-        <div class="session-status">${accountChipHtml}${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}${claudeNameHtml}</div>
+        <div class="session-status">${accountChipHtml}${accessChipHtml}${modeChipHtml}${escapedStatus}${isStale ? ' (stale)' : ''}${claudeNameHtml}</div>
         ${summaryHtml}
       </div>
       ${reviveHtml}

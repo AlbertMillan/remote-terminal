@@ -396,6 +396,15 @@ function runMigrations(database: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_usage_messages_account ON usage_messages(account, ts);
       `,
     },
+    {
+      // What a started session may write (project/builder-critic-pairs.md):
+      // NULL is write, 'read' a read-only peer beside its track's builder.
+      // Every launch of its `claude` (start, revive, Resume) re-applies it.
+      name: '021_session_access',
+      sql: `
+        ALTER TABLE sessions ADD COLUMN access TEXT;
+      `,
+    },
   ];
 
   const appliedMigrations = database

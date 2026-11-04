@@ -7,6 +7,7 @@ import { replyWithError, type StatusError } from '../utils/http-errors.js';
 import { sessionManager } from '../sessions/manager.js';
 import { sessionForToken } from '../sessions/session-env.js';
 import { writePromptFile } from '../sessions/prompt-file.js';
+import { claudeNameFor } from '../sessions/claude-registry.js';
 import { claudeNameFlag, injectCommand } from '../sessions/session-open.js';
 import {
   availableMcpServers,
@@ -15,7 +16,7 @@ import {
   type LaunchFlags,
   type LaunchProfile,
 } from '../sessions/launch-profile.js';
-import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
+import { UNSAFE_IN_QUOTES, isSafeQuotedText } from '../utils/shell-quote.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb, setSessionMcpServers } from '../db/queries.js';
 import { getConfig } from '../config.js';
@@ -119,7 +120,7 @@ export interface AgentSessionDeps {
   trackExists(project: RegistryProject, track: string): boolean;
   /** Every track branch, read once per request to name each child's track. */
   trackBranches(): Pick<TrackBranch, 'worktreePath' | 'trackName'>[];
-  ensureTrackBranch(project: RegistryProject, track: string): Promise<{ worktreePath: string }>;
+  ensureTrackBranch(project: RegistryProject, track: string): Promise<Pick<TrackBranch, 'worktreePath' | 'id'>>;
   needsInstall(path: string): boolean;
   installDependencies(path: string): Promise<InstallResult>;
   ensureLocalClaudeSettings(projectCwd: string, worktreePath: string): Promise<unknown>;
@@ -129,6 +130,8 @@ export interface AgentSessionDeps {
   /** MCP servers a session in `cwd` can be given by name (launch-profile.ts). */
   /** The MCP servers `account`'s config defines that a session in `cwd` can be given. */
   mcpServersFor(cwd: string, account: string): string[];
+  /** What `ListAgents` calls a session's running Claude (claude-registry.ts), or null. */
+  claudeName(claudeSessionId: string | null): string | null;
   /** The profile's flags for a launch; writes the scoped MCP config (launch-profile.ts). */
   launchFlags(sessionId: string, cwd: string, profile: LaunchProfile, account: string): LaunchFlags;
   /** Is the account's expected login in its folder (accounts.ts preflight)? */
@@ -200,6 +203,7 @@ export const defaultDeps: AgentSessionDeps = {
   deleteSession: (id) => sessionManager.deleteSession(id),
   writePromptFile,
   mcpServersFor: (cwd, account) => [...availableMcpServers(cwd, claudeJsonPath(account)).keys()],
+  claudeName: (claudeSessionId) => claudeNameFor(claudeSessionId),
   launchFlags: (sessionId, cwd, profile, account) => launchFlags(sessionId, cwd, profile, claudeJsonPath(account)),
   preflight: (account) => preflight(account),
   setMcpServers: setSessionMcpServers,
@@ -238,6 +242,8 @@ export interface StartBody {
   mcpServers?: unknown;
   /** Always the caller's Claude login; naming any other is refused (403). */
   account?: unknown;
+  /** `read` for a read-only peer beside the track's builder; `write` (the default) is the builder. */
+  access?: unknown;
 }
 
 export interface StartResult {
@@ -248,15 +254,163 @@ export interface StartResult {
   install: InstallResult;
   /** The MCP servers it got; `ok` false when the launch couldn't give it every one asked for. */
   mcp: { ok: boolean; servers: string[]; detail?: string };
+  /** `read` for a read-only peer, `write` for the track's builder. */
+  access: Access;
+  /** A peer's notes folder (forward slashes), shared by the track's peers; the parent can read it. Absent when the launch couldn't grant one. */
+  notesPath?: string;
+}
+
+export type Access = 'read' | 'write';
+
+/** Read-only peers per caller and track: more reviewers add agreement, not insight. */
+export const MAX_PEERS = 2;
+
+/**
+ * The facts a read-only peer's prompt file starts with, before the parent's brief
+ * (project/builder-critic-pairs.md decision 8). The server writes facts only; how
+ * to review is the brief's, from the skill's template. Edit/Write/NotebookEdit
+ * are denied in the worktree and the main checkout by the launch's `--settings`;
+ * Bash, and every other path, can't be fenced by permission rules (a deny always
+ * beats an allow), so those rest on this header and nothing more. `notesPath` is
+ * the folder the launch granted, or null when it couldn't.
+ */
+export function peerHeader(o: {
+  worktreePath: string;
+  mainCheckout: string;
+  notesPath: string | null;
+  writer: string;
+  parent: string;
+}): string {
+  const slash = (p: string) => p.replace(/\\/g, '/');
+  return [
+    "<!-- claude-remote: read-only peer. The facts below are the server's; the brief after them is your parent's. -->",
+    '',
+    '# You are a read-only peer',
+    '',
+    `- **Read-only in \`${slash(o.worktreePath)}\`** (the builder's worktree) **and in \`${slash(o.mainCheckout)}\`** ` +
+      '(the project). Edit, Write and NotebookEdit are denied in both. Write nowhere but your notes folder. ' +
+      'Bash is not fenced, so never use it to write anywhere else either: no redirects or file writes, nothing that ' +
+      'writes the git index or the tree (`git add`, `commit`, `checkout`, `stash`, `reset`, `merge`, `restore`), ' +
+      'no builds, no installs. Reading, searching and `git log`/`diff`/`show`/`status` are fine.',
+    o.notesPath
+      ? `- **Your notes folder is \`${slash(o.notesPath)}\`.** Write there freely: references, and the findings ` +
+        "ledger if your brief keeps one. The track's other peer shares it; it is deleted when the track is landed or deleted."
+      : '- **You have no notes folder this time** (the server could not set one up). Keep your references and ' +
+        'findings in your messages, and tell your parent.',
+    `- **The writer is \`${o.writer}\`** (the only session that changes the worktree) **and your parent is ` +
+      `\`${o.parent}\`.** Message them with SendMessage by those names. Don't poll the worktree: wait for the ` +
+      'writer to message you.',
+    '',
+    '---',
+    '',
+    '',
+  ].join('\n');
+}
+
+type ChildRow = SessionMetadata & { attachable: boolean };
+
+/** A name `--name` can carry, made from `base`: an unquotable character dropped rather than the flag. */
+function addressableName(base: string): string {
+  const cleaned = [...base].filter((c) => isSafeQuotedText(c)).join('').trim();
+  return cleaned || 'peer';
+}
+
+/**
+ * The slot a start takes on its track (project/builder-critic-pairs.md), or the
+ * refusal: one writer and at most MAX_PEERS read-only peers per caller and track,
+ * a peer only beside a live writer, and a name no other live session of the caller
+ * has, since agents address each other by name. A peer's default name and mode come
+ * from its writer. Synchronous: the caller books the slot before it next awaits.
+ */
+export function claimTrackSlot(o: {
+  access: Access;
+  track: string;
+  /** The caller's live children: their names must stay distinct. */
+  children: ChildRow[];
+  /** Those on this track. */
+  onTrack: ChildRow[];
+  pending: Record<Access, number>;
+  /** The name the start asked for, or null for the default. */
+  name: string | null;
+  /** The mode the start asked for, or null for the default. */
+  mode: PermissionMode | null;
+  /** What `ListAgents` calls a session, for the header and the default peer name. */
+  agentName(session: ChildRow): string;
+}): { name: string; mode: PermissionMode; writer: ChildRow | null; writerName: string | null } {
+  const { access, track, onTrack, pending } = o;
+  const writer = onTrack.find((s) => s.access !== 'read') ?? null;
+  const peers = onTrack.filter((s) => s.access === 'read');
+  const taken = new Set(o.children.map((s) => s.name));
+  const refuseTaken = (name: string) => {
+    if (taken.has(name)) {
+      throw new AgentSessionError(409, `This session already has a live session named "${name}"; agents message each other by name, so pick another`);
+    }
+  };
+
+  if (access === 'write') {
+    if (pending.write > 0 || writer) {
+      throw new AgentSessionError(
+        409,
+        writer
+          ? `This session already started "${writer.name}" (${writer.id}) on "${track}"; run list`
+          : `A start on "${track}" from this session is still in progress; run list in a minute`
+      );
+    }
+    const name = o.name ?? track;
+    refuseTaken(name);
+    return { name, mode: o.mode ?? DEFAULT_PERMISSION_MODE, writer: null, writerName: null };
+  }
+
+  if (!writer) {
+    throw new AgentSessionError(
+      409,
+      pending.write > 0
+        ? `The builder's start on "${track}" is still in progress; start the peer once list shows it`
+        : `No session this one started is writing on "${track}": start the builder first, then its peers`
+    );
+  }
+  if (peers.length + pending.read >= MAX_PEERS) {
+    throw new AgentSessionError(
+      409,
+      `"${track}" already has ${MAX_PEERS} read-only peers from this session` +
+        (peers.length ? ` (${peers.map((p) => `"${p.name}"`).join(', ')})` : '') +
+        '; more add agreement, not insight'
+    );
+  }
+  const writerName = o.agentName(writer);
+  let name = o.name;
+  if (name !== null) {
+    // The builder messages it by this name: a name `--name` can't carry leaves it unreachable.
+    if (!isSafeQuotedText(name)) {
+      throw new AgentSessionError(400, 'A read-only peer\'s name must not contain ", %, $, `, ! or a backslash: its builder messages it by name');
+    }
+    refuseTaken(name);
+  } else {
+    // `<builder> peer`, then `<builder> peer 2`, so the builder's brief can name both before
+    // either exists. The skill has the parent name each by its job instead.
+    const base = addressableName(writerName);
+    for (let n = peers.length + pending.read + 1; name === null || taken.has(name); n++) {
+      name = `${base} peer${n > 1 ? ` ${n}` : ''}`.slice(0, MAX_NAME_LENGTH);
+    }
+  }
+  // A peer messages its builder: the same mode unless the start names one. Messages pass
+  // between modes (checked 2026-11-04), so this is only the least surprising default.
+  let mode = o.mode;
+  if (mode === null) {
+    const stored = writer.permissionMode ? (MODE_ALIASES[writer.permissionMode] ?? writer.permissionMode) : null;
+    mode = (PERMISSION_MODES as readonly string[]).includes(stored ?? '') ? (stored as PermissionMode) : DEFAULT_PERMISSION_MODE;
+  }
+  return { name, mode, writer, writerName };
 }
 
 // Starts that have passed the limit check but not yet created their session
 // (an install can take minutes). Counted toward the limit, or two concurrent
 // starts would both pass it.
 const pendingStarts = new Map<string, number>();
-// The same, by caller and track: a start the agent gave up on (its Bash call
-// timed out) keeps running here, and a retry must not start a second session.
-const pendingTracks = new Set<string>();
+// The same, by caller and track, split by access: a start the agent gave up on
+// (its Bash call timed out) keeps running here, and a retry must not start a
+// second writer, or a third peer.
+const pendingTracks = new Map<string, Record<Access, number>>();
 
 function liveChildren(deps: AgentSessionDeps, parentId: string) {
   return deps.listSessions().filter((s) => s.spawnedBy === parentId && isLive(s));
@@ -287,13 +441,22 @@ export async function startAgentSession(
   if (Buffer.byteLength(prompt, 'utf-8') > MAX_PROMPT_BYTES) {
     throw new AgentSessionError(413, `prompt is over ${MAX_PROMPT_BYTES / 1024} KB`);
   }
-  const asked = body.permissionMode === undefined ? DEFAULT_PERMISSION_MODE : body.permissionMode;
-  const mode = typeof asked === 'string' ? (MODE_ALIASES[asked] ?? asked) : asked;
-  if (typeof mode !== 'string' || !(PERMISSION_MODES as readonly string[]).includes(mode)) {
-    throw new AgentSessionError(400, `permissionMode must be one of: ${PERMISSION_MODES.join(', ')}`);
+  if (body.access !== undefined && body.access !== 'read' && body.access !== 'write') {
+    throw new AgentSessionError(400, 'access must be "read" or "write"');
   }
-  const permissionMode = mode as PermissionMode;
-  let name = track;
+  const access: Access = body.access === 'read' ? 'read' : 'write';
+  // A peer with no mode named takes its builder's, below.
+  let permissionMode: PermissionMode | null = null;
+  if (body.permissionMode !== undefined || access === 'write') {
+    const asked = body.permissionMode === undefined ? DEFAULT_PERMISSION_MODE : body.permissionMode;
+    const mode = typeof asked === 'string' ? (MODE_ALIASES[asked] ?? asked) : asked;
+    if (typeof mode !== 'string' || !(PERMISSION_MODES as readonly string[]).includes(mode)) {
+      throw new AgentSessionError(400, `permissionMode must be one of: ${PERMISSION_MODES.join(', ')}`);
+    }
+    permissionMode = mode as PermissionMode;
+  }
+  // No name: the track's, or for a peer its builder's (claimTrackSlot).
+  let name: string | null = null;
   if (body.name !== undefined) {
     if (typeof body.name !== 'string' || !body.name.trim()) throw new AgentSessionError(400, 'name must be a non-empty string');
     name = body.name.trim().slice(0, MAX_NAME_LENGTH);
@@ -340,22 +503,28 @@ export async function startAgentSession(
     }
   }
 
-  // One live session per caller and track. Nothing between the limit check and
-  // the bookkeeping below awaits, so concurrent starts cannot both get past it.
+  // The track's slot. Nothing between the limit check and the bookkeeping below
+  // awaits, so concurrent starts cannot both get past it.
   const trackKey = `${callerId}\0${track}`;
   const branches = deps.trackBranches();
-  const running = children.find((s) => trackOf(branches, s.cwd) === track);
-  if (pendingTracks.has(trackKey) || running) {
-    throw new AgentSessionError(
-      409,
-      running
-        ? `This session already started "${running.name}" (${running.id}) on "${track}"; run list`
-        : `A start on "${track}" from this session is still in progress; run list in a minute`
-    );
-  }
+  const pending = pendingTracks.get(trackKey) ?? { read: 0, write: 0 };
+  const slot = claimTrackSlot({
+    access,
+    track,
+    children,
+    onTrack: children.filter((s) => trackOf(branches, s.cwd) === track),
+    pending,
+    name,
+    mode: permissionMode,
+    agentName: (s) => deps.claudeName(s.claudeSessionId) ?? s.name,
+  });
+  const sessionName = slot.name;
+  const mode = slot.mode;
+  // What the row and every launch store: NULL is write.
+  const storedAccess = access === 'read' ? 'read' : null;
 
   pendingStarts.set(callerId, (pendingStarts.get(callerId) ?? 0) + 1);
-  pendingTracks.add(trackKey);
+  pendingTracks.set(trackKey, { ...pending, [access]: pending[access] + 1 });
   try {
     // Exactly what the Track picker does: branch, then the worktree's own install.
     const branch = await deps.ensureTrackBranch(project, track);
@@ -373,12 +542,13 @@ export async function startAgentSession(
     let session: ActiveSession;
     try {
       session = await deps.createSession({
-        name,
+        name: sessionName,
         cwd: worktreePath,
         ownerId: caller.ownerId ?? undefined,
         spawnedBy: callerId,
-        permissionMode,
+        permissionMode: mode,
         mcpServers,
+        access: storedAccess,
         account,
       });
     } catch (error) {
@@ -387,11 +557,26 @@ export async function startAgentSession(
       throw error;
     }
 
+    // Before the prompt file: a peer's header names the notes folder this launch granted.
+    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode: mode, mcpServers, access: storedAccess }, account);
+    const notesPath = access === 'read' ? (launch.notesDir ?? null) : null;
+
     let promptPath: string;
     let promptDir: string;
     try {
+      // A peer's file starts with the server's facts; the parent's brief follows.
+      const header =
+        slot.writerName !== null
+          ? peerHeader({
+              worktreePath,
+              mainCheckout: project.cwd,
+              notesPath,
+              writer: slot.writerName,
+              parent: deps.claudeName(caller.claudeSessionId) ?? caller.name,
+            })
+          : '';
       // Forward slashes, so neither PowerShell nor bash reads a backslash as an escape.
-      promptPath = deps.writePromptFile(session.id, prompt).replace(/\\/g, '/');
+      promptPath = deps.writePromptFile(session.id, header + prompt).replace(/\\/g, '/');
       promptDir = promptPath.slice(0, promptPath.lastIndexOf('/'));
       if (UNSAFE_IN_QUOTES.test(promptPath)) {
         // A typed command that read the wrong file would fail silently.
@@ -402,7 +587,6 @@ export async function startAgentSession(
       throw error;
     }
 
-    const launch = deps.launchFlags(session.id, worktreePath, { permissionMode, mcpServers }, account);
     deps.injectCommand(session, startCommand(launch.flags, promptDir, promptPath, session.name));
     // The check above passed, so this is a config edited since, or a file that couldn't be
     // written. Started anyway, like a failed install: the row and `list` say what it really
@@ -421,19 +605,33 @@ export async function startAgentSession(
         ...(metadata ?? {}),
         attachable: true,
         spawnedBy: callerId,
-        permissionMode,
+        permissionMode: mode,
+        access: storedAccess,
       })
     );
 
     deps.schedule(() => checkPromptArrived(deps, session.id), PROMPT_GRACE_MS);
 
-    logger.info({ callerId, sessionId: session.id, track, mode: permissionMode, mcpServers, account }, 'agent-sessions: started a session');
-    return { sessionId: session.id, name, account, worktreePath, install, mcp };
+    logger.info({ callerId, sessionId: session.id, track, mode, mcpServers, account, access }, 'agent-sessions: started a session');
+    return {
+      sessionId: session.id,
+      name: sessionName,
+      account,
+      worktreePath,
+      install,
+      mcp,
+      access,
+      ...(notesPath ? { notesPath } : {}),
+    };
   } finally {
     const left = (pendingStarts.get(callerId) ?? 1) - 1;
     if (left > 0) pendingStarts.set(callerId, left);
     else pendingStarts.delete(callerId);
-    pendingTracks.delete(trackKey);
+    const slots = pendingTracks.get(trackKey);
+    if (slots) {
+      slots[access] = Math.max(0, slots[access] - 1);
+      if (slots.read + slots.write === 0) pendingTracks.delete(trackKey);
+    }
   }
 }
 
@@ -473,6 +671,8 @@ export interface StartedSessionState {
   mcpServers: string[] | null;
   /** The Claude login it runs under. */
   account: string;
+  /** `read` for a read-only peer, `write` for its track's builder. */
+  access: Access;
   notification: { type: NotificationType; at: string } | null;
   /** `pending` until the grace period ends; `not-received` is a session that will never start on its own. */
   prompt: PromptDelivery;
@@ -498,6 +698,7 @@ export function listAgentSessions(deps: AgentSessionDeps, callerId: string): Sta
         permissionMode: s.permissionMode ? (MODE_ALIASES[s.permissionMode] ?? s.permissionMode) : null,
         mcpServers: s.mcpServers ?? null,
         account: s.account,
+        access: s.access === 'read' ? 'read' : 'write',
         notification: n ? { type: n.type, at: n.timestamp.toISOString() } : null,
         prompt: deps.promptDelivery(s),
       };

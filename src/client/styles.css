@@ -727,7 +727,8 @@ body {
   font-weight: 700;
 }
 
-.session-mode-chip {
+.session-mode-chip,
+.session-access-chip {
   display: inline-block;
   margin-right: 6px;
   padding: 0 5px;

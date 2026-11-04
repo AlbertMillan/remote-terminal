@@ -33,6 +33,7 @@ import {
   attachToSession,
   detachFromSession,
   sessionToInfo,
+  storedSessionFields,
   broadcastSessionUpdate,
   broadcastSessionKept,
   broadcastLoginEnded,
@@ -229,7 +230,7 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
     createMessage(
       'session.attached',
       {
-        session: sessionToInfo({ ...session, categoryId: sessionMetadata?.categoryId ?? null, sortOrder: sessionMetadata?.sortOrder ?? 0, isFork: sessionMetadata?.isFork ?? false, claudeSessionId: sessionMetadata?.claudeSessionId ?? null, spawnedBy: sessionMetadata?.spawnedBy ?? null, permissionMode: sessionMetadata?.permissionMode ?? null }),
+        session: sessionToInfo({ ...session, ...storedSessionFields(sessionMetadata) }),
         scrollback: scrollback.join('\r\n'),
       },
       message.id
@@ -433,12 +434,8 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
       createMessage(
         'session.created',
         {
-          session: sessionToInfo({
-            ...session,
-            categoryId: sessionMetadata?.categoryId ?? null,
-            sortOrder: sessionMetadata?.sortOrder ?? 0,
-            isFork: payload.mode === 'fork',
-          }),
+          // A Resume of a read-only peer's transcript stays read-only: chip it at once.
+          session: sessionToInfo({ ...session, ...storedSessionFields(sessionMetadata), isFork: payload.mode === 'fork' }),
         },
         message.id
       )
@@ -478,15 +475,7 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
       createMessage(
         'session.created',
         {
-          session: sessionToInfo({
-            ...session,
-            categoryId: sessionMetadata?.categoryId ?? null,
-            sortOrder: sessionMetadata?.sortOrder ?? 0,
-            isFork: false,
-            claudeSessionId: sessionMetadata?.claudeSessionId ?? null,
-            spawnedBy: sessionMetadata?.spawnedBy ?? null,
-            permissionMode: sessionMetadata?.permissionMode ?? null,
-          }),
+          session: sessionToInfo({ ...session, ...storedSessionFields(sessionMetadata), isFork: false }),
         },
         message.id
       )

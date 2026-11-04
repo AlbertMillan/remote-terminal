@@ -64,7 +64,9 @@ const updateSession = vi.fn((id: string, patch: Record<string, unknown>) => {
 const logSessionEvent = vi.fn();
 
 const insertSession = vi.fn();
-const launchProfileForTranscript = vi.fn((_id: string): { permissionMode: string | null; mcpServers: string[] } | null => null);
+const launchProfileForTranscript = vi.fn(
+  (_id: string): { permissionMode: string | null; mcpServers: string[]; access?: string | null } | null => null
+);
 
 vi.mock('../src/server/db/queries.js', () => ({
   insertSession: (...args: unknown[]) => insertSession(...(args as [])),
@@ -241,6 +243,17 @@ describe('reviveSession — the conversation', () => {
     );
   });
 
+  it("re-applies a read-only peer's access: its settings and the tools it never asks for", async () => {
+    rows.set(STALE_ID, staleRow({ claudeSessionId: CLAUDE_ID, spawnedBy: 'parent', permissionMode: 'auto', mcpServers: [], access: 'read' }));
+
+    manager.reviveSession({ id: STALE_ID });
+
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty.mock.calls[0][1]).toMatch(
+      new RegExp(`^claude --permission-mode auto --strict-mcp-config --settings "[^"]+/peer-settings/${STALE_ID}\\.json" --allowedTools WebFetch WebSearch Read (--add-dir "[^"]+" )?--resume ${CLAUDE_ID} `)
+    );
+  });
+
   it('injects nothing for a plain shell row, which just gets its shell back', async () => {
     rows.set(STALE_ID, staleRow({ claudeSessionId: null }));
 
@@ -360,6 +373,16 @@ describe("openClaudeSession — a started session's transcript", () => {
     expect(writeToPty.mock.calls[0][1]).toMatch(
       new RegExp(`^claude --permission-mode acceptEdits --strict-mcp-config --resume ${CLAUDE_ID} `)
     );
+  });
+
+  it("resumes a read-only peer's transcript read-only, on a row that keeps the access", async () => {
+    launchProfileForTranscript.mockReturnValueOnce({ permissionMode: 'auto', mcpServers: [], access: 'read' });
+
+    await manager.openClaudeSession({ claudeSessionId: CLAUDE_ID, cwd: '/home/albert/wt', mode: 'resume' });
+
+    expect(insertSession.mock.calls[0][0]).toMatchObject({ access: 'read' });
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty.mock.calls[0][1]).toMatch(/^claude --permission-mode auto --strict-mcp-config --settings "[^"]+" --allowedTools WebFetch WebSearch Read /);
   });
 
   it('resumes any other transcript with the full profile', async () => {

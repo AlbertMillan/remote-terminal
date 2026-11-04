@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SessionListView, type SessionListViewHost } from '../src/client/session-list-view.js';
+import { SessionListView, peersAfterBuilders, type SessionListViewHost } from '../src/client/session-list-view.js';
 import type { SessionInfo, CategoryInfo } from '../src/client/session-types.js';
 
 /**
@@ -187,5 +187,45 @@ describe('counts, reordering and stored state', () => {
     view();
     (rowOf('main').querySelector('.session-group-toggle') as HTMLElement).click();
     expect(JSON.parse(localStorage.getItem('claude-remote.collapsedSessionGroups') as string)).toEqual(['main']);
+  });
+});
+
+describe('read-only peers (project/builder-critic-pairs.md)', () => {
+  const WT = 'C:\\wt\\split';
+  const OTHER_WT = 'C:\\wt\\other';
+
+  it('renders each peer right after its builder, with a read-only chip', () => {
+    // Started in this order: builder, another track's builder, then the first one's peer.
+    sessions.set('b1', info('b1', { spawnedBy: 'main', cwd: WT, createdAt: '2026-10-01T10:03:00.000Z' }));
+    sessions.set('b2', info('b2', { spawnedBy: 'main', cwd: OTHER_WT, createdAt: '2026-10-01T10:04:00.000Z' }));
+    sessions.set('p1', info('p1', { spawnedBy: 'main', cwd: WT, access: 'read', createdAt: '2026-10-01T10:05:00.000Z' }));
+    view();
+    expect(rowIds()).toEqual(['main', 'a', 'b', 'b1', 'p1', 'b2', 'other']);
+    expect(rowOf('p1').querySelector('.session-access-chip')?.textContent).toBe('read-only');
+    expect(rowOf('b1').querySelector('.session-access-chip')).toBeNull();
+    // Not a permission-mode chip: the mode chip still means only the mode.
+    expect(rowOf('p1').querySelector('.session-mode-chip')).toBeNull();
+  });
+
+  it('keeps two peers in creation order after the builder, and a peer with no builder in its place', () => {
+    const at = (m: number) => `2026-10-01T11:0${m}:00.000Z`;
+    const list = [
+      info('orphan', { access: 'read', cwd: OTHER_WT, createdAt: at(0) }),
+      info('builder', { cwd: WT, createdAt: at(1) }),
+      info('x', { cwd: OTHER_WT, createdAt: at(2) }),
+      info('peer2', { access: 'read', cwd: WT, createdAt: at(4) }),
+      info('peer1', { access: 'read', cwd: WT, createdAt: at(3) }),
+    ];
+    expect(peersAfterBuilders(list).map((s) => s.id)).toEqual(['orphan', 'builder', 'peer1', 'peer2', 'x']);
+  });
+
+  it('puts a peer after the newest builder in its worktree started before it', () => {
+    const at = (m: number) => `2026-10-01T12:0${m}:00.000Z`;
+    const list = [
+      info('old', { cwd: WT, status: 'terminated', createdAt: at(0) }),
+      info('new', { cwd: WT, createdAt: at(1) }),
+      info('peer', { access: 'read', cwd: WT, createdAt: at(2) }),
+    ];
+    expect(peersAfterBuilders(list).map((s) => s.id)).toEqual(['old', 'new', 'peer']);
   });
 });

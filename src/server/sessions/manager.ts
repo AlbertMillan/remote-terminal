@@ -210,6 +210,7 @@ class SessionManager {
       spawnedBy: options.spawnedBy ?? null,
       permissionMode: options.permissionMode ?? null,
       mcpServers: options.mcpServers ?? null,
+      access: options.access ?? null,
       account,
     };
 
@@ -556,6 +557,7 @@ class SessionManager {
       claudeSessionId: metadata.claudeSessionId,
       createdAt: metadata.createdAt,
       account: metadata.account,
+      access: metadata.access ?? null,
     });
   }
 

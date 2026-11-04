@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
+import { deletePeerNotes } from '../sessions/prompt-file.js';
 import { sessionsInWorktree } from '../utils/paths.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
@@ -839,6 +840,8 @@ export async function landTrack(
     path: track.worktreePath,
     deleteBranch: track.branch,
   });
+  // The track's read-only peers' references and findings ledger: the track is done.
+  deletePeerNotes(track.id);
   // The land itself stands. A link the teardown could not remove leaves the
   // worktree registered and the branch checked out there, with nothing else
   // recording either, so the result has to say where they are.

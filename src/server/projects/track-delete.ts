@@ -24,6 +24,7 @@ import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './tr
 import { readProjectPlan } from './project-plan.js';
 import { isInstalling } from './project-deps.js';
 import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
+import { deletePeerNotes } from '../sessions/prompt-file.js';
 
 const logger = createLogger('track-delete');
 
@@ -110,6 +111,8 @@ export interface TrackDeletePlan {
   discard: PlannedJob[];
   /** The track's unlanded branch, removed with its worktree and uncommitted edits. */
   branch: {
+    /** The track branch row's id: its peers' notes folder is keyed by it. */
+    id: string;
     name: string;
     worktreePath: string;
     uncommittedFiles: number;
@@ -238,6 +241,7 @@ export async function planTrackDelete(
   if (active) {
     const entries = existsSync(active.worktreePath) ? await gitStatusEntries(active.worktreePath, { allUntracked: true }) : [];
     branch = {
+      id: active.id,
       name: active.branch,
       worktreePath: active.worktreePath,
       uncommittedFiles: entries?.length ?? 0,
@@ -731,6 +735,8 @@ async function tearDown(
       deleteBranch: plan.branch.name,
     });
     branchRemoved = torn.removed && torn.branchDeleted;
+    // Its read-only peers' notes go with it, unless the track stays (keepUnlanded below).
+    if (branchRemoved) deletePeerNotes(plan.branch.id);
     // Unless a link kept the worktree registered (its sessions can still
     // revive there); a busy folder is deregistered and retried, so it goes.
     if (torn.linksLeft.length === 0) {

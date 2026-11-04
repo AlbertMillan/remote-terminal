@@ -18,7 +18,8 @@ nested under it in the sidebar. Spec and decisions: `project/session-orchestrati
 | Worktree's local settings | `src/server/projects/local-claude-settings.ts` — `ensureLocalClaudeSettings()` |
 | Typing the command | `injectCommand()` in `session-open.ts` (shared with resume/fork/revive) |
 | Who started whom | `sessions.spawned_by`, `sessions.permission_mode` (migration 017) |
-| Launch profile (mode + MCP servers) | `src/server/sessions/launch-profile.ts`; `sessions.mcp_servers` (migration 018) |
+| Launch profile (mode + MCP servers + read-only) | `src/server/sessions/launch-profile.ts`; `sessions.mcp_servers` (migration 018), `sessions.access` (021) |
+| Read-only peers | `peerHeader()`/`MAX_PEERS` in `sessions-api.ts`; `peerNotesDirFor()`/`peerSettingsPathFor()` in `prompt-file.ts` |
 | Browsers learn of it | `session.added` broadcast (`broadcastSessionAdded`) — never attaches |
 | Sidebar nesting | `groupStartedSessions()` + `renderSessionGroup()` in `session-list-view.ts` |
 
@@ -60,7 +61,8 @@ session is calling, which is how `spawned_by` and the limit work.
 Status codes: 403 not loopback · 401 missing/unknown/revoked token · 403 a started session
 calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts still
 installing) or the global `sessions.maxSessions` · 409 the caller already has a live
-session on that track, or a start on it still running · 400 bad body, `bypassPermissions` or `dontAsk`, an `mcpServers` name not in the user's Claude config, or a
+writer on that track, or a start on it still running; a read-only peer with no live writer, or a
+third peer ("Read-only peers" below) · 400 bad body, `bypassPermissions` or `dontAsk`, an `mcpServers` name not in the user's Claude config, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
 `land`: 202 accepted · 400 the caller is in no track's worktree (no `track`), or a blank
 `track` · 403 a named track neither the caller's nor a started session's · 409 any Land refusal
@@ -95,7 +97,8 @@ track already under way.
    the session starts idle with no prompt and nothing says so (every start until 2026-10-04). The paths use forward slashes
    so no shell reads an escape, and a path holding `"`, `%`, `$` or a backtick is refused (the
    session is removed) rather than typed into a command that would silently read another file.
-8. Broadcast `session.added`; return `{ sessionId, name, worktreePath, install }`.
+8. Broadcast `session.added`; return `{ sessionId, name, worktreePath, install, mcp, access }`,
+   plus `notesPath` for a read-only peer.
 9. Schedule one check `PROMPT_GRACE_MS` (90 s) later (`checkPromptArrived`), below.
 
 ## Did the prompt arrive
@@ -308,6 +311,102 @@ so an agent asked to message "the planner" can't find it. Spec: `project/peer-se
   Claude running can't be messaged until it is revived.
 - Renaming a session doesn't rename a running Claude; the new name applies at the next typed
   `claude`, and the sidebar shows the mismatch meanwhile.
+
+## Read-only peers beside a builder
+
+Spec: `project/builder-critic-pairs.md`. A parent can put up to two read-only peers beside
+a session it started on a track (the builder): a reviewer, usually, or a session that
+gathers references or helps when the builder is stuck. They talk over `SendMessage`. The
+server enforces only **one writer per worktree**; who reviews, when, and how a review
+ends are conventions the skill teaches the parent to write into the prompts (its "Read-only
+peers" section). There is no server-side role, verdict parser, round counter or relay: the
+server never sees `SendMessage`.
+
+- **Access, not a role.** `start --read-only` (body `access: 'read'`) is stored as
+  `sessions.access` (migration 021; NULL = write). The server knows who may write, not
+  what a peer is for.
+- **Start rules**, per caller and track, in `startAgentSession()`: one writer (a second is
+  409, as before); a peer needs a **live** writer (409 "start the builder first", or "still
+  in progress" while the builder's start runs); at most `MAX_PEERS` (2) peers, counting
+  starts in flight (`pendingTracks` holds a count per access). Peers count toward
+  `maxPerParent`, and the builder still can't start anything (403). All of it is
+  `claimTrackSlot()`. A peer with no `--name` is `<builder's Claude name> peer`, then
+  `peer 2`, … (skipping live names, unquotable characters dropped); with no `--mode` it takes
+  the builder's mode.
+- **Names stay addressable.** Agents message each other by name, so any start whose name a
+  live session of the same caller already has is 409, and a peer name `--name` can't carry
+  (`"`, `%`, `$`, backtick, `!`, backslash) is 400: its builder could never reach it.
+- **"One writer" is per parent, not per worktree.** Another parent session, or the user
+  opening a session from the Track picker, can still write in the same worktree. The rule
+  stops a parent from putting two builders on one track, nothing more.
+- **The prompt file** starts with `peerHeader()`: read-only in the worktree and the main
+  checkout, write nowhere but the notes folder, the Bash rule (no git writes, builds or
+  installs), the notes folder (or that there is none this time), and the writer's and
+  parent's names as `ListAgents` shows them (the Claude name from the registry when known,
+  else the session name). Facts only; the parent's brief follows. It is written **after**
+  the launch flags, from the notes folder the launch reports (`LaunchFlags.notesDir`), so the
+  header and the start result never name a folder the session wasn't given.
+- **The launch** (`launchFlags()` with `access: 'read'`, so start, revive and history
+  Resume alike; `launchProfileForTranscript()` carries `access`):
+  - `--settings "<dataDir>/peer-settings/<id>.json"`: `deny: Edit(<worktree>/**)` and
+    `Edit(<main checkout>/**)`, `allow: Edit(<notes>/**)` (`peerPaths()`). Nothing broader
+    can be denied: a deny always beats an allow, so "everything but the notes folder" isn't
+    expressible, and other paths rest on the header. Only `Edit(path)` rules are matched by file checks (Claude
+    Code warns that `Write(path)` isn't), and they cover Write and NotebookEdit. An absolute
+    path is written `//c/Users/…` (`permissionRulePath()`): checked 2026-11-04 on Windows,
+    `//C:/…` and `/c/…` are ignored without a word, so a rule in the wrong form denies
+    nothing. A network path (`\\server\share`) has no known rule form and throws, which
+    falls back to disallowing every edit (below). Rewritten at every launch;
+    `deletePromptFile()` removes it.
+  - `--allowedTools WebFetch WebSearch Read`, so gathering references and viewing images
+    never stalls an unattended session.
+  - `--add-dir "<dataDir>/peers/<track-branch id>"`, the notes folder, created at launch.
+    Not for a landed track's branch, so a Resume never recreates deleted notes.
+  - If the settings can't be written or quoted, `--disallowedTools Edit Write NotebookEdit`
+    instead: the peer loses its notes, never its read-only.
+- **Bash is not fenced.** Permission patterns can't reliably stop a shell write, so the
+  Bash rule is the header's and nothing more. This is not a sandbox (an OS-level one, like
+  Codex CLI's `--sandbox read-only`, is out of scope).
+- **The notes folder** is keyed by the track branch, so a revived or replacement peer
+  keeps the references and the findings ledger, and lives outside every project, so no
+  `commitAll` sweeps it in. Land (`landTrack`) and Delete track remove it
+  (`deletePeerNotes()`); Delete only when the branch is actually gone. A folder a closing
+  peer still holds is retried in the background (8 times, 15 s apart) and every failure is
+  logged, so leftover notes never go unnoticed. The start result
+  carries `notesPath` so the parent can read it; `list` carries `access`.
+- **Sidebar:** a peer is a child of the parent like any started session, placed right after
+  its builder (`peersAfterBuilders()`: the newest writer in the same worktree started
+  before it) with a `read-only` chip.
+- **Session log:** a peer's entry is headed `<name> (peer)` (`sessionLogTitle()`), its
+  prompt says the diff is the builder's, and it never ticks plans.
+- **Not Claude Code's agent teams**: experimental, no session resume (breaks revive), one
+  team per session, and its docs keep same-file work in one session.
+
+Checked on the isolated boot (2026-11-04), spec Verification 1–8:
+
+- Messaging: builder and both peers saw each other in `ListAgents`; `SendMessage` delivered
+  every way, including between an `auto` builder and `plan` and `acceptEdits` peers, with
+  no approval asked and nothing held. `--mode manual` types no flag, so it got the user's
+  default mode (auto here), not a stricter one.
+- Liveness: a checkpoint sent with `notify_when_idle` to a peer told not to reply produced
+  a `[Cross-session idle notice]`; a checkpoint the peer answered produced none.
+- Tools: in `auto` with no MCP servers, `WebSearch` and `Read` of a PNG in the worktree and
+  in the notes folder ran without a prompt. That Claude Code build (2.1.318) has no
+  main-session `WebFetch`; the peer fetched through the `web-fetch` subagent, also without
+  a prompt.
+- Read-only: a Write in the worktree was refused ("File is in a directory that is denied by
+  your permission settings"), at start and after revive; writes in the notes folder worked.
+- Start rules: peer before a builder 409; builder + 2 peers then filled `maxPerParent` 3
+  (429); with the limit raised, a second writer and a third peer each got 409; the builder's
+  own `start --read-only` got 403.
+- Revive and history Resume both typed `--settings`, `--allowedTools` and the notes
+  `--add-dir`; the Resume row kept `access: read`.
+- Land (`land --track` from the parent) closed four sessions in the worktree and Delete
+  track three, with no `EBUSY`; both removed the notes folder.
+- The sidebar showed both peers right after their builder with `read-only` chips; the
+  session log got one entry per conversation, the peers' headed `(peer)`.
+- The isolated boot only: the hooks post to 4220, so Claude session ids were registered by
+  hand, and the temp folder needed Claude's folder-trust prompt accepted.
 
 ## Installing the skill
 
