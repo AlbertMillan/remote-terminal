@@ -108,3 +108,10 @@ status: active
 - [x] `f-7oap94` P1 Usage ledger attributes messages to the login that ran them — `usage_messages.account`, moved transcripts back to work, `usageByAccount()` → project/per-account-usage.md
 - [x] `f-dnapj1` P1 Plan-usage chip shows every account — one line each, plan, verified state, tokens this window → project/per-account-usage.md
 - [x] `f-7y1fcz` P2 Account usage page — per-account cards, token table, held-back readings with Discard → project/per-account-usage.md
+
+## Track: Session orchestration
+- [x] `f-s3w8qd` P1 Sessions that start sessions — a main session starts prompted sessions on its planned tracks and lists their state; the sidebar nests them under it → project/session-orchestration.md
+- [x] `f-u7nq2k` P1 Started sessions run without the user — `auto` by default, the prompt file readable via `--add-dir`, worktrees get a copy of the main checkout's `.claude/settings.local.json` → project/unattended-started-sessions.md
+- [x] `f-cbq80b` P2 Sessions are addressable by their claude-remote name — every typed `claude` gets `--name`, so `ListAgents` shows `planner`; the sidebar shows Claude's name where it differs → project/peer-session-names.md
+- [x] `f-rkppyr` P2 Started sessions load no MCP servers unless asked — `--strict-mcp-config` by default, `start --mcp <name>` scopes one in, and revive and history Resume re-apply the profile → project/lean-started-sessions.md
+- [x] `f-44ibuj` P2 Read-only peers beside a builder — `start --read-only` adds up to two peers to a started session's track; the server enforces one writer, the skill teaches review (fresh judge per checkpoint, findings ledger, verdict and round cap, escalation to the parent) → project/builder-critic-pairs.md
