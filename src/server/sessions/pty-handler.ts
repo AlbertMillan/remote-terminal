@@ -41,11 +41,15 @@ export function createPty(options: PtyOptions): IPty {
   //
   // accountEnv: the account's CLAUDE_CONFIG_DIR, and no inherited API key, OAuth token or
   // telemetry switch, or every `claude` in it runs under whatever login those name.
-  const env = {
+  const env: Record<string, string | undefined> = {
     ...accountEnv({ ...withoutInheritedClaudeSession(process.env), ...options.env }, options.account),
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   };
+  // The PTY is a truecolor xterm, so drop a NO_COLOR the server inherited: a server
+  // restarted from a tool shell (e.g. a `claude` Bash call) carries NO_COLOR=1, and
+  // every terminal it hands out then renders `claude` without color.
+  delete env.NO_COLOR;
 
   logger.debug({ shell, args, cwd, cols, rows, account: options.account }, 'Creating PTY');
 
