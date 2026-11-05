@@ -115,3 +115,12 @@ status: active
 - [x] `f-cbq80b` P2 Sessions are addressable by their claude-remote name — every typed `claude` gets `--name`, so `ListAgents` shows `planner`; the sidebar shows Claude's name where it differs → project/peer-session-names.md
 - [x] `f-rkppyr` P2 Started sessions load no MCP servers unless asked — `--strict-mcp-config` by default, `start --mcp <name>` scopes one in, and revive and history Resume re-apply the profile → project/lean-started-sessions.md
 - [x] `f-44ibuj` P2 Read-only peers beside a builder — `start --read-only` adds up to two peers to a started session's track; the server enforces one writer, the skill teaches review (fresh judge per checkpoint, findings ledger, verdict and round cap, escalation to the parent) → project/builder-critic-pairs.md
+
+## Track: Mobile app
+- [ ] `f-qfr9o7` P1 HTTPS tailnet listener — a second listener on 4221 with the `tailscale cert` certificate (refreshed at boot and daily), same `whois` identity and origin checks; loopback HTTP on 4220 unchanged → project/mobile-app.md
+- [ ] `f-72hbsq` P1 Installable PWA — manifest, icons, shell-only service worker, iOS meta, standalone + safe-area, `visualViewport` keyboard resize → project/mobile-app.md
+- [ ] `f-d8opoa` P1 Special-keys bar — Esc, Tab, Shift+Tab, sticky Ctrl, arrows, `/`, Ctrl+C on touch devices → project/mobile-app.md
+- [ ] `f-j1kis0` P1 Reconnect UX — re-attach on wake/online with a "Reconnecting…" banner, keeping session and scroll → project/mobile-app.md
+- [ ] `f-7ylbx2` P2 Web Push — `web-push`, VAPID keys in dataDir, subscription table, Settings toggle; needs-input/completed, job gates, Land → project/mobile-app.md
+- [ ] `f-5mueq3` P2 Deep links and share-to — `?session=`/`?job=`/`?project=` routes, notification click opens them, Android `share_target` → project/mobile-app.md
+- [ ] `f-9km8ou` P3 Remove Termlink — worktree removed; drop the `android/` line from `.gitignore` → project/mobile-app.md
