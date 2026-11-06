@@ -136,6 +136,10 @@ data class CategoryReorderPayload(val categories: List<SortOrder>)
 @Serializable
 data class CategoryTogglePayload(val categoryId: String, val collapsed: Boolean)
 
+/** Whether the app is on screen; a device in the foreground gets no push (docs/android-app.md). */
+@Serializable
+data class AppStatePayload(val foreground: Boolean)
+
 @Serializable
 data class NotificationPreferencesSetPayload(
     val browserEnabled: Boolean? = null,
@@ -244,6 +248,7 @@ object ClientType {
     const val NOTIFICATION_PREFERENCES_GET = "notification.preferences.get"
     const val NOTIFICATION_PREFERENCES_SET = "notification.preferences.set"
     const val NOTIFICATION_DISMISS = "notification.dismiss"
+    const val APP_STATE = "app.state"
     const val PING = "ping"
 }
 
@@ -328,6 +333,7 @@ object Protocol {
         ClientType.NOTIFICATION_PREFERENCES_GET to null,
         ClientType.NOTIFICATION_PREFERENCES_SET to s<NotificationPreferencesSetPayload>(),
         ClientType.NOTIFICATION_DISMISS to s<SessionIdPayload>(),
+        ClientType.APP_STATE to s<AppStatePayload>(),
         ClientType.PING to null,
     )
 

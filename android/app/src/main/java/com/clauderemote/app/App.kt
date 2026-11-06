@@ -12,6 +12,12 @@ import com.clauderemote.app.data.Settings
 import com.clauderemote.app.net.Api
 import com.clauderemote.app.net.Connection
 import com.clauderemote.app.net.ServerAddress
+import com.clauderemote.app.links.Link
+import com.clauderemote.app.protocol.AppStatePayload
+import com.clauderemote.app.protocol.ClientType
+import com.clauderemote.app.protocol.Protocol
+import com.clauderemote.app.push.Notifications
+import com.clauderemote.app.push.PushRegistrar
 import com.clauderemote.app.sessions.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +54,9 @@ class App : Application() {
 
     private var backgroundClose: Job? = null
 
+    /** Where a notification tap or a link asked to go; the screen that handles it clears it. */
+    val pendingLink = MutableStateFlow<Link?>(null)
+
     val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)
@@ -64,6 +73,15 @@ class App : Application() {
         connection = Connection(http, mainScope)
         api = Api(http) { settings.server }
         sessions = SessionStore(connection, settings, mainScope)
+        Notifications.createChannels(this)
+        mainScope.launch {
+            connection.state.collect {
+                if (it is Connection.State.Connected) {
+                    sendAppState()
+                    PushRegistrar.sync(this@App)
+                }
+            }
+        }
         watchLifecycle()
         watchNetwork()
     }
@@ -79,6 +97,7 @@ class App : Application() {
             override fun onStart(owner: LifecycleOwner) {
                 _foreground.value = true
                 backgroundClose?.cancel()
+                sendAppState()
                 if (settings.server == null) return
                 if (connection.state.value is Connection.State.Idle) connectToServer()
                 else connection.reconnectNow()
@@ -86,6 +105,7 @@ class App : Application() {
 
             override fun onStop(owner: LifecycleOwner) {
                 _foreground.value = false
+                sendAppState()
                 // Hold the socket a while for a quick app switch, then let it go: Android
                 // would freeze it anyway, and push covers the time away (f-cr85qn).
                 backgroundClose?.cancel()
@@ -95,6 +115,11 @@ class App : Application() {
                 }
             }
         })
+    }
+
+    /** The server skips push to this device while it is on screen. */
+    private fun sendAppState() {
+        connection.send(ClientType.APP_STATE, Protocol.encode(AppStatePayload(_foreground.value)))
     }
 
     private fun watchNetwork() {

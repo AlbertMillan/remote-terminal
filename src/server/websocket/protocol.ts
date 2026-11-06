@@ -34,6 +34,7 @@ export const CLIENT_MESSAGE_TYPES = [
   'notification.preferences.get',
   'notification.preferences.set',
   'notification.dismiss',
+  'app.state',
   'ping',
 ] as const;
 
@@ -339,6 +340,14 @@ export interface NotificationPreferencesSetPayload {
   visualEnabled?: boolean;
   notifyOnInput?: boolean;
   notifyOnCompleted?: boolean;
+}
+
+/**
+ * The Android app says whether it is on screen. A device in the foreground gets no push
+ * (it shows the event itself); the socket names the device with `/ws?device=<id>`.
+ */
+export interface AppStatePayload {
+  foreground: boolean;
 }
 
 export interface NotificationDismissPayload {

@@ -3,11 +3,13 @@ import type { FastifyRequest } from 'fastify';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
+import { deviceIdFromUrl } from './validation.js';
 import {
   parseMessage,
   createMessage,
   type NotificationPayload,
   type JobsSummaryPayload,
+  type AppStatePayload,
 } from './protocol.js';
 import {
   verifyTailscaleConnection,
@@ -158,6 +160,7 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
     attachedSession: null,
     dataUnsubscribe: null,
     exitUnsubscribe: null,
+    deviceId: deviceIdFromUrl(request.url),
   };
 
   connections.set(clientId, connection);
@@ -307,6 +310,12 @@ function handleMessage(connection: ClientConnection, data: string): void {
     case 'terminal.resize':
       handleTerminalResize(connection, message);
       break;
+
+    case 'app.state': {
+      const payload = message.payload as AppStatePayload | undefined;
+      connection.foreground = payload?.foreground === true;
+      break;
+    }
 
     default:
       connection.ws.send(

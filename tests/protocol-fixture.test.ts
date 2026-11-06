@@ -96,3 +96,20 @@ describe('protocol fixture', () => {
     }
   });
 });
+
+describe('app.state', () => {
+  it('marks a device foreground only while its socket is open and it said so', async () => {
+    const { connections, isDeviceForeground, WS_OPEN } = await import('../src/server/websocket/connections.js');
+    const conn = (id: string, deviceId: string | undefined, foreground: boolean, readyState = WS_OPEN) =>
+      ({ id, deviceId, foreground, ws: { readyState }, identity: null, attachedSession: null, dataUnsubscribe: null, exitUnsubscribe: null }) as never;
+    connections.set('browser', conn('browser', undefined, true));
+    connections.set('phone', conn('phone', 'device-1111', false));
+    expect(isDeviceForeground('device-1111')).toBe(false);
+    connections.set('phone', conn('phone', 'device-1111', true));
+    expect(isDeviceForeground('device-1111')).toBe(true);
+    connections.set('phone', conn('phone', 'device-1111', true, 3));
+    expect(isDeviceForeground('device-1111')).toBe(false);
+    connections.delete('browser');
+    connections.delete('phone');
+  });
+});

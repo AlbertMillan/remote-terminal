@@ -405,6 +405,20 @@ function runMigrations(database: Database.Database): void {
         ALTER TABLE sessions ADD COLUMN access TEXT;
       `,
     },
+    {
+      // Android app installs to push to (docs/android-app.md): the app's random install
+      // id and its current FCM token. A token FCM reports unregistered is deleted.
+      name: '022_push_devices',
+      sql: `
+        CREATE TABLE IF NOT EXISTS push_devices (
+          device_id TEXT PRIMARY KEY,
+          token TEXT NOT NULL,
+          name TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `,
+    },
   ];
 
   const appliedMigrations = database

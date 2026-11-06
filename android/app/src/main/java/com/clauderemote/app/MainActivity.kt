@@ -1,5 +1,6 @@
 package com.clauderemote.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -13,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import com.clauderemote.app.links.Link
 import com.clauderemote.app.net.Api
 import com.clauderemote.app.ui.connect.ConnectScreen
 import com.clauderemote.app.ui.sessions.MainScreen
@@ -25,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) takeLink(intent)
         val bar = SystemBarStyle.dark(Palette.background.toArgb())
         enableEdgeToEdge(statusBarStyle = bar, navigationBarStyle = bar)
         setContent {
@@ -57,5 +60,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        takeLink(intent)
+    }
+
+    /** A notification tap or a claude-remote:// link: the main screen goes there. */
+    private fun takeLink(intent: Intent?) {
+        Link.parse(intent?.dataString)?.let { app.pendingLink.value = it }
     }
 }

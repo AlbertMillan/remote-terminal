@@ -76,6 +76,7 @@
     { "type": "notification.preferences.get", "id": "21" },
     { "type": "notification.preferences.set", "id": "22", "payload": { "notifyOnInput": true } },
     { "type": "notification.dismiss", "payload": { "sessionId": "s-1" } },
+    { "type": "app.state", "payload": { "foreground": true } },
     { "type": "ping", "id": "23" }
   ],
   "server": [

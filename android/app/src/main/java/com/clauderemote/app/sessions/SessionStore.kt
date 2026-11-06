@@ -102,6 +102,12 @@ class SessionStore(
         else _messages.tryEmit("${session.name} can't be revived")
     }
 
+    /** A link or notification named this session: open it the way a tap on its row would. */
+    fun openById(sessionId: String) {
+        val row = _state.value.sessions.firstOrNull { it.id == sessionId }
+        if (row != null) openRow(row) else attach(sessionId, force = true)
+    }
+
     fun create(name: String?, cwd: String?) {
         _pending.value = ""
         connection.send(

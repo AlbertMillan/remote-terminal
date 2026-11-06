@@ -1,6 +1,15 @@
 package com.clauderemote.app.ui.sessions
 
+import android.Manifest
 import android.content.ClipboardManager
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.clauderemote.app.links.Link
+import com.clauderemote.app.push.Notifications
+import com.clauderemote.app.push.PushRegistrar
 import android.content.Context
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
@@ -90,6 +99,27 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
     var menu by remember { mutableStateOf(false) }
 
     LaunchedEffect(store) { store.messages.collect { snackbar.showSnackbar(it) } }
+
+    // Push needs the notification permission (Android 13+); ask once, only when this build has push.
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 && PushRegistrar.firebaseAvailable(app) &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    // A notification tap or a link: open its session once connected (jobs and projects are
+    // taken by their own screens).
+    val link by app.pendingLink.collectAsStateWithLifecycle()
+    val isConnected = connection is Connection.State.Connected
+    LaunchedEffect(link, isConnected, state.loaded) {
+        val target = link
+        if (target is Link.Session && isConnected && state.loaded) {
+            app.pendingLink.value = null
+            store.openById(target.sessionId)
+            Notifications.cancel(context, mapOf("kind" to "session", "sessionId" to target.sessionId))
+        }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Palette.background)) {
         val density = LocalDensity.current

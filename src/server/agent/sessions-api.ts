@@ -1,3 +1,4 @@
+import { pushLandResult } from '../push/wire.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -743,7 +744,10 @@ export const defaultLandDeps: AgentLandDeps = {
       terminateSession: (id) => sessionManager.terminateSession(id),
       removeSessions: removeWorktreeSessions,
     }),
-  notify: broadcastLandResult,
+  notify: (payload) => {
+    broadcastLandResult(payload);
+    pushLandResult(payload);
+  },
 };
 
 export interface AcceptedLand {

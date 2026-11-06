@@ -30,6 +30,18 @@ export interface ClientConnection {
   attachedSession: string | null;
   dataUnsubscribe: (() => void) | null;
   exitUnsubscribe: (() => void) | null;
+  /** The Android app's install id (`/ws?device=`), for push; absent for a browser. */
+  deviceId?: string;
+  /** Set by the app's `app.state`; a device in the foreground gets no push. */
+  foreground?: boolean;
+}
+
+/** Whether that app install is open on screen right now (docs/android-app.md). */
+export function isDeviceForeground(deviceId: string): boolean {
+  for (const conn of connections.values()) {
+    if (conn.deviceId === deviceId && conn.foreground && conn.ws.readyState === WS_OPEN) return true;
+  }
+  return false;
 }
 
 export const connections = new Map<string, ClientConnection>();
