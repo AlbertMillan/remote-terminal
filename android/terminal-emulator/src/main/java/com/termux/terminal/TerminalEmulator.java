@@ -220,8 +220,11 @@ public final class TerminalEmulator {
 
         int oldCursorRow = mCursorRow;
 
-        mMainBuffer.resize(columns, rows, rows + SCROLLBACK_LINES, getStyle(), oldCursorRow);
-        mAltBuffer.resize(columns, rows, rows, getStyle(), oldCursorRow);
+        // claude-remote: the active buffer moves its content up when the cursor would fall
+        // below the new screen; the cursor moves with it.
+        int mainShift = mMainBuffer.resize(columns, rows, rows + SCROLLBACK_LINES, getStyle(), oldCursorRow);
+        int altShift = mAltBuffer.resize(columns, rows, rows, getStyle(), oldCursorRow);
+        mCursorRow -= mUsingAlternateScreen ? altShift : mainShift;
 
         mColumns = columns;
         mRows = rows;

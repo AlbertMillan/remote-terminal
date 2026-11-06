@@ -110,6 +110,7 @@ public final class TerminalBuffer {
             // Fast path: whole-screen scroll.  Rotate the ring buffer.
             mScreenFirstRow = (mScreenFirstRow + 1) % mTotalRows;
             mActiveTranscriptRows = Math.min(mActiveTranscriptRows + 1, mTotalRows - mScreenRows);
+            mScrollCounter++;
             mLines[externalToInternalRow(mScreenRows - 1)] = new TerminalRow(mColumns, style);
         } else {
             // Scroll a sub-region: shift rows up within the region.
@@ -192,31 +193,42 @@ public final class TerminalBuffer {
     // ---- Resize ----
 
     /**
-     * Resize the buffer to new dimensions.  Existing visible content is
-     * preserved as much as possible.
+     * Resize the buffer to new dimensions, keeping the scrollback (claude-remote: the
+     * Termlink fork dropped it, and a phone resizes on every keyboard show/hide).
+     * Rows are not reflowed: a narrower terminal truncates them, a wider one pads.
+     * When the cursor would fall below the new screen, the top screen rows move
+     * into the scrollback so the cursor stays on screen.
      *
      * @param newColumns   new number of columns
      * @param newRows      new visible screen rows
      * @param newTotalRows new total capacity
      * @param style        style for newly created blank cells
      * @param cursorRow    current cursor row (used for content anchoring)
+     * @return how many rows the content moved up; the caller moves its cursor by as much
      */
-    public void resize(int newColumns, int newRows, int newTotalRows, long style, int cursorRow) {
+    public int resize(int newColumns, int newRows, int newTotalRows, long style, int cursorRow) {
+        int shift = Math.max(0, cursorRow - newRows + 1);
+        int maxTranscript = newTotalRows - newRows;
+        int newTranscript = Math.min(mActiveTranscriptRows + shift, maxTranscript);
+
         TerminalRow[] newLines = new TerminalRow[newTotalRows];
-        for (int i = 0; i < newTotalRows; i++) {
-            newLines[i] = new TerminalRow(newColumns, style);
-        }
-
-        // Determine how many rows of existing content to preserve.
-        // Anchor around the cursor: keep rows 0..cursorRow visible.
-        int preserveRows = Math.min(cursorRow + 1, Math.min(mScreenRows, newRows));
-
-        for (int i = 0; i < preserveRows; i++) {
-            TerminalRow oldRow = allocateFullLineIfNecessary(i);
-            int copyCols = Math.min(mColumns, newColumns);
-            for (int col = 0; col < copyCols; col++) {
-                newLines[i].setChar(col, oldRow.getChar(col), oldRow.getStyle(col));
+        for (int newRow = -newTranscript; newRow < newRows; newRow++) {
+            int oldRow = newRow + shift;
+            int index = newRow < 0 ? newTotalRows + newRow : newRow;
+            if (oldRow >= -mActiveTranscriptRows && oldRow < mScreenRows) {
+                TerminalRow old = allocateFullLineIfNecessary(oldRow);
+                if (old.getColumns() == newColumns) {
+                    newLines[index] = old;
+                } else {
+                    TerminalRow copy = new TerminalRow(newColumns, style);
+                    copy.copyInterval(old, 0, 0, Math.min(old.getColumns(), newColumns));
+                    copy.mLineWrap = old.mLineWrap && old.getColumns() <= newColumns;
+                    newLines[index] = copy;
+                }
             }
+        }
+        for (int i = 0; i < newTotalRows; i++) {
+            if (newLines[i] == null) newLines[i] = new TerminalRow(newColumns, style);
         }
 
         mLines = newLines;
@@ -224,8 +236,19 @@ public final class TerminalBuffer {
         mScreenRows = newRows;
         mColumns = newColumns;
         mScreenFirstRow = 0;
-        mActiveTranscriptRows = 0;
+        mActiveTranscriptRows = newTranscript;
+        return shift;
     }
+
+    /**
+     * How many lines have scrolled off the top of the screen since this buffer was made
+     * (claude-remote): a view scrolled into the history keeps its place by this count.
+     */
+    public long getScrollCounter() {
+        return mScrollCounter;
+    }
+
+    private long mScrollCounter = 0;
 
     // ---- Text selection ----
 

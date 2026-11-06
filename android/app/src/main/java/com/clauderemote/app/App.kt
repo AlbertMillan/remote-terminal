@@ -12,6 +12,7 @@ import com.clauderemote.app.data.Settings
 import com.clauderemote.app.net.Api
 import com.clauderemote.app.net.Connection
 import com.clauderemote.app.net.ServerAddress
+import com.clauderemote.app.sessions.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +36,8 @@ class App : Application() {
     lateinit var connection: Connection
         private set
     lateinit var api: Api
+        private set
+    lateinit var sessions: SessionStore
         private set
 
     /** The main-thread scope every connection callback and store update runs on. */
@@ -60,6 +63,7 @@ class App : Application() {
         settings = Settings(this)
         connection = Connection(http, mainScope)
         api = Api(http) { settings.server }
+        sessions = SessionStore(connection, settings, mainScope)
         watchLifecycle()
         watchNetwork()
     }

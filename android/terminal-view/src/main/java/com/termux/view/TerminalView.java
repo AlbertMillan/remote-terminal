@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Forked for Termlink, then for claude-remote: a view over a remote,
- * WebSocket-backed terminal session.
+ * WebSocket-backed terminal session. claude-remote changes: pixel scrolling
+ * with an OverScroller fling, a scroll position that stays on the same text
+ * while output arrives, size and selection callbacks, and a sticky Ctrl that
+ * tells the host when it is used up.
  */
 package com.termux.view;
 
@@ -22,104 +25,71 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.OverScroller;
 
 import com.termux.terminal.ITerminalSession;
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalColors;
 import com.termux.terminal.TerminalEmulator;
 
 import java.util.Arrays;
 
 /**
- * Custom Android {@link View} that displays a terminal emulator session.
- *
- * <p>Responsibilities:</p>
- * <ul>
- *   <li>Renders the terminal buffer via {@link TerminalRenderer}.</li>
- *   <li>Handles touch: tap to focus / show soft keyboard, scroll for scrollback,
- *       long-press to start text selection.</li>
- *   <li>Maps hardware {@link KeyEvent}s to terminal escape sequences via
- *       {@link KeyHandler}.</li>
- *   <li>Provides an {@link InputConnection} so the system soft keyboard can
- *       send text and editing commands to the terminal.</li>
- *   <li>Supports a virtual Ctrl key state so an on-screen extra-keys bar can
- *       send control characters.</li>
- * </ul>
+ * Displays a terminal session: renders it, scrolls its history with native fling
+ * physics, and feeds hardware keys and the soft keyboard to it.
  */
 public class TerminalView extends View {
 
-    // ---------------------------------------------------------------------------
-    // Client callback interface
-    // ---------------------------------------------------------------------------
-
-    /**
-     * Callback interface for events originating from the terminal view that the
-     * hosting Activity or Fragment may want to react to.
-     */
+    /** Events the host reacts to. Every method has a default, so hosts take what they need. */
     public interface TerminalViewClient {
-        /** The visible text in the terminal has changed. */
-        void onTextChanged(ITerminalSession session);
+        /** The grid that fits the view changed (layout, keyboard, text size). */
+        default void onTerminalSizeChanged(int columns, int rows) {}
 
-        /** The terminal title (e.g. set via OSC 0/2) has changed. */
-        void onTitleChanged(ITerminalSession session);
+        /** A long-press selection was made or cleared. */
+        default void onSelectionChanged(boolean hasSelection) {}
 
-        /** The terminal bell (BEL, 0x07) was triggered. */
-        void onBell(ITerminalSession session);
+        /** The sticky Ctrl was used by a key and is off again. */
+        default void onCtrlConsumed() {}
 
-        /** Log an error from the terminal view. */
-        void logError(String tag, String message);
+        /** The view was tapped (the keyboard is being shown). */
+        default void onTapped() {}
 
-        /** Log a warning from the terminal view. */
-        void logWarn(String tag, String message);
+        /** The user scrolled away from the bottom, or back to it. */
+        default void onScrolledToBottomChanged(boolean atBottom) {}
     }
 
-    // ---------------------------------------------------------------------------
-    // Constants
-    // ---------------------------------------------------------------------------
-
-    private static final String TAG = "TerminalView";
-
-    /** Default background colour used when no session is attached. */
     private static final int DEFAULT_BACKGROUND = 0xFF16161E;
-
-    /** Cursor blink interval in milliseconds. */
-    private static final long CURSOR_BLINK_INTERVAL_MS = 500;
-
-    /** Default text size in dp when none is specified. */
-    private static final int DEFAULT_TEXT_SIZE_DP = 14;
-
-    // ---------------------------------------------------------------------------
-    // Fields
-    // ---------------------------------------------------------------------------
+    private static final long CURSOR_BLINK_INTERVAL_MS = 600;
+    private static final int DEFAULT_TEXT_SIZE_DP = 12;
 
     private TerminalRenderer mRenderer;
     private ITerminalSession mSession;
     private TerminalViewClient mClient;
 
     private final GestureDetector mGestureDetector;
+    private final OverScroller mScroller;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
-    /** First visible row in the terminal buffer (0 = current screen, negative = scrollback). */
-    private int mTopRow = 0;
+    /**
+     * Scroll position in pixels: 0 shows the live screen, negative values look into the
+     * history. Row = floor(px / line height), and the remainder is drawn as an offset,
+     * which is what makes a drag follow the finger instead of jumping a line at a time.
+     */
+    private int mScrollPx = 0;
+    /** The buffer's scroll counter when last drawn, so arriving output keeps us in place. */
+    private long mLastScrollCounter = 0;
+    private TerminalEmulator mLastEmulator;
+    private boolean mAtBottom = true;
 
-    // Text selection state
-    private boolean mIsSelectingText = false;
-    private int mSelX1 = -1;
-    private int mSelY1 = -1;
-    private int mSelX2 = -1;
-    private int mSelY2 = -1;
+    private int mSelX1 = -1, mSelY1 = -1, mSelX2 = -1, mSelY2 = -1;
+    private int mSelAnchorCol = -1, mSelAnchorRow = -1;
+    private boolean mSelecting = false;
 
-    // Selection drag tracking
-    private int mSelDragStartCol = -1;
-    private int mSelDragStartRow = -1;
-
-    /** Whether the block cursor is currently in its visible phase. */
     private boolean mCursorBlinkVisible = true;
-
-    /** Virtual Ctrl key state, toggled by an on-screen extra-keys bar. */
     private boolean mCtrlDown = false;
+    private int mLastColumns = -1, mLastRows = -1;
 
-    /** The cursor blink runnable so we can remove it when the view is detached. */
     private final Runnable mCursorBlinkRunnable = new Runnable() {
         @Override
         public void run() {
@@ -128,10 +98,6 @@ public class TerminalView extends View {
             mHandler.postDelayed(this, CURSOR_BLINK_INTERVAL_MS);
         }
     };
-
-    // ---------------------------------------------------------------------------
-    // Constructors
-    // ---------------------------------------------------------------------------
 
     public TerminalView(Context context) {
         this(context, null);
@@ -144,39 +110,17 @@ public class TerminalView extends View {
     public TerminalView(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
         mGestureDetector = new GestureDetector(context, createGestureListener());
-        initView(context, DEFAULT_TEXT_SIZE_DP);
-    }
-
-    /**
-     * Convenience constructor that accepts a custom text size in dp.
-     *
-     * @param context  Android context
-     * @param textSizeDp text size in density-independent pixels
-     */
-    public TerminalView(Context context, int textSizeDp) {
-        super(context);
-        mGestureDetector = new GestureDetector(context, createGestureListener());
-        initView(context, textSizeDp);
-    }
-
-    // ---------------------------------------------------------------------------
-    // Initialisation
-    // ---------------------------------------------------------------------------
-
-    private void initView(Context context, int textSizeDp) {
+        mGestureDetector.setIsLongpressEnabled(true);
+        mScroller = new OverScroller(context);
         setFocusable(true);
         setFocusableInTouchMode(true);
-
-        float density = context.getResources().getDisplayMetrics().density;
-        int textSizePx = Math.round(textSizeDp * density);
-
-        mRenderer = new TerminalRenderer(textSizePx, Typeface.MONOSPACE);
+        setTextSizeDp(DEFAULT_TEXT_SIZE_DP);
     }
 
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        startCursorBlink();
+        restartCursorBlink();
     }
 
     @Override
@@ -185,379 +129,344 @@ public class TerminalView extends View {
         mHandler.removeCallbacks(mCursorBlinkRunnable);
     }
 
-    private void startCursorBlink() {
+    private void restartCursorBlink() {
         mHandler.removeCallbacks(mCursorBlinkRunnable);
         mCursorBlinkVisible = true;
         mHandler.postDelayed(mCursorBlinkRunnable, CURSOR_BLINK_INTERVAL_MS);
     }
 
-    // ---------------------------------------------------------------------------
-    // Session management
-    // ---------------------------------------------------------------------------
+    // ---- Session ----
 
-    /**
-     * Attach a terminal session to this view. The view will begin rendering the
-     * session's emulator buffer and forwarding input to it.
-     *
-     * @param session the session to attach (must not be {@code null})
-     */
     public void attachSession(ITerminalSession session) {
         mSession = session;
-        mTopRow = 0;
+        mScroller.forceFinished(true);
+        mScrollPx = 0;
+        mLastEmulator = null;
         clearSelection();
+        setAtBottom(true);
         invalidate();
     }
 
-    /**
-     * Detach the current session. The view will show a blank background until
-     * a new session is attached.
-     */
     public void detachSession() {
         mSession = null;
         clearSelection();
         invalidate();
     }
 
-    /**
-     * @return the currently attached session, or {@code null}
-     */
     public ITerminalSession getSession() {
         return mSession;
     }
 
-    /**
-     * Set the callback client that receives terminal events.
-     */
     public void setTerminalViewClient(TerminalViewClient client) {
         mClient = client;
     }
 
-    // ---------------------------------------------------------------------------
-    // Ctrl key state (for extra-keys bar)
-    // ---------------------------------------------------------------------------
+    // ---- Sticky Ctrl (keys bar) ----
 
-    /**
-     * Set the virtual Ctrl key state. When {@code true}, the next alphabetic
-     * character committed via the soft keyboard will be converted to the
-     * corresponding control character (e.g. 'c' -> 0x03).
-     */
     public void setCtrlDown(boolean ctrlDown) {
         mCtrlDown = ctrlDown;
     }
 
-    /** @return whether the virtual Ctrl key is currently engaged */
     public boolean isCtrlDown() {
         return mCtrlDown;
     }
 
-    // ---------------------------------------------------------------------------
-    // Geometry
-    // ---------------------------------------------------------------------------
+    private void consumeCtrl() {
+        if (mCtrlDown) {
+            mCtrlDown = false;
+            if (mClient != null) mClient.onCtrlConsumed();
+        }
+    }
 
-    /**
-     * Calculate how many columns fit in the current view width based on the
-     * monospace font metrics.
-     *
-     * @return number of columns, at least 4
-     */
+    // ---- Geometry ----
+
     public int calculateColumns() {
-        if (mRenderer == null || getWidth() == 0) return 80;
-        return Math.max(4, (int) (getWidth() / mRenderer.getFontWidth()));
+        if (getWidth() == 0) return 80;
+        return Math.max(4, (int) ((getWidth() - getPaddingLeft() - getPaddingRight()) / mRenderer.getFontWidth()));
     }
 
-    /**
-     * Calculate how many rows fit in the current view height based on the
-     * font line spacing.
-     *
-     * @return number of rows, at least 4
-     */
     public int calculateRows() {
-        if (mRenderer == null || getHeight() == 0) return 24;
-        return Math.max(4, getHeight() / mRenderer.getFontLineSpacing());
+        if (getHeight() == 0) return 24;
+        return Math.max(4, (getHeight() - getPaddingTop() - getPaddingBottom()) / mRenderer.getFontLineSpacing());
     }
 
-    /**
-     * Update the renderer with a new text size and typeface.
-     *
-     * @param textSizePx text size in pixels
-     * @param typeface   the monospace typeface to use
-     */
+    public void setTextSizeDp(float textSizeDp) {
+        float density = getResources().getDisplayMetrics().density;
+        setTextSize(Math.round(textSizeDp * density), Typeface.MONOSPACE);
+    }
+
     public void setTextSize(int textSizePx, Typeface typeface) {
         mRenderer = new TerminalRenderer(textSizePx, typeface != null ? typeface : Typeface.MONOSPACE);
+        mScrollPx = 0;
+        reportSize();
         invalidate();
     }
 
-    // ---------------------------------------------------------------------------
-    // Drawing
-    // ---------------------------------------------------------------------------
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        reportSize();
+    }
+
+    private void reportSize() {
+        if (getWidth() == 0 || getHeight() == 0) return;
+        int cols = calculateColumns();
+        int rows = calculateRows();
+        if (cols == mLastColumns && rows == mLastRows) return;
+        mLastColumns = cols;
+        mLastRows = rows;
+        if (mClient != null) mClient.onTerminalSizeChanged(cols, rows);
+    }
+
+    // ---- Drawing ----
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (mSession == null) {
-            canvas.drawColor(DEFAULT_BACKGROUND);
-            return;
-        }
-
-        TerminalEmulator emulator = mSession.getEmulator();
+        // drawColor fills the canvas clip, which inside a Compose AndroidView is not this
+        // view's bounds: without this the background paints over the app bar above.
+        canvas.clipRect(0, 0, getWidth(), getHeight());
+        TerminalEmulator emulator = mSession != null ? mSession.getEmulator() : null;
         if (emulator == null) {
             canvas.drawColor(DEFAULT_BACKGROUND);
             return;
         }
-
-        // Fill background
         canvas.drawColor(emulator.getColors().mCurrentColors[TerminalColors.COLOR_INDEX_BACKGROUND]);
 
-        // Render the buffer
-        mRenderer.render(emulator, canvas, mTopRow, mSelY1, mSelX1, mSelY2, mSelX2);
+        final int lineHeight = mRenderer.getFontLineSpacing();
+        TerminalBuffer main = emulator.mMainBuffer;
+        long counter = main.getScrollCounter();
+        if (emulator != mLastEmulator) {
+            mLastEmulator = emulator;
+            mLastScrollCounter = counter;
+        } else if (counter != mLastScrollCounter) {
+            // Output pushed lines into the history: stay on the text being read.
+            if (mScrollPx < 0) mScrollPx -= (int) (counter - mLastScrollCounter) * lineHeight;
+            mLastScrollCounter = counter;
+        }
+        if (emulator.isAlternateBufferActive()) mScrollPx = 0;
+        mScrollPx = clampScroll(mScrollPx);
+
+        int topRow = Math.floorDiv(mScrollPx, lineHeight);
+        int offset = mScrollPx - topRow * lineHeight;
+        canvas.save();
+        canvas.translate(getPaddingLeft(), getPaddingTop());
+        mRenderer.render(emulator, canvas, topRow, offset, mSelY1, mSelX1, mSelY2, mSelX2,
+                mCursorBlinkVisible && mScrollPx == 0);
+        canvas.restore();
+        setAtBottom(mScrollPx == 0);
     }
 
-    /**
-     * Called by the session or an external observer to signal that the terminal
-     * buffer has changed and the view should redraw. Safe to call from any thread.
-     */
+    private int minScroll() {
+        if (mSession == null || mSession.getEmulator() == null) return 0;
+        TerminalEmulator emulator = mSession.getEmulator();
+        if (emulator.isAlternateBufferActive()) return 0;
+        return -emulator.mMainBuffer.getActiveTranscriptRows() * mRenderer.getFontLineSpacing();
+    }
+
+    private int clampScroll(int px) {
+        return Math.max(minScroll(), Math.min(0, px));
+    }
+
+    /** Safe to call from any thread: the buffer changed. */
     public void onScreenUpdated() {
-        postInvalidate();
+        postInvalidateOnAnimation();
     }
 
-    // ---------------------------------------------------------------------------
-    // Touch handling
-    // ---------------------------------------------------------------------------
+    @Override
+    public void computeScroll() {
+        if (mScroller.computeScrollOffset()) {
+            mScrollPx = clampScroll(mScroller.getCurrY());
+            postInvalidateOnAnimation();
+        }
+    }
+
+    private void setAtBottom(boolean atBottom) {
+        if (atBottom != mAtBottom) {
+            mAtBottom = atBottom;
+            if (mClient != null) mClient.onScrolledToBottomChanged(atBottom);
+        }
+    }
+
+    // ---- Touch ----
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Handle selection drag
-        if (mIsSelectingText && event.getAction() == MotionEvent.ACTION_MOVE) {
-            int col = (int) (event.getX() / mRenderer.getFontWidth());
-            int row = mTopRow + (int) (event.getY() / mRenderer.getFontLineSpacing());
-            updateSelectionEnd(row, col);
-            invalidate();
-            return true;
+        if (mSelecting) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_MOVE) {
+                updateSelectionEnd(rowAt(event.getY()), colAt(event.getX()));
+                invalidate();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                mSelecting = false;
+                if (mClient != null) mClient.onSelectionChanged(true);
+                return true;
+            }
         }
-
-        if (mIsSelectingText && event.getAction() == MotionEvent.ACTION_UP) {
-            // Selection complete -- the selected text can be retrieved via getSelectedText()
-            mIsSelectingText = false;
-            return true;
+        boolean handled = mGestureDetector.onTouchEvent(event);
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && getParent() != null) {
+            // Scrolling the terminal must not be stolen by an enclosing scroll container.
+            getParent().requestDisallowInterceptTouchEvent(true);
         }
+        return handled || super.onTouchEvent(event);
+    }
 
-        return mGestureDetector.onTouchEvent(event) || super.onTouchEvent(event);
+    private int colAt(float x) {
+        return Math.max(0, (int) ((x - getPaddingLeft()) / mRenderer.getFontWidth()));
+    }
+
+    private int rowAt(float y) {
+        return Math.floorDiv(mScrollPx + (int) (y - getPaddingTop()), mRenderer.getFontLineSpacing());
     }
 
     private GestureDetector.SimpleOnGestureListener createGestureListener() {
         return new GestureDetector.SimpleOnGestureListener() {
-
             @Override
             public boolean onDown(MotionEvent e) {
-                // Must return true to receive subsequent events.
+                mScroller.forceFinished(true);
                 return true;
             }
 
             @Override
             public boolean onSingleTapUp(MotionEvent e) {
-                if (mIsSelectingText) {
+                if (hasSelection()) {
                     clearSelection();
+                    if (mClient != null) mClient.onSelectionChanged(false);
                     invalidate();
                     return true;
                 }
                 requestFocus();
                 showSoftKeyboard();
-                // Scroll to bottom on tap so the user sees the latest output.
-                mTopRow = 0;
+                if (mClient != null) mClient.onTapped();
+                return true;
+            }
+
+            @Override
+            public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+                if (mSession == null) return false;
+                mScrollPx = clampScroll(mScrollPx + Math.round(distanceY));
                 invalidate();
                 return true;
             }
 
             @Override
-            public boolean onScroll(MotionEvent e1, MotionEvent e2,
-                                    float distanceX, float distanceY) {
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
                 if (mSession == null) return false;
-
-                int rowDelta = (int) (distanceY / mRenderer.getFontLineSpacing());
-                if (rowDelta != 0) {
-                    scrollByRows(-rowDelta);
-                }
-                return true;
-            }
-
-            @Override
-            public boolean onFling(MotionEvent e1, MotionEvent e2,
-                                   float velocityX, float velocityY) {
-                if (mSession == null) return false;
-
-                // Coarse fling: convert velocity to a row count.
-                int rowDelta = (int) (velocityY / mRenderer.getFontLineSpacing() / 4);
-                if (rowDelta != 0) {
-                    scrollByRows(rowDelta);
-                }
+                mScroller.forceFinished(true);
+                mScroller.fling(0, mScrollPx, 0, Math.round(-velocityY), 0, 0, minScroll(), 0);
+                postInvalidateOnAnimation();
                 return true;
             }
 
             @Override
             public void onLongPress(MotionEvent e) {
-                // Begin text selection at the touched position.
-                int col = (int) (e.getX() / mRenderer.getFontWidth());
-                int row = mTopRow + (int) (e.getY() / mRenderer.getFontLineSpacing());
-
-                mIsSelectingText = true;
-                mSelDragStartCol = col;
-                mSelDragStartRow = row;
-                mSelX1 = col;
-                mSelY1 = row;
-                mSelX2 = col;
-                mSelY2 = row;
-
+                int col = colAt(e.getX());
+                int row = rowAt(e.getY());
+                mSelecting = true;
+                mSelAnchorCol = col;
+                mSelAnchorRow = row;
+                mSelX1 = mSelX2 = col;
+                mSelY1 = mSelY2 = row;
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
                 invalidate();
             }
         };
     }
 
-    /**
-     * Scroll the viewport by the given number of rows. Positive values scroll
-     * toward the bottom (newer output), negative values scroll into the
-     * scrollback history.
-     */
-    private void scrollByRows(int delta) {
-        if (mSession == null) return;
-        int maxScroll = mSession.getEmulator().mMainBuffer.getActiveTranscriptRows();
-        mTopRow = Math.max(-maxScroll, Math.min(0, mTopRow + delta));
+    // ---- Selection ----
+
+    private void updateSelectionEnd(int row, int col) {
+        if (row < mSelAnchorRow || (row == mSelAnchorRow && col < mSelAnchorCol)) {
+            mSelY1 = row; mSelX1 = col; mSelY2 = mSelAnchorRow; mSelX2 = mSelAnchorCol;
+        } else {
+            mSelY1 = mSelAnchorRow; mSelX1 = mSelAnchorCol; mSelY2 = row; mSelX2 = col;
+        }
+    }
+
+    public boolean hasSelection() {
+        return mSelY1 >= 0;
+    }
+
+    /** The selected text, or null when nothing is selected. */
+    public String getSelectedText() {
+        if (!hasSelection() || mSession == null || mSession.getEmulator() == null) return null;
+        TerminalEmulator emulator = mSession.getEmulator();
+        int maxCol = emulator.getColumns() - 1;
+        return emulator.getScreen().getSelectedText(
+                Math.min(mSelX1, maxCol), mSelY1, Math.min(mSelX2, maxCol), mSelY2);
+    }
+
+    public void clearSelection() {
+        mSelecting = false;
+        mSelX1 = mSelY1 = mSelX2 = mSelY2 = -1;
+        mSelAnchorCol = mSelAnchorRow = -1;
         invalidate();
     }
 
-    // ---------------------------------------------------------------------------
-    // Text selection
-    // ---------------------------------------------------------------------------
-
-    private void updateSelectionEnd(int row, int col) {
-        // Always keep sel1 <= sel2 in document order.
-        if (row < mSelDragStartRow || (row == mSelDragStartRow && col < mSelDragStartCol)) {
-            mSelY1 = row;
-            mSelX1 = col;
-            mSelY2 = mSelDragStartRow;
-            mSelX2 = mSelDragStartCol;
-        } else {
-            mSelY1 = mSelDragStartRow;
-            mSelX1 = mSelDragStartCol;
-            mSelY2 = row;
-            mSelX2 = col;
-        }
-    }
-
-    /**
-     * Return the text currently selected on screen, or {@code null} if nothing
-     * is selected.
-     */
-    public String getSelectedText() {
-        if (mSelY1 < 0 || mSession == null) return null;
-
-        TerminalEmulator emulator = mSession.getEmulator();
-        if (emulator == null) return null;
-
-        StringBuilder sb = new StringBuilder();
-        for (int row = mSelY1; row <= mSelY2; row++) {
-            int startCol = (row == mSelY1) ? mSelX1 : 0;
-            int endCol = (row == mSelY2) ? mSelX2 : emulator.getColumns() - 1;
-
-            for (int col = startCol; col <= endCol; col++) {
-                char c = emulator.mMainBuffer.allocateFullLineIfNecessary(row).getChar(col);
-                if (c != 0) {
-                    sb.append(c);
-                }
-            }
-            if (row < mSelY2) {
-                sb.append('\n');
-            }
-        }
-        return sb.toString();
-    }
-
-    /** Clear the current text selection. */
-    public void clearSelection() {
-        mIsSelectingText = false;
-        mSelX1 = -1;
-        mSelY1 = -1;
-        mSelX2 = -1;
-        mSelY2 = -1;
-        mSelDragStartCol = -1;
-        mSelDragStartRow = -1;
-    }
-
-    /** @return {@code true} if text is currently being selected or is selected */
-    public boolean isSelectingText() {
-        return mIsSelectingText || mSelY1 >= 0;
-    }
-
-    // ---------------------------------------------------------------------------
-    // Keyboard / key event handling
-    // ---------------------------------------------------------------------------
+    // ---- Keys ----
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (mSession == null || !mSession.isRunning()) {
-            return super.onKeyDown(keyCode, event);
-        }
-
-        // Clear selection on any key press.
-        if (isSelectingText()) {
-            clearSelection();
-            invalidate();
-        }
+        if (mSession == null || !mSession.isRunning()) return super.onKeyDown(keyCode, event);
+        if (keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyDown(keyCode, event);
 
         TerminalEmulator emulator = mSession.getEmulator();
-
-        // Build modifier flags compatible with KeyHandler.
         int modifiers = 0;
         if (event.isCtrlPressed() || mCtrlDown) modifiers |= KeyHandler.KEYMOD_CTRL;
         if (event.isAltPressed()) modifiers |= KeyHandler.KEYMOD_ALT;
         if (event.isShiftPressed()) modifiers |= KeyHandler.KEYMOD_SHIFT;
 
         String code = KeyHandler.getCode(keyCode, modifiers,
-                emulator.isCursorKeysApplication(),
-                emulator.isKeypadApplication());
-
+                emulator.isCursorKeysApplication(), emulator.isKeypadApplication());
         if (code != null) {
             mSession.write(code);
-            // Consume the Ctrl state if it was virtual.
-            mCtrlDown = false;
+            consumeCtrl();
             scrollToBottom();
             return true;
         }
 
-        // Let printable characters through to the InputConnection path.
-        int unicodeChar = event.getUnicodeChar(
-                (event.isShiftPressed() ? KeyEvent.META_SHIFT_ON : 0)
-                        | (mCtrlDown ? KeyEvent.META_CTRL_ON : 0));
-
+        int unicodeChar = event.getUnicodeChar(event.isShiftPressed() ? KeyEvent.META_SHIFT_ON : 0);
         if (unicodeChar > 0) {
-            if (mCtrlDown) {
-                // Ctrl + printable character: generate control code.
-                char c = (char) unicodeChar;
-                if (c >= 'a' && c <= 'z') {
-                    mSession.write(new byte[]{(byte) (c - 'a' + 1)}, 0, 1);
-                } else if (c >= 'A' && c <= 'Z') {
-                    mSession.write(new byte[]{(byte) (c - 'A' + 1)}, 0, 1);
-                } else {
-                    mSession.write(String.valueOf(c));
-                }
-                mCtrlDown = false;
-            } else {
-                mSession.write(String.valueOf((char) unicodeChar));
-            }
-            scrollToBottom();
+            if (event.isCtrlPressed()) mCtrlDown = true;
+            writeText(new String(Character.toChars(unicodeChar)), event.isAltPressed());
             return true;
         }
-
         return super.onKeyDown(keyCode, event);
     }
 
-    @Override
-    public boolean onKeyUp(int keyCode, KeyEvent event) {
-        // Nothing special needed on key up; let the system handle it.
-        return super.onKeyUp(keyCode, event);
+    /** Text from a key or the IME, with the sticky Ctrl applied to a single character. */
+    private void writeText(String text, boolean alt) {
+        if (mSession == null) return;
+        if (mCtrlDown && text.length() == 1) {
+            byte control = controlByte(text.charAt(0));
+            if (control >= 0) {
+                mSession.write(new byte[]{control}, 0, 1);
+            } else {
+                mSession.write(text);
+            }
+            consumeCtrl();
+        } else {
+            mSession.write(alt ? "\033" + text : text);
+        }
+        scrollToBottom();
     }
 
-    // ---------------------------------------------------------------------------
-    // InputConnection (soft keyboard integration)
-    // ---------------------------------------------------------------------------
+    /** Ctrl+letter and the punctuation terminals map (Ctrl+[ is Esc, Ctrl+Space NUL); -1 for none. */
+    public static byte controlByte(char c) {
+        if (c >= 'a' && c <= 'z') return (byte) (c - 'a' + 1);
+        if (c >= 'A' && c <= 'Z') return (byte) (c - 'A' + 1);
+        switch (c) {
+            case ' ': case '2': case '@': return 0;
+            case '[': case '3': return 27;
+            case '\\': case '4': return 28;
+            case ']': case '5': return 29;
+            case '^': case '6': return 30;
+            case '_': case '7': case '/': return 31;
+            case '8': case '?': return 127;
+            default: return -1;
+        }
+    }
 
     @Override
     public boolean onCheckIsTextEditor() {
@@ -566,71 +475,39 @@ public class TerminalView extends View {
 
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        // TYPE_NULL tells the IME that we handle raw key events ourselves.
+        // TYPE_NULL: the keyboard sends key events and plain commits, never a composing
+        // region a terminal cannot edit, and offers no autocorrect.
         outAttrs.inputType = InputType.TYPE_NULL;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI;
 
         return new BaseInputConnection(this, false) {
-
             @Override
             public boolean commitText(CharSequence text, int newCursorPosition) {
-                if (mSession == null) return false;
-
-                String textStr = text.toString();
-
-                if (mCtrlDown && textStr.length() == 1) {
-                    char c = textStr.charAt(0);
-                    if (c >= 'a' && c <= 'z') {
-                        mSession.write(new byte[]{(byte) (c - 'a' + 1)}, 0, 1);
-                    } else if (c >= 'A' && c <= 'Z') {
-                        mSession.write(new byte[]{(byte) (c - 'A' + 1)}, 0, 1);
-                    } else {
-                        // Non-alphabetic with Ctrl: send as-is.
-                        mSession.write(textStr);
-                    }
-                    mCtrlDown = false;
-                } else {
-                    mSession.write(textStr);
-                }
-
-                scrollToBottom();
+                writeText(text.toString().replace('\n', '\r'), false);
                 return true;
             }
 
             @Override
             public boolean deleteSurroundingText(int beforeLength, int afterLength) {
                 if (mSession == null) return false;
-
-                // Send DEL (0x7F) for each character to delete before the cursor.
                 if (beforeLength > 0) {
                     byte[] del = new byte[beforeLength];
                     Arrays.fill(del, (byte) 0x7F);
                     mSession.write(del, 0, del.length);
                 }
-
-                // Forward delete is unusual in terminals but we map it to the
-                // ANSI escape for the Delete key.
-                if (afterLength > 0) {
-                    for (int i = 0; i < afterLength; i++) {
-                        mSession.write("\033[3~");
-                    }
-                }
-
+                for (int i = 0; i < afterLength; i++) mSession.write("\033[3~");
                 scrollToBottom();
                 return true;
             }
 
             @Override
             public boolean sendKeyEvent(KeyEvent event) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    return onKeyDown(event.getKeyCode(), event);
-                }
-                return false;
+                if (event.getAction() == KeyEvent.ACTION_DOWN) return onKeyDown(event.getKeyCode(), event);
+                return true;
             }
 
             @Override
             public boolean performEditorAction(int actionCode) {
-                // IME "Done" / "Go" / "Enter" button -> send newline.
                 if (mSession != null) {
                     mSession.write("\r");
                     scrollToBottom();
@@ -640,48 +517,29 @@ public class TerminalView extends View {
         };
     }
 
-    // ---------------------------------------------------------------------------
-    // Soft keyboard visibility
-    // ---------------------------------------------------------------------------
-
-    /** Request the system to show the soft keyboard for this view. */
     public void showSoftKeyboard() {
-        InputMethodManager imm = (InputMethodManager)
-                getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            imm.showSoftInput(this, 0);
-        }
+        requestFocus();
+        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(this, 0);
     }
 
-    /** Request the system to hide the soft keyboard. */
     public void hideSoftKeyboard() {
-        InputMethodManager imm = (InputMethodManager)
-                getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            imm.hideSoftInputFromWindow(getWindowToken(), 0);
-        }
+        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(getWindowToken(), 0);
     }
 
-    // ---------------------------------------------------------------------------
-    // Scrolling helpers
-    // ---------------------------------------------------------------------------
+    // ---- Scrolling ----
 
-    /** Scroll the viewport so that the latest output is visible. */
     public void scrollToBottom() {
-        if (mTopRow != 0) {
-            mTopRow = 0;
+        mScroller.forceFinished(true);
+        if (mScrollPx != 0) {
+            mScrollPx = 0;
             invalidate();
         }
+        restartCursorBlink();
     }
 
-    /** @return the current top-row offset (negative = in scrollback) */
-    public int getTopRow() {
-        return mTopRow;
-    }
-
-    /** Set the top-row offset directly. */
-    public void setTopRow(int topRow) {
-        mTopRow = topRow;
-        invalidate();
+    public boolean isAtBottom() {
+        return mScrollPx == 0;
     }
 }
