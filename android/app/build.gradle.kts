@@ -25,7 +25,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 and resource shrinking: Compose is markedly smoother minified, which is the
+            // build to judge scrolling by (docs/android-app.md).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Sideloaded and built on this PC: sign the release with the debug key.
             signingConfig = signingConfigs.getByName("debug")
         }

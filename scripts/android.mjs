@@ -1,6 +1,6 @@
 // Build, test and install the Android app (android/) without Android Studio open.
-// `node scripts/android.mjs <build|test|install|gradle> [extra gradle args]`, exposed as
-// `npm run android:build` / `android:test` / `android:install`. Windows-native: the PATH
+// `node scripts/android.mjs <build|test|install|release|install-release|gradle> [gradle args]`,
+// exposed as `npm run android:build` / `android:test` / `android:install` / `android:release`. Windows-native: the PATH
 // `java` on this PC is 1.8, which Gradle refuses, so this finds Android Studio's bundled
 // JDK and the SDK itself, writes android/local.properties, and runs gradlew.bat.
 // docs/android-app.md
@@ -18,6 +18,9 @@ const TASKS = {
   build: ['assembleDebug'],
   test: ['testDebugUnitTest'],
   install: ['installDebug'],
+  // Minified (R8): the build to judge smoothness by. Signed with the local debug key.
+  release: ['assembleRelease'],
+  'install-release': ['installRelease'],
   gradle: [],
 };
 
@@ -106,8 +109,9 @@ async function main() {
   };
   console.log(`android: JDK ${jdk}\nandroid: SDK ${sdk}`);
   const code = await run([...TASKS[command], ...extra], env);
-  if (code === 0 && command === 'build') {
-    console.log(`android: APK at ${join(androidDir, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')}`);
+  if (code === 0 && (command === 'build' || command === 'release')) {
+    const variant = command === 'build' ? 'debug' : 'release';
+    console.log(`android: APK at ${join(androidDir, 'app', 'build', 'outputs', 'apk', variant, `app-${variant}.apk`)}`);
   }
   process.exit(code);
 }

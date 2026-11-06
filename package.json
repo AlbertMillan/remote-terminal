@@ -16,7 +16,8 @@
     "install-skill": "node scripts/install-skill.mjs",
     "android:build": "node scripts/android.mjs build",
     "android:test": "node scripts/android.mjs test",
-    "android:install": "node scripts/android.mjs install"
+    "android:install": "node scripts/android.mjs install",
+    "android:release": "node scripts/android.mjs release"
   },
   "keywords": [
     "terminal",
