@@ -381,13 +381,11 @@ export class SessionListView {
     const escapedSessionId = escapeAttr(session.id);
     const escapedStatus = escapeHtml(session.status);
 
-    // A stale row is a session whose PTY died with the server -- it outlived its process and
-    // can be brought back. Forks cannot: their transcript is unlinked at boot, so there would
-    // be nothing to resume. Both the "(stale)" label and the button derive from this one
-    // expression so they can never disagree about what stale means.
+    // A stale row is a session whose PTY died with the server -- it outlived its process.
+    // Whether a row can be revived (stale ones, and exited ones with a conversation) is the
+    // server's call: `revivable` comes from the same rule reviveSession() enforces.
     const isStale = !session.attachable && session.status !== 'terminated';
-    const canRevive = isStale && !session.isFork;
-    const reviveHtml = canRevive
+    const reviveHtml = session.revivable
       ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedSessionId}">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="5 3 19 12 5 21 5 3"></polygon>

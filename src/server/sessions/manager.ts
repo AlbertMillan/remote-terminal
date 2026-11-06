@@ -48,6 +48,8 @@ class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
   private dataListeners: Map<string, Set<(data: string) => void>> = new Map();
   private exitListeners: Map<string, Set<(code: number) => void>> = new Map();
+  /** Told after any session's shell exits on its own and its row is marked 'terminated'. */
+  private anyExitListeners: Set<(id: string) => void> = new Set();
   private scrollbackBuffers: Map<string, ScrollbackBuffer> = new Map();
   private touchDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private idleCheckInterval: NodeJS.Timeout | null = null;
@@ -426,6 +428,18 @@ class SessionManager {
     };
   }
 
+  /**
+   * Called with the id of every session whose shell exits on its own, after its row is
+   * marked 'terminated'. The sidebar learns that way that the row may now be revived;
+   * `onExit` reaches only the browsers attached to that one session.
+   */
+  onAnyExit(listener: (id: string) => void): () => void {
+    this.anyExitListeners.add(listener);
+    return () => {
+      this.anyExitListeners.delete(listener);
+    };
+  }
+
   onExit(id: string, listener: (code: number) => void): () => void {
     if (!this.exitListeners.has(id)) {
       this.exitListeners.set(id, new Set());
@@ -517,6 +531,13 @@ class SessionManager {
       session.status = 'terminated';
       updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
       logSessionEvent(id, 'exited', String(exitCode));
+      for (const listener of this.anyExitListeners) {
+        try {
+          listener(id);
+        } catch (err) {
+          logger.warn({ id, err }, 'Session exit listener failed');
+        }
+      }
 
       // Persist scrollback on Windows
       const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];

@@ -648,6 +648,9 @@ class SessionManager {
       case 'session.added':
         this.handleSessionAdded(message.payload);
         break;
+      case 'session.updated':
+        this.handleSessionUpdated(message.payload);
+        break;
       case 'session.attached':
         this.handleSessionAttached(message.payload);
         break;
@@ -811,6 +814,14 @@ class SessionManager {
 
   /** A session the server started on its own (a main session's agent did): list it, never attach. */
   private handleSessionAdded(payload: { session: SessionInfo }): void {
+    this.sessions.set(payload.session.id, payload.session);
+    this.renderSessionList();
+    this.syncPip();
+  }
+
+  /** A row changed server-side (its shell exited): refresh it in place, never attach. */
+  private handleSessionUpdated(payload: { session: SessionInfo }): void {
+    if (!this.sessions.has(payload.session.id)) return;
     this.sessions.set(payload.session.id, payload.session);
     this.renderSessionList();
     this.syncPip();

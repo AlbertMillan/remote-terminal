@@ -35,6 +35,7 @@ export type ServerMessageType =
   | 'auth.failure'
   | 'session.created'
   | 'session.added'
+  | 'session.updated'
   | 'session.attached'
   | 'session.detached'
   | 'session.terminated'
@@ -197,6 +198,9 @@ export interface SessionInfo {
   account: string;
   /** Why its account no longer holds the expected login (account-watch.ts), or null. */
   accountWarning: string | null;
+  /** The sidebar's play button: `reviveRefusal()` (sessions/revivable.ts) found nothing
+   *  against reviving it. Computed here so the client never re-derives the server's rules. */
+  revivable: boolean;
 }
 
 /** Every session with a running Claude, by session id → Claude's name; sent on change. */

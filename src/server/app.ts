@@ -20,7 +20,7 @@ import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
 import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-registry.js';
-import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames } from './websocket/connections.js';
+import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames, broadcastSessionRow } from './websocket/connections.js';
 import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
@@ -89,6 +89,8 @@ export async function createApp(): Promise<FastifyInstance> {
   startUsageLedger();
   // Claude's own name for each running conversation, for the sidebar.
   startClaudeNameWatch(() => sessionManager.getSessionList(), broadcastClaudeNames);
+  // A shell that exits on its own may now be revivable: refresh that row in every sidebar.
+  sessionManager.onAnyExit(broadcastSessionRow);
   startAccountWatch(
     () => sessionManager.getRunningSessions(),
     broadcastAccountWarnings,

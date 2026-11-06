@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
  * reviveSession() brings a stale session — a DB row that outlived its PTY when the server
@@ -8,12 +8,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  * than silently producing a broken session.
  */
 
-const ptys: Array<{ pid: number; write: ReturnType<typeof vi.fn> }> = [];
+const ptys: Array<{ pid: number; write: ReturnType<typeof vi.fn>; exit?: (e: { exitCode: number }) => void }> = [];
 let ptySpawnError: Error | null = null;
 
 const createPty = vi.fn(() => {
   if (ptySpawnError) throw ptySpawnError;
-  const pty = {
+  const pty: (typeof ptys)[number] & Record<string, unknown> = {
     pid: 1000 + ptys.length,
     write: vi.fn(),
     resize: vi.fn(),
@@ -24,7 +24,11 @@ const createPty = vi.fn(() => {
       setTimeout(() => cb('$ '), 0);
       return { dispose: vi.fn() };
     }),
-    onExit: vi.fn(() => ({ dispose: vi.fn() })),
+    // Kept so a test can make the shell exit while the server runs.
+    onExit: vi.fn((cb: (e: { exitCode: number }) => void) => {
+      pty.exit = cb;
+      return { dispose: vi.fn() };
+    }),
   };
   ptys.push(pty);
   return pty;
@@ -33,9 +37,14 @@ const createPty = vi.fn(() => {
 const writeToPty = vi.fn();
 
 // Preflight reads the account's real login; these tests launch nothing real.
+// A terminated row is revived only while its transcript exists; none does unless a test says so.
+const findTranscript = vi.fn(
+  (_cwd: string, _id: string, _account?: string | null): { path: string; account: string } | null => null
+);
 vi.mock('../src/server/accounts.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/server/accounts.js')>()),
   assertAccountReady: vi.fn(),
+  findTranscript: (cwd: string, id: string, account?: string | null) => findTranscript(cwd, id, account),
 }));
 // Which project a worktree belongs to is read from the DB, which these tests don't open.
 vi.mock('../src/server/projects/worktree-owner.js', () => ({
@@ -67,6 +76,7 @@ const insertSession = vi.fn();
 const launchProfileForTranscript = vi.fn(
   (_id: string): { permissionMode: string | null; mcpServers: string[]; access?: string | null } | null => null
 );
+const countActiveSessions = vi.fn(() => rows.size);
 
 vi.mock('../src/server/db/queries.js', () => ({
   insertSession: (...args: unknown[]) => insertSession(...(args as [])),
@@ -76,7 +86,7 @@ vi.mock('../src/server/db/queries.js', () => ({
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),
   getSession: vi.fn((id: string) => rows.get(id) ?? null),
-  countActiveSessions: vi.fn(() => rows.size),
+  countActiveSessions: () => countActiveSessions(),
   logSessionEvent: (...args: unknown[]) => logSessionEvent(...(args as [])),
   getMaxSessionSortOrder: vi.fn(() => 0),
   clearForkFlag: vi.fn(),
@@ -162,6 +172,8 @@ beforeEach(() => {
   ptySpawnError = null;
   rows.clear();
   restoreScrollbackRaw.mockReturnValue('');
+  // clearAllMocks keeps a mockReturnValue, which would leak a found transcript into later tests.
+  findTranscript.mockReturnValue(null);
   updateSession.mockImplementation((id: string, patch: Record<string, unknown>) => {
     const row = rows.get(id);
     if (row) Object.assign(row, patch);
@@ -309,10 +321,11 @@ describe('reviveSession — refusals', () => {
     expect(ptys).toHaveLength(1);
   });
 
-  it('refuses a terminated session', () => {
+  it('refuses a terminated plain shell, which has no conversation to resume', () => {
     rows.set(STALE_ID, staleRow({ status: 'terminated' }));
 
     expect(() => manager.reviveSession({ id: STALE_ID })).toThrow(/terminated/i);
+    expect(createPty).not.toHaveBeenCalled();
   });
 
   it('refuses a fork, whose transcript is unlinked at boot', () => {
@@ -355,6 +368,117 @@ describe('reviveSession — refusals', () => {
     }
 
     expect(() => manager.reviveSession({ id: '00000003-1111-4111-8111-111111111111' })).not.toThrow();
+  });
+});
+
+describe('reviveSession — a terminated conversation', () => {
+  // A Windows reboot kills every shell while the server still runs, so handleSessionExit
+  // writes 'terminated' before shutdown() could park the row 'idle'. The transcript is intact.
+  beforeEach(() => {
+    findTranscript.mockReturnValue({ path: `/t/${CLAUDE_ID}.jsonl`, account: 'personal' });
+  });
+
+  it('resumes it in place, like a stale row', async () => {
+    rows.set(STALE_ID, staleRow({ status: 'terminated', claudeSessionId: CLAUDE_ID }));
+
+    const session = manager.reviveSession({ id: STALE_ID });
+
+    expect(session.id).toBe(STALE_ID);
+    expect(rows.get(STALE_ID)?.status).toBe('active');
+    await vi.waitFor(() => expect(writeToPty).toHaveBeenCalled(), { timeout: 2000 });
+    expect(writeToPty.mock.calls[0][1]).toContain(`--resume ${CLAUDE_ID}`);
+  });
+
+  it('takes a slot, since a terminated row is not counted toward maxSessions', () => {
+    rows.set(STALE_ID, staleRow({ status: 'terminated', claudeSessionId: CLAUDE_ID }));
+    countActiveSessions.mockReturnValueOnce(10);
+
+    expect(() => manager.reviveSession({ id: STALE_ID })).toThrow(/maximum session limit/i);
+    expect(createPty).not.toHaveBeenCalled();
+  });
+
+  it('refuses one whose transcript Claude Code has since deleted', () => {
+    rows.set(STALE_ID, staleRow({ status: 'terminated', claudeSessionId: CLAUDE_ID }));
+    findTranscript.mockReturnValue(null);
+
+    // Otherwise: a live shell holding a slot, with a failed `claude --resume` in it.
+    expect(() => manager.reviveSession({ id: STALE_ID })).toThrow(/transcript no longer exists/i);
+    expect(createPty).not.toHaveBeenCalled();
+    expect(findTranscript).toHaveBeenCalledWith('/home/albert/NodeProjects/claude-remote', CLAUDE_ID, 'personal');
+  });
+});
+
+describe('reviveSession — a shell that exited while the server ran', () => {
+  beforeEach(() => {
+    findTranscript.mockReturnValue({ path: `/t/${CLAUDE_ID}.jsonl`, account: 'personal' });
+  });
+  // Each revive here types `claude --resume` ~100ms later (injectCommand's debounce); let it
+  // land now, or it shows up as the next test's first writeToPty call.
+  afterEach(() => new Promise((resolve) => setTimeout(resolve, 250)));
+
+  function exitedSession() {
+    rows.set(STALE_ID, staleRow({ claudeSessionId: CLAUDE_ID }));
+    manager.reviveSession({ id: STALE_ID });
+    const [first] = ptys;
+    first.exit?.({ exitCode: 0 });
+    return first;
+  }
+
+  it('replaces it in place instead of refusing it as running', () => {
+    exitedSession();
+    expect(rows.get(STALE_ID)?.status).toBe('terminated');
+    expect(manager.getSession(STALE_ID)?.status).toBe('terminated');
+
+    const revived = manager.reviveSession({ id: STALE_ID });
+
+    expect(ptys).toHaveLength(2);
+    expect(manager.getSession(STALE_ID)).toBe(revived);
+    expect(revived.status).toBe('active');
+    expect(rows.get(STALE_ID)?.status).toBe('active');
+  });
+
+  it('keeps its in-memory scrollback, which only Windows persists at exit', () => {
+    const pty = exitedSession();
+    // Output written through the first PTY's onData before it exited.
+    const onData = (pty as unknown as { onData: ReturnType<typeof vi.fn> }).onData;
+    onData.mock.calls[0][0]('line from before exit\n');
+
+    manager.reviveSession({ id: STALE_ID });
+
+    expect(manager.getScrollback(STALE_ID)).toContain('line from before exit');
+    // Read from memory, not the DB: only the first revive (of the stale row) reached for it.
+    expect(restoreScrollbackRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the browsers attached to it, which then see the new shell', () => {
+    exitedSession();
+    const seen: string[] = [];
+    manager.onData(STALE_ID, (d) => seen.push(d));
+    manager.addClient(STALE_ID, 'client-1');
+
+    const revived = manager.reviveSession({ id: STALE_ID });
+    const onData = (ptys[1] as unknown as { onData: ReturnType<typeof vi.fn> }).onData;
+    onData.mock.calls[0][0]('fresh output');
+
+    expect(seen).toContain('fresh output');
+    expect(revived.connectedClients.has('client-1')).toBe(true);
+  });
+
+  it('tells onAnyExit listeners, so every sidebar can show the play button', () => {
+    const exited: string[] = [];
+    manager.onAnyExit((id) => exited.push(id));
+
+    exitedSession();
+
+    expect(exited).toEqual([STALE_ID]);
+  });
+
+  it('still refuses an exited plain shell, which has nothing to resume', () => {
+    rows.set(STALE_ID, staleRow());
+    manager.reviveSession({ id: STALE_ID });
+    ptys[0].exit?.({ exitCode: 0 });
+
+    expect(() => manager.reviveSession({ id: STALE_ID })).toThrow(/no conversation/i);
   });
 });
 

@@ -35,6 +35,9 @@ export interface SessionInfo {
   account?: string;
   /** Why its account no longer holds the expected login, or null. Kept current by `session.accountWarnings`. */
   accountWarning?: string | null;
+  /** Shows the play button. The server decides (`reviveRefusal()` in sessions/revivable.ts),
+   *  so the client never re-derives which rows come back. */
+  revivable?: boolean;
 }
 
 /** Who a preflight found logged in, and what it refused (server `accounts.ts` PreflightRefusal). */
@@ -250,6 +253,7 @@ export type ServerMessage =
   | { type: 'session.list'; id?: string; payload: SessionListPayload }
   | { type: 'session.created'; id?: string; payload: SessionCreatedPayload }
   | { type: 'session.added'; id?: string; payload: SessionCreatedPayload }
+  | { type: 'session.updated'; id?: string; payload: SessionCreatedPayload }
   | { type: 'session.attached'; id?: string; payload: SessionAttachedPayload }
   | { type: 'session.terminated'; id?: string; payload: SessionTerminatedPayload }
   | { type: 'session.deleted'; id?: string; payload: SessionDeletedPayload }

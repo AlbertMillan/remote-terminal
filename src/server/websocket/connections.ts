@@ -16,6 +16,7 @@ import { sessionManager } from '../sessions/manager.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
 import { defaultAccount } from '../accounts.js';
 import { accountWarningFor } from '../sessions/account-watch.js';
+import { reviveRefusal } from '../sessions/revivable.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -88,6 +89,20 @@ export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 
 }
 
 /**
+ * A session's row changed under every sidebar (its shell exited on its own): send each open
+ * browser the row as the list would, so its status and play button are current. Not
+ * `session.terminated`, which also closes the terminal of whoever is watching it.
+ */
+export function broadcastSessionRow(sessionId: string): void {
+  const row = sessionManager.getSessionList().find((s) => s.id === sessionId);
+  if (!row) return;
+  const message = createMessage('session.updated', { session: sessionToInfo(row) });
+  for (const conn of connections.values()) {
+    if (conn.ws.readyState === WS_OPEN) conn.ws.send(message);
+  }
+}
+
+/**
  * The fields a reply about one session (session.created, session.attached) takes from its
  * DB row rather than from the live session object, which lacks them. Every such reply goes
  * through this, so none of them drops one: a revived or resumed read-only peer that came
@@ -143,6 +158,9 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     claudeName: claudeNameFor(session.claudeSessionId),
     account: session.account ?? defaultAccount(),
     accountWarning: accountWarningFor(session.id),
+    // A live session (attachable and not exited) is refused before any transcript lookup,
+    // so only exited and stale rows cost a filesystem check.
+    revivable: reviveRefusal(session, (session.attachable ?? true) && session.status !== 'terminated') === null,
   };
 }
 

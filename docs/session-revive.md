@@ -17,9 +17,28 @@ was the alternative (reusing `session.open`) and it leaves a dead row behind eve
   prefers the in-memory one, so revive explicitly seeds it from `restoreScrollbackRaw(id)`.
   Without that seed the scrollback persisted at shutdown is silently dropped on first attach.
   It is empty after a hard kill, since `persistScrollback` only runs on graceful shutdown.
-- **No `maxSessions` check.** A stale row is already `status != 'terminated'` and so counts
-  toward `countActiveSessions()`. Re-checking the cap here would make every session
-  unrevivable after a restart at the limit.
+- **No `maxSessions` check for a stale row.** A stale row is already `status != 'terminated'`
+  and so counts toward `countActiveSessions()`. Re-checking the cap here would make every
+  session unrevivable after a restart at the limit.
+- **A `terminated` row with a `claude_session_id` is revivable too**, and takes a slot
+  (`assertSessionSlot()`), since terminated rows aren't counted. `terminated` only means the
+  shell exited while the server ran, and a Windows reboot does exactly that: it kills every
+  shell (exit `0xC000013A`) before the server, which gets no `SIGTERM` there, can run
+  `shutdown()` and park them `idle`. So the sessions in use at reboot were the ones locked
+  out. Refused: a terminated plain shell (nothing to resume), and one whose transcript Claude
+  Code has since deleted (`cleanupPeriodDays`) — terminated rows linger for months, and a
+  revive would otherwise leave a slot-holding shell with a failed `claude --resume` in it.
+  It keeps its struck-through look and no `(stale)` label; only the play button appears.
+- **The rule lives in one place**, `reviveRefusal()` (`sessions/revivable.ts`): revive throws
+  its reason, and `sessionToInfo()` sends `revivable` so the client never re-derives it.
+  Only terminated rows cost a transcript lookup; live ones are refused before it.
+- **A shell that exits while the server runs is replaced in place.** It stays in memory as
+  `terminated` (its scrollback attachable), and revive swaps in the new PTY: it seeds from
+  the exited buffer (only Windows persists one at exit), keeps `connectedClients`, and
+  leaves the id's data/exit listeners alone, so attached browsers see the new shell.
+  `onAnyExit` → `broadcastSessionRow()` sends every sidebar a `session.updated` row at
+  exit, so the button appears without a reload; `session.terminated` would also close the
+  watcher's terminal.
 - Forks are refused: `cleanupOrphanedForkFiles()` unlinks their transcript at boot, so there
   would be nothing to resume. A missing cwd is reported by name rather than falling back to
   home, which would resume the conversation in the wrong place.

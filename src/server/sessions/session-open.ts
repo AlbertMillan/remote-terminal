@@ -23,6 +23,7 @@ import { isSafeQuotedText } from '../utils/shell-quote.js';
 import { restoreScrollbackRaw } from './persistence.js';
 import { revokeSessionToken, sessionEnv } from './session-env.js';
 import { assertSessionSlot } from './session-limit.js';
+import { reviveRefusal } from './revivable.js';
 
 const logger = createLogger('session-manager');
 
@@ -339,11 +340,14 @@ export function reviveSession(
 
   const metadata = getSessionMetadata(id);
   if (!metadata) throw new Error('Session not found');
-  if (registry.activeSessions.has(id)) throw new Error('Session is already running');
-  if (metadata.status === 'terminated') throw new Error('Session has been terminated');
-  // Fork transcripts are unlinked at boot by cleanupOrphanedForkFiles(), so a revived fork
-  // would resume a conversation whose JSONL no longer exists.
-  if (metadata.isFork) throw new Error('Forked sessions cannot be revived; their transcript is removed on restart');
+  // A shell that exited while the server ran stays in memory as 'terminated' (its scrollback
+  // is still attachable); reviving replaces it in place. Only a live PTY means "running".
+  const exited = registry.activeSessions.get(id);
+  const refusal = reviveRefusal(metadata, !!exited && exited.status !== 'terminated');
+  if (refusal) throw new Error(refusal);
+  // A terminated row isn't counted toward maxSessions, so reviving one takes a slot; a stale
+  // row already holds its own (see the doc comment above).
+  if (metadata.status === 'terminated') assertSessionSlot();
 
   // Its own account, whatever the start of a new session would pick: the conversation
   // only resumes from the folder it lives in.
@@ -388,8 +392,15 @@ export function reviveSession(
     pty: ptyProcess,
     tmuxSession: metadata.tmuxSession ?? undefined,
     scrollback: [],
-    connectedClients: new Set(),
+    // Replacing an exited session in place: browsers still attached to it keep their
+    // listeners (dataListeners/exitListeners are keyed by id and left alone), so they
+    // stay attached and see the new shell's output.
+    connectedClients: exited ? exited.connectedClients : new Set(),
   };
+
+  // An exited session's own buffer holds its scrollback on every platform (handleSessionExit
+  // persists it on Windows only); read it before initSessionPty replaces it.
+  const exitedScrollback = exited ? registry.scrollbackBuffers.get(id)?.getAll().join('\n') : undefined;
 
   registry.initSessionPty(session);
 
@@ -397,7 +408,7 @@ export function reviveSession(
   // in-memory one -- without this seed the scrollback persisted at shutdown would be
   // silently dropped on the first attach. Empty after a hard kill, since persistScrollback
   // only runs on a graceful shutdown.
-  const persisted = restoreScrollbackRaw(id);
+  const persisted = exitedScrollback || restoreScrollbackRaw(id);
   if (persisted) {
     // The trailing newline matters: ScrollbackBuffer holds an unterminated final line as
     // `partialLine`, which getAll() drops once the buffer has any complete lines.
