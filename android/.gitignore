@@ -1,0 +1,12 @@
+# Machine-specific: written by scripts/android.mjs
+local.properties
+# Build output and IDE state
+build/
+.gradle/
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+captures/
+# Firebase: the user's own project config, never committed (docs/android-app.md)
+google-services.json
