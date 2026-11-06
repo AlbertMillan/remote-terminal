@@ -13,8 +13,12 @@ dist/
 .claude/
 .playwright-mcp/
 
-# Git worktrees
-android/
+# Android app: machine-specific files and build output (android/.gitignore has the rest)
+android/local.properties
+android/**/build/
+android/.gradle/
+android/.idea/
+android/app/google-services.json
 
 # OS files
 .DS_Store

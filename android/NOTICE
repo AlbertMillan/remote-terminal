@@ -1,0 +1,15 @@
+Claude Remote for Android
+
+This app includes the terminal-emulator and terminal-view modules, which derive
+from Termux (https://github.com/termux/termux-app), Copyright (C) 2014-2024
+Termux Contributors, licensed under the Apache License, Version 2.0. They were
+forked by Termlink to run without a local PTY and modified again here for
+claude-remote. Each file carries its SPDX-License-Identifier header.
+
+You may obtain a copy of the Apache License, Version 2.0 at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied.

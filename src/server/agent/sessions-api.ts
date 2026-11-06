@@ -29,6 +29,7 @@ import {
   type PreflightResult,
 } from '../accounts.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
+import { pushLandResult } from '../push/wire.js';
 import {
   broadcastLandResult,
   broadcastPromptMissing,
@@ -743,7 +744,10 @@ export const defaultLandDeps: AgentLandDeps = {
       terminateSession: (id) => sessionManager.terminateSession(id),
       removeSessions: removeWorktreeSessions,
     }),
-  notify: broadcastLandResult,
+  notify: (payload) => {
+    broadcastLandResult(payload);
+    pushLandResult(payload);
+  },
 };
 
 export interface AcceptedLand {

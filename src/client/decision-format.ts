@@ -10,6 +10,9 @@
  * shows the text as written.
  *
  * Pure string work, no DOM, so it is covered by tests/decision-format.test.ts.
+ * Keep it pure: the server imports it too (`GET /api/jobs/:id/decision`, for the Android
+ * app), and `tsconfig.server.json` has no DOM lib, so a DOM reference here fails
+ * `npm run typecheck`.
  */
 
 export interface DecisionOption {

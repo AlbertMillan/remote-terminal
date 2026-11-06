@@ -184,6 +184,15 @@ worktree. Gates after **design**, after **review**, before **merge**.
 - Hiding the pane is the `docsCollapsed` class, never dropping `this.docs`; opening a
   document always unfolds it (`openReference()`'s early return included).
 
+## Android app (`android/`) → `docs/android-app.md`
+
+- A `/ws` type or session/category/job field added to `protocol.ts` goes into
+  `tests/fixtures/protocol/messages.json` and the app's `protocol/Protocol.kt` too, or
+  `npm test` and `npm run android:test` fail.
+- Build only through `scripts/android.mjs` (`npm run android:*`): the PATH `java` is 1.8.
+- Push stays optional: a send never throws into its caller; `google-services.json` and the
+  service-account key never enter the repo.
+
 ## Elsewhere
 
 Shortcuts: register in `SHORTCUT_GROUPS` (`src/client/shortcuts.ts`) only. Hooks:

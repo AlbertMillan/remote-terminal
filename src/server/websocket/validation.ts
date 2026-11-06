@@ -6,6 +6,7 @@
  * in one place is what stops a new handler from quietly forwarding whatever the client sent:
  * session.open and session.revive both did exactly that before this module existed.
  */
+import { URLSearchParams } from 'url';
 
 export const MIN_TERMINAL_DIMENSION = 1;
 export const MAX_TERMINAL_DIMENSION = 500;
@@ -44,4 +45,15 @@ export function validateTerminalDimensions(payload: { cols?: unknown; rows?: unk
   }
 
   return validated;
+}
+
+/**
+ * The Android app's install id from `/ws?device=<id>` (docs/android-app.md); anything that
+ * is not a plain id is ignored, so the socket is treated as a browser's.
+ */
+export function deviceIdFromUrl(url: string | undefined): string | undefined {
+  const query = url?.split('?')[1];
+  if (!query) return undefined;
+  const id = new URLSearchParams(query).get('device');
+  return id && /^[A-Za-z0-9-]{8,64}$/.test(id) ? id : undefined;
 }

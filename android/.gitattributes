@@ -1,0 +1,4 @@
+# gradlew.bat must keep CRLF or cmd.exe misreads it; gradlew must keep LF for POSIX shells.
+*.bat text eol=crlf
+gradlew text eol=lf
+*.jar binary

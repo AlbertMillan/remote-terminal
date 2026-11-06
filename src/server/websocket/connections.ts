@@ -30,6 +30,34 @@ export interface ClientConnection {
   attachedSession: string | null;
   dataUnsubscribe: (() => void) | null;
   exitUnsubscribe: (() => void) | null;
+  /** The Android app's install id (`/ws?device=`), for push; absent for a browser. */
+  deviceId?: string;
+  /** Set by the app's `app.state`; a device in the foreground gets no push. */
+  foreground?: boolean;
+  /** When the socket last carried anything from the client: a message or a ping frame. */
+  lastSeenMs?: number;
+}
+
+/**
+ * A foreground socket silent for longer than this is presumed dead. The app's OkHttp pings
+ * every 20 s, and the server never pings, so a phone that dropped off the tailnet while on
+ * screen would otherwise look "foreground" until TCP gives up, and every push is skipped.
+ */
+export const FOREGROUND_STALE_MS = 45_000;
+
+/** Whether that app install is open on screen right now (docs/android-app.md). */
+export function isDeviceForeground(deviceId: string, nowMs: number = Date.now()): boolean {
+  for (const conn of connections.values()) {
+    if (
+      conn.deviceId === deviceId &&
+      conn.foreground &&
+      conn.ws.readyState === WS_OPEN &&
+      nowMs - (conn.lastSeenMs ?? 0) < FOREGROUND_STALE_MS
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const connections = new Map<string, ClientConnection>();

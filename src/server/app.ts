@@ -20,7 +20,7 @@ import { handleConnection, closeAllConnections } from './websocket/handler.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { sessionManager } from './sessions/manager.js';
 import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-registry.js';
-import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames, broadcastSessionRow } from './websocket/connections.js';
+import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames, broadcastSessionRow, isDeviceForeground } from './websocket/connections.js';
 import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
@@ -39,6 +39,7 @@ import { registerPlanUsageRoutes } from './usage/plan-routes.js';
 import { registerServerRestartRoutes } from './server-restart.js';
 import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
+import { registerPushRoutes, startPush } from './push/wire.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
@@ -96,6 +97,12 @@ export async function createApp(): Promise<FastifyInstance> {
     broadcastAccountWarnings,
     (s) => broadcastAccountChanged({ kind: 'account-changed', sessionId: s.id, name: s.name, detail: s.detail, timestamp: new Date().toISOString() })
   );
+
+  // Push to the Android app; off (and logged once) without a Firebase service account.
+  startPush({
+    isForeground: isDeviceForeground,
+    session: (id) => sessionManager.getSessionList().find((s) => s.id === id),
+  });
 
   // Determine TLS configuration
   let httpsOptions: { key: Buffer; cert: Buffer } | undefined;
@@ -211,6 +218,7 @@ export async function createApp(): Promise<FastifyInstance> {
   registerServerSettingsRoutes(app);
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);
+  registerPushRoutes(app);
 
   // Project logs: cross-project board (discovery + parsed SESSION-LOG.md entries)
   app.get('/api/project-logs', async () => {
