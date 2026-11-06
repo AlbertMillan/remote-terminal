@@ -41,6 +41,9 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    // The /ws fixture the server's tests/protocol-fixture.test.ts also reads (docs/android-app.md).
+    sourceSets.getByName("test").resources.srcDir("../../tests/fixtures/protocol")
 }
 
 dependencies {

@@ -2,69 +2,81 @@
 import type { JobsSummary } from '../jobs/summary.js';
 import type { PreflightRefusal } from '../accounts.js';
 
-export type ClientMessageType =
-  | 'auth'
-  | 'session.create'
-  | 'session.attach'
-  | 'session.detach'
-  | 'session.terminate'
-  | 'session.delete'
-  | 'session.rename'
-  | 'session.move'
-  | 'session.reorder'
-  | 'session.list'
-  | 'session.fork'
-  | 'session.open'
-  | 'session.revive'
-  | 'session.keep'
-  | 'terminal.data'
-  | 'terminal.resize'
-  | 'category.create'
-  | 'category.rename'
-  | 'category.delete'
-  | 'category.reorder'
-  | 'category.toggle'
-  | 'category.list'
-  | 'notification.preferences.get'
-  | 'notification.preferences.set'
-  | 'notification.dismiss'
-  | 'ping';
+/**
+ * Every message type, as values: the Android app mirrors them in Kotlin, and
+ * tests/protocol-fixture.test.ts fails when tests/fixtures/protocol/messages.json (read by
+ * both test suites) is missing one. A new type goes here, in that fixture and in
+ * android/app/src/main/java/com/clauderemote/app/protocol/Protocol.kt. docs/android-app.md
+ */
+export const CLIENT_MESSAGE_TYPES = [
+  'auth',
+  'session.create',
+  'session.attach',
+  'session.detach',
+  'session.terminate',
+  'session.delete',
+  'session.rename',
+  'session.move',
+  'session.reorder',
+  'session.list',
+  'session.fork',
+  'session.open',
+  'session.revive',
+  'session.keep',
+  'terminal.data',
+  'terminal.resize',
+  'category.create',
+  'category.rename',
+  'category.delete',
+  'category.reorder',
+  'category.toggle',
+  'category.list',
+  'notification.preferences.get',
+  'notification.preferences.set',
+  'notification.dismiss',
+  'ping',
+] as const;
 
-export type ServerMessageType =
-  | 'auth.success'
-  | 'auth.failure'
-  | 'session.created'
-  | 'session.added'
-  | 'session.updated'
-  | 'session.attached'
-  | 'session.detached'
-  | 'session.terminated'
-  | 'session.deleted'
-  | 'session.renamed'
-  | 'session.moved'
-  | 'session.reordered'
-  | 'session.list'
-  | 'session.forked'
-  | 'session.kept'
-  | 'session.claudeNames'
-  | 'session.accountWarnings'
-  | 'session.loginEnded'
-  | 'session.error'
-  | 'terminal.data'
-  | 'terminal.exit'
-  | 'category.created'
-  | 'category.renamed'
-  | 'category.deleted'
-  | 'category.reordered'
-  | 'category.toggled'
-  | 'category.list'
-  | 'notification.preferences'
-  | 'notification.preferences.updated'
-  | 'notification'
-  | 'jobs.summary'
-  | 'projects.changed'
-  | 'error'
-  | 'pong';
+export type ClientMessageType = (typeof CLIENT_MESSAGE_TYPES)[number];
+
+export const SERVER_MESSAGE_TYPES = [
+  'auth.success',
+  'auth.failure',
+  'session.created',
+  'session.added',
+  'session.updated',
+  'session.attached',
+  'session.detached',
+  'session.terminated',
+  'session.deleted',
+  'session.renamed',
+  'session.moved',
+  'session.reordered',
+  'session.list',
+  'session.forked',
+  'session.kept',
+  'session.claudeNames',
+  'session.accountWarnings',
+  'session.loginEnded',
+  'session.error',
+  'terminal.data',
+  'terminal.exit',
+  'category.created',
+  'category.renamed',
+  'category.deleted',
+  'category.reordered',
+  'category.toggled',
+  'category.list',
+  'notification.preferences',
+  'notification.preferences.updated',
+  'notification',
+  'jobs.summary',
+  'projects.changed',
+  'error',
+  'pong',
+] as const;
+
+export type ServerMessageType = (typeof SERVER_MESSAGE_TYPES)[number];
 
 export interface ClientMessage {
   type: ClientMessageType;

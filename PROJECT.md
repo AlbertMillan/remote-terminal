@@ -118,7 +118,7 @@ status: active
 
 ## Track: Android app
 - [x] `f-uy1l0v` P1 Project scaffold in main — `android/` Gradle project, Termux terminal modules with NOTICE, `.gitignore` changes, `scripts/android.mjs` (Android Studio JDK, `local.properties`, `gradlew.bat`), empty app runs on the emulator → project/android-app.md
-- [ ] `f-4jcthu` P1 Protocol and connection — Kotlin `/ws` + `/api` client mirroring `protocol.ts` with a shared fixture test, connect screen, reconnect on resume and network change → project/android-app.md
+- [x] `f-4jcthu` P1 Protocol and connection — Kotlin `/ws` + `/api` client mirroring `protocol.ts` with a shared fixture test, connect screen, reconnect on resume and network change → project/android-app.md
 - [ ] `f-8ii2pi` P1 Sessions and terminal — instant drawer, create/attach/rename/categories/revive, native terminal with fling scrolling, keys bar → project/android-app.md
 - [ ] `f-cr85qn` P1 Push notifications — FCM like the Claude app: device tokens, FCM HTTP v1 sender, no push while in the foreground, tapping opens the session or job; off when unconfigured → project/android-app.md
 - [ ] `f-h5txr3` P2 Projects and job gates — board, jobs, answering design/review/merge gates → project/android-app.md
