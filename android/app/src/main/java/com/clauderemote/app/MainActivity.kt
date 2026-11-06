@@ -6,7 +6,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.clauderemote.app.ui.projects.JobScreen
+import com.clauderemote.app.ui.projects.ProjectScreen
+import com.clauderemote.app.ui.projects.ProjectsScreen
+import com.clauderemote.app.ui.sessions.ExtraScreens
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +27,13 @@ import com.clauderemote.app.ui.connect.ConnectScreen
 import com.clauderemote.app.ui.sessions.MainScreen
 import com.clauderemote.app.ui.theme.ClaudeRemoteTheme
 import com.clauderemote.app.ui.theme.Palette
+
+/** Pages over the main screen. */
+sealed interface Screen {
+    data object Projects : Screen
+    data class Project(val cwd: String) : Screen
+    data class Job(val jobId: String) : Screen
+}
 
 /** The one activity: the connect screen until a server is saved, then the main screen. */
 class MainActivity : ComponentActivity() {
@@ -47,15 +61,42 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     } else {
-                        MainScreen(
-                            app = app,
-                            onChangeServer = {
-                                lastServer = current.display
-                                app.connection.disconnect()
-                                app.settings.server = null
-                                server = null
-                            },
-                        )
+                        // Pages stack over the main screen, which stays composed underneath so
+                        // the terminal and the drawer are there, as they were, on the way back.
+                        var stack by remember { mutableStateOf(listOf<Screen>()) }
+                        fun push(screen: Screen) { stack = stack + screen }
+                        fun pop() { stack = stack.dropLast(1) }
+                        val link by app.pendingLink.collectAsStateWithLifecycle()
+                        LaunchedEffect(link) {
+                            when (val target = link) {
+                                is Link.Job -> { app.pendingLink.value = null; push(Screen.Job(target.jobId)) }
+                                is Link.Project -> { app.pendingLink.value = null; push(Screen.Project(target.cwd)) }
+                                is Link.Session -> stack = emptyList()
+                                null -> Unit
+                            }
+                        }
+                        Box(Modifier.fillMaxSize()) {
+                            MainScreen(
+                                app = app,
+                                onChangeServer = {
+                                    lastServer = current.display
+                                    app.connection.disconnect()
+                                    app.settings.server = null
+                                    server = null
+                                },
+                                extraScreens = remember {
+                                    ExtraScreens(
+                                        projects = { push(Screen.Projects) },
+                                    )
+                                },
+                            )
+                            when (val top = stack.lastOrNull()) {
+                                Screen.Projects -> ProjectsScreen(app, ::pop, openProject = { push(Screen.Project(it)) }, openJob = { push(Screen.Job(it)) })
+                                is Screen.Project -> ProjectScreen(app, top.cwd, ::pop, openJob = { push(Screen.Job(it)) })
+                                is Screen.Job -> JobScreen(app, top.jobId, ::pop, openProject = { push(Screen.Project(it)) })
+                                null -> Unit
+                            }
+                        }
                     }
                 }
             }

@@ -17,6 +17,9 @@ import { listJobDocs, readDoc, resolveInWorktree } from './docs.js';
 import { specSlugFor } from './stages/design.js';
 import { COMPANION_DIR } from '../projects/project-store.js';
 import { applySelection, readFindings, writeFindings } from './findings.js';
+// The board's own parse of a parked question, so the Android app shows the same cards
+// without a second parser to drift (docs/android-app.md). Pure: no DOM, no imports.
+import { parseDecision } from '../../client/decision-format.js';
 
 const logger = createLogger('job-routes');
 
@@ -97,6 +100,14 @@ export function registerJobRoutes(app: FastifyInstance): void {
       return { text: read.text, truncated: read.truncated, path: rel };
     }
   );
+
+  // A parked job's question as the board renders it: question, context, options and
+  // recommendation per card, or null when the detail asks nothing (show it as text).
+  app.get<{ Params: { id: string } }>('/api/jobs/:id/decision', async (request, reply) => {
+    const job = getJobWithStages(request.params.id);
+    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    return { decision: job.detail ? parseDecision(job.detail) : null };
+  });
 
   // Review findings for the gate. Returns an empty list rather than 404 when a
   // job has not been reviewed yet, so the UI has one code path.

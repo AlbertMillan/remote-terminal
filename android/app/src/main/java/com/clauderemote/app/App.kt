@@ -12,6 +12,8 @@ import com.clauderemote.app.data.Settings
 import com.clauderemote.app.net.Api
 import com.clauderemote.app.net.Connection
 import com.clauderemote.app.net.ServerAddress
+import com.clauderemote.app.jobs.JobsApi
+import com.clauderemote.app.jobs.JobsFeed
 import com.clauderemote.app.links.Link
 import com.clauderemote.app.protocol.AppStatePayload
 import com.clauderemote.app.protocol.ClientType
@@ -45,6 +47,10 @@ class App : Application() {
         private set
     lateinit var sessions: SessionStore
         private set
+    lateinit var jobsApi: JobsApi
+        private set
+    lateinit var jobsFeed: JobsFeed
+        private set
 
     /** The main-thread scope every connection callback and store update runs on. */
     val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -73,6 +79,8 @@ class App : Application() {
         connection = Connection(http, mainScope)
         api = Api(http) { settings.server }
         sessions = SessionStore(connection, settings, mainScope)
+        jobsApi = JobsApi(api)
+        jobsFeed = JobsFeed(connection)
         Notifications.createChannels(this)
         mainScope.launch {
             connection.state.collect {
