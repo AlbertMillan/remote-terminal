@@ -80,7 +80,15 @@ fun JobScreen(app: App, jobId: String, onBack: () -> Unit, openProject: (String)
     }
 
     Page(job?.title ?: "Job", subtitle = job?.projectCwd, onBack = onBack, actions = {
-        job?.let { TextButton(onClick = { openProject(it.projectCwd) }) { Text("Project") } }
+        job?.let {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            TextButton(onClick = {
+                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText(it.title, com.clauderemote.app.links.Link.Job(it.id).toUri()))
+                message = "Link copied"
+            }) { Text("Link") }
+            TextButton(onClick = { openProject(it.projectCwd) }) { Text("Project") }
+        }
     }) {
         if (job == null) {
             LoadingOrError(loaded)

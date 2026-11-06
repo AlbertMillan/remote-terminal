@@ -122,4 +122,4 @@ status: active
 - [x] `f-8ii2pi` P1 Sessions and terminal — instant drawer, create/attach/rename/categories/revive, native terminal with fling scrolling, keys bar → project/android-app.md
 - [x] `f-cr85qn` P1 Push notifications — FCM like the Claude app: device tokens, FCM HTTP v1 sender, no push while in the foreground, tapping opens the session or job; off when unconfigured → project/android-app.md
 - [x] `f-h5txr3` P2 Projects and job gates — board, jobs, answering design/review/merge gates → project/android-app.md
-- [ ] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md
+- [x] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md

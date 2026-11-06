@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.clauderemote.app.ui.history.HistoryScreen
 import com.clauderemote.app.ui.projects.JobScreen
 import com.clauderemote.app.ui.projects.ProjectScreen
 import com.clauderemote.app.ui.projects.ProjectsScreen
@@ -33,6 +34,7 @@ sealed interface Screen {
     data object Projects : Screen
     data class Project(val cwd: String) : Screen
     data class Job(val jobId: String) : Screen
+    data object History : Screen
 }
 
 /** The one activity: the connect screen until a server is saved, then the main screen. */
@@ -87,6 +89,7 @@ class MainActivity : ComponentActivity() {
                                 extraScreens = remember {
                                     ExtraScreens(
                                         projects = { push(Screen.Projects) },
+                                        history = { push(Screen.History) },
                                     )
                                 },
                             )
@@ -94,6 +97,7 @@ class MainActivity : ComponentActivity() {
                                 Screen.Projects -> ProjectsScreen(app, ::pop, openProject = { push(Screen.Project(it)) }, openJob = { push(Screen.Job(it)) })
                                 is Screen.Project -> ProjectScreen(app, top.cwd, ::pop, openJob = { push(Screen.Job(it)) })
                                 is Screen.Job -> JobScreen(app, top.jobId, ::pop, openProject = { push(Screen.Project(it)) })
+                                Screen.History -> HistoryScreen(app, ::pop) { stack = emptyList() }
                                 null -> Unit
                             }
                         }
@@ -108,8 +112,16 @@ class MainActivity : ComponentActivity() {
         takeLink(intent)
     }
 
-    /** A notification tap or a claude-remote:// link: the main screen goes there. */
+    /** A notification tap, a claude-remote:// link, or text shared from another app. */
     private fun takeLink(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND) {
+            val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT))
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString("\n")
+            if (text.isNotBlank()) app.pendingShare.value = text
+            return
+        }
         Link.parse(intent?.dataString)?.let { app.pendingLink.value = it }
     }
 }

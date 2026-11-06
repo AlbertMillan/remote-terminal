@@ -63,6 +63,9 @@ class App : Application() {
     /** Where a notification tap or a link asked to go; the screen that handles it clears it. */
     val pendingLink = MutableStateFlow<Link?>(null)
 
+    /** Text shared to the app (Android share sheet), waiting for the user to pick a session. */
+    val pendingShare = MutableStateFlow<String?>(null)
+
     val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(8, TimeUnit.SECONDS)

@@ -56,6 +56,7 @@ class DrawerActions(
     val rename: (SessionInfo) -> Unit,
     val move: (SessionInfo) -> Unit,
     val fork: (SessionInfo) -> Unit,
+    val copyLink: (SessionInfo) -> Unit,
     val terminate: (SessionInfo) -> Unit,
     val delete: (SessionInfo) -> Unit,
     val toggleCategory: (CategoryInfo) -> Unit,
@@ -179,6 +180,7 @@ private fun SessionRow(row: DrawerRow.Session, pending: Boolean, actions: Drawer
             if (s.claudeSessionId != null) {
                 DropdownMenuItem(text = { Text("Fork") }, onClick = { menu = false; actions.fork(s) })
             }
+            DropdownMenuItem(text = { Text("Copy link") }, onClick = { menu = false; actions.copyLink(s) })
             if (live) DropdownMenuItem(text = { Text("Terminate") }, onClick = { menu = false; actions.terminate(s) })
             DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; actions.delete(s) })
         }

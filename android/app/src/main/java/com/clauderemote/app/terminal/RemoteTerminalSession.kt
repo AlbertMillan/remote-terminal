@@ -59,6 +59,15 @@ class RemoteTerminalSession(
         sink.screenUpdated()
     }
 
+    /**
+     * Paste text as a terminal paste: line breaks become Enter (CR), and when the program
+     * asked for bracketed paste (Claude Code does) the text is bracketed, so a multi-line
+     * paste or share lands in the prompt instead of submitting at every line.
+     */
+    fun paste(text: String) {
+        write(preparePaste(text, emulator.getBracketedPasteBracket(true).isNotEmpty()))
+    }
+
     fun markExited() {
         running = false
         feed("\r\n\u001b[2m[process exited]\u001b[0m\r\n")
@@ -89,4 +98,12 @@ class RemoteTerminalSession(
     override fun isRunning(): Boolean = running
 
     override fun getTitle(): String = title
+
+    companion object {
+        /** ESC is dropped: a pasted "ESC[201~" would end the bracket early and run what follows. */
+        fun preparePaste(text: String, bracketed: Boolean): String {
+            val body = text.replace("\r\n", "\r").replace('\n', '\r').replace("\u001b", "")
+            return if (bracketed) "\u001b[200~$body\u001b[201~" else body
+        }
+    }
 }

@@ -121,6 +121,26 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
         }
     }
 
+    // Shared from another app: pick the session (the open one first), then it is pasted
+    // into that session's prompt, never sent; Enter stays the user's.
+    val share by app.pendingShare.collectAsStateWithLifecycle()
+    LaunchedEffect(share, isConnected, state.loaded) {
+        val text = share ?: return@LaunchedEffect
+        if (!isConnected || !state.loaded) return@LaunchedEffect
+        app.pendingShare.value = null
+        val live = state.sessions.filter { it.attachable && it.status != "terminated" }
+            .sortedByDescending { it.id == open?.session?.id }
+        if (live.isEmpty()) {
+            snackbar.showSnackbar("No running session to share into")
+            return@LaunchedEffect
+        }
+        val preview = text.lines().first().take(60)
+        dialog = DialogSpec.Choose(
+            "Paste “$preview” into",
+            live.map { (if (it.id == open?.session?.id) "${it.name} (open)" else it.name) to it.id },
+        ) { id -> if (id != null) store.shareTo(id, text) }
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize().background(Palette.background)) {
         val density = LocalDensity.current
         val drawerWidth = min(maxWidth * 0.86f, 360.dp)
@@ -182,7 +202,7 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                     key = { code -> handle.view?.onKeyDown(code, KeyEvent(KeyEvent.ACTION_DOWN, code)) },
                     onPaste = {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let { store.type(it) }
+                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let { store.paste(it) }
                     },
                 )
             } else {
@@ -216,6 +236,11 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                     dialog = DialogSpec.Choose("Move ${s.name}", options) { store.move(s.id, it) }
                 },
                 fork = { s -> store.fork(s.id); setDrawer(false) },
+                copyLink = { s ->
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText(s.name, Link.Session(s.id).toUri()))
+                    scope.launch { snackbar.showSnackbar("Link copied") }
+                },
                 terminate = { s -> dialog = DialogSpec.Confirm("Terminate ${s.name}?", "Its shell is killed; a Claude conversation can be revived later.", "Terminate") { store.terminate(s.id) } },
                 delete = { s -> dialog = DialogSpec.Confirm("Delete ${s.name}?", "It leaves the list; a running shell is killed.", "Delete") { store.delete(s.id) } },
                 toggleCategory = { c -> store.toggleCategory(c.id, !c.collapsed) },

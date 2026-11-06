@@ -155,10 +155,31 @@ class SessionStore(
         connection.send(ClientType.CATEGORY_TOGGLE, Protocol.encode(CategoryTogglePayload(id, collapsed)))
     }
 
-    /** Send text to the open session (the keys bar, a paste, share-to). */
+    /** Send keys to the open session (the keys bar). */
     fun type(text: String) {
         val open = _open.value ?: return
         open.terminal.write(text)
+    }
+
+    /** Paste into the open session (Paste key), bracketed when the program asked for it. */
+    fun paste(text: String) {
+        _open.value?.terminal?.paste(text)
+    }
+
+    /** Text shared to the app, waiting for its session to open. */
+    private var pendingPaste: Pair<String, String>? = null
+
+    /**
+     * Share-to: paste [text] into [sessionId], opening it first when it is not the open one.
+     * Never presses Enter: what was shared is left in the prompt to read and send.
+     */
+    fun shareTo(sessionId: String, text: String) {
+        if (_open.value?.session?.id == sessionId) {
+            paste(text)
+            return
+        }
+        pendingPaste = sessionId to text
+        openById(sessionId)
     }
 
     /** The terminal view's grid changed. */
@@ -259,5 +280,11 @@ class SessionStore(
         }
         // The server's PTY takes this phone's grid, as the web client does on attach.
         terminal.updateSize(columns, rows)
+        pendingPaste?.let { (id, text) ->
+            if (id == session.id) {
+                pendingPaste = null
+                terminal.paste(text)
+            }
+        }
     }
 }
