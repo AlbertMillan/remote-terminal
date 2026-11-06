@@ -258,7 +258,10 @@ class SessionStore(
                 }
                 _messages.tryEmit(p?.message ?: "Session error")
             }
-            ServerType.ERROR -> Protocol.decode<MessagePayload>(env.payload)?.let { _messages.tryEmit(it.message) }
+            ServerType.ERROR -> Protocol.decode<MessagePayload>(env.payload)?.let {
+                // A server older than the app answers `app.state` this way; nothing to tell the user.
+                if (!it.message.startsWith("Unknown message type")) _messages.tryEmit(it.message)
+            }
         }
     }
 
