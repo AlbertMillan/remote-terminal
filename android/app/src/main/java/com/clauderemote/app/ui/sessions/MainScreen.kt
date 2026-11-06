@@ -192,10 +192,25 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                     handle = handle,
                     fontSizeSp = fontSize,
                     ctrlOn = ctrlOn,
-                    onCtrlConsumed = { ctrlOn = false },
+                    onCtrlUsed = { ctrlOn = false },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
-                KeysBar(
+                val stale = !current.session.attachable && current.session.status != "terminated"
+                if (stale) {
+                    // Parked by a server restart: its terminal is stopped, Revive relaunches it.
+                    Row(
+                        Modifier.fillMaxWidth().background(Palette.surface).padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (current.session.revivable) "Stopped by a server restart" else "This session has ended",
+                            color = Palette.muted, modifier = Modifier.weight(1f),
+                        )
+                        if (current.session.revivable) {
+                            Button(onClick = { store.revive(current.session.id) }, enabled = pending == null) { Text("Revive") }
+                        }
+                    }
+                } else KeysBar(
                     ctrlOn = ctrlOn,
                     onCtrl = { ctrlOn = !ctrlOn },
                     send = { text -> store.type(text); handle.view?.scrollToBottom() },

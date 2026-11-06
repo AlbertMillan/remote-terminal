@@ -84,8 +84,18 @@ export class FcmSender {
     private readonly now: () => number = Date.now,
   ) {}
 
-  private async accessToken(): Promise<string> {
-    if (this.token && this.token.expiresAtMs - 60_000 > this.now()) return this.token.value;
+  /** A token exchange in flight: sends that start together share it instead of each fetching one. */
+  private inflight: Promise<string> | null = null;
+
+  private accessToken(): Promise<string> {
+    if (this.token && this.token.expiresAtMs - 60_000 > this.now()) return Promise.resolve(this.token.value);
+    this.inflight ??= this.fetchToken().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
+  }
+
+  private async fetchToken(): Promise<string> {
     const assertion = signJwt(this.account, Math.floor(this.now() / 1000));
     const res = await this.transport(this.account.token_uri ?? TOKEN_URI, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

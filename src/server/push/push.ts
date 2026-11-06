@@ -53,14 +53,15 @@ export function pushEnabled(): boolean {
 
 export function registerDevice(deviceId: string, token: string, name: string | null): void {
   const now = new Date().toISOString();
-  getDatabase()
-    .prepare(
+  const db = getDatabase();
+  db.transaction(() => {
+    db.prepare(
       `INSERT INTO push_devices (device_id, token, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(device_id) DO UPDATE SET token = excluded.token, name = excluded.name, updated_at = excluded.updated_at`
-    )
-    .run(deviceId, token, name, now, now);
-  // A token belongs to one install: an old row holding it (reinstall, new id) would double every push.
-  getDatabase().prepare('DELETE FROM push_devices WHERE token = ? AND device_id != ?').run(token, deviceId);
+    ).run(deviceId, token, name, now, now);
+    // A token belongs to one install: an old row holding it (reinstall, new id) would double every push.
+    db.prepare('DELETE FROM push_devices WHERE token = ? AND device_id != ?').run(token, deviceId);
+  })();
 }
 
 export function unregisterDevice(deviceId: string): void {
@@ -140,6 +141,9 @@ export function landMessage(land: { projectCwd: string; track: string; ok: boole
       kind: 'project',
       event: land.ok ? 'landed' : 'land-failed',
       projectCwd: land.projectCwd,
+      // The app tags its notification by track too, matching collapseKey: two tracks
+      // landing in one project are two notifications, not one replacing the other.
+      track: land.track,
       title: land.ok ? `Landed ${land.track}` : `Land failed: ${land.track}`,
       body: land.detail.slice(0, 300),
     },

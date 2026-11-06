@@ -1,6 +1,6 @@
 package com.clauderemote.app.sessions
 
-import com.clauderemote.app.data.Settings
+import com.clauderemote.app.data.SessionMemory
 import com.clauderemote.app.net.Connection
 import com.clauderemote.app.protocol.CategoryCreatePayload
 import com.clauderemote.app.protocol.CategoryIdPayload
@@ -46,7 +46,7 @@ import kotlinx.coroutines.launch
  */
 class SessionStore(
     private val connection: Connection,
-    private val settings: Settings,
+    private val settings: SessionMemory,
     private val scope: CoroutineScope,
 ) : RemoteTerminalSession.Sink {
 
@@ -80,11 +80,47 @@ class SessionStore(
         }
     }
 
+    /** The open session while its re-attach after a reconnect is in flight. */
+    private var reattaching: String? = null
+
+    /** Whether `session.list` has answered since the last connect (rows before it are stale). */
+    private var listFresh = false
+
+    /** The open session's re-attach was refused before the fresh list came: settle it then. */
+    private var settleWhenListed: String? = null
+
     private fun onConnected() {
+        listFresh = false
+        settleWhenListed = null
         connection.send(ClientType.SESSION_LIST)
         connection.send(ClientType.CATEGORY_LIST)
-        val reattach = _open.value?.session?.id ?: settings.lastSessionId
+        reattaching = _open.value?.session?.id
+        val reattach = reattaching ?: settings.lastSessionId
         if (reattach != null) attach(reattach, force = true)
+    }
+
+    /**
+     * The open session could not be re-attached: after a server restart it is parked, not
+     * in memory. Stop its terminal (keys would only draw "Not attached" errors) and show
+     * the server's row, whose `revivable` offers Revive, as the web client does. Never
+     * revived automatically: that relaunches `claude`, which is the user's call.
+     */
+    private fun settleStale(sessionId: String) {
+        settleWhenListed = null
+        val open = _open.value ?: return
+        if (open.session.id != sessionId) return
+        val row = _state.value.sessions.firstOrNull { it.id == sessionId }
+        when {
+            row == null -> {
+                _open.value = null
+                settings.lastSessionId = null
+            }
+            row.attachable && row.status != "terminated" -> attach(sessionId, force = true)
+            else -> {
+                open.terminal.markExited()
+                _open.value = open.copy(session = row)
+            }
+        }
     }
 
     // ---- Actions ----
@@ -192,6 +228,8 @@ class SessionStore(
     // ---- Sink (the open terminal) ----
 
     override fun input(sessionId: String, data: String) {
+        // Not attached on this socket yet: the server would only answer "Not attached".
+        if (reattaching == sessionId) return
         connection.send(ClientType.TERMINAL_DATA, Protocol.encode(TerminalDataPayload(sessionId, data)))
     }
 
@@ -212,6 +250,11 @@ class SessionStore(
     private fun handle(env: Envelope) {
         _state.value = SessionsReducer.reduce(_state.value, env)
         when (env.type) {
+            ServerType.SESSION_LIST -> {
+                listFresh = true
+                val stale = settleWhenListed
+                if (stale != null) settleStale(stale) else refreshOpen()
+            }
             ServerType.TERMINAL_DATA -> {
                 val data = Protocol.decode<TerminalDataPayload>(env.payload) ?: return
                 val open = _open.value ?: return
@@ -249,13 +292,22 @@ class SessionStore(
             }
             ServerType.SESSION_ERROR -> {
                 val p = Protocol.decode<SessionErrorPayload>(env.payload)
-                val wasReattach = _pending.value != null && _pending.value == settings.lastSessionId && _open.value == null
+                val failed = _pending.value
                 _pending.value = null
-                if (wasReattach && p?.message == "Session not found") {
-                    // The last session is gone (a server restart parks it): start on the list.
-                    settings.lastSessionId = null
-                    return
+                if (failed != null && p?.message == "Session not found") {
+                    if (failed == reattaching) {
+                        // The open session did not survive a server restart.
+                        reattaching = null
+                        if (listFresh) settleStale(failed) else settleWhenListed = failed
+                        return
+                    }
+                    if (failed == settings.lastSessionId && _open.value == null) {
+                        // The last session is gone (a server restart parks it): start on the list.
+                        settings.lastSessionId = null
+                        return
+                    }
                 }
+                if (failed != null && failed == reattaching) reattaching = null
                 _messages.tryEmit(p?.message ?: "Session error")
             }
             ServerType.ERROR -> Protocol.decode<MessagePayload>(env.payload)?.let {
@@ -273,8 +325,17 @@ class SessionStore(
 
     private fun show(session: SessionInfo, scrollback: String?) {
         _pending.value = null
-        val terminal = RemoteTerminalSession(session.id, columns, rows, this)
-        if (!scrollback.isNullOrEmpty()) terminal.feed(scrollback)
+        if (reattaching == session.id) reattaching = null
+        val current = _open.value
+        // Reviving the open session answers `session.created` with no scrollback: keep the
+        // screen it had and carry on below it, instead of a blank terminal.
+        val terminal = if (scrollback == null && current != null && current.session.id == session.id) {
+            current.terminal.also { it.revived() }
+        } else {
+            RemoteTerminalSession(session.id, columns, rows, this).also {
+                if (!scrollback.isNullOrEmpty()) it.feed(scrollback)
+            }
+        }
         _open.value = Open(session, terminal)
         settings.lastSessionId = session.id
         if (session.id in _state.value.notices) {

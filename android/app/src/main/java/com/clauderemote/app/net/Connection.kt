@@ -57,6 +57,7 @@ class Connection(
     private var url: String? = null
     private var attempt = 0
     private var retryJob: Job? = null
+    private var verifyJob: Job? = null
     private var nextId = 0L
 
     val isConnected: Boolean get() = _state.value is State.Connected
@@ -84,7 +85,9 @@ class Connection(
     fun reconnectNow() {
         if (url == null) return
         when (_state.value) {
-            is State.Connected -> scope.launch { verify() }
+            // Several networks come up at once (Wi-Fi, mobile, the Tailscale VPN), each calling
+            // here: one ping answers them all, or each timeout would reopen the socket again.
+            is State.Connected -> if (verifyJob?.isActive != true) verifyJob = scope.launch { verify() }
             is State.Connecting -> Unit
             else -> {
                 attempt = 0

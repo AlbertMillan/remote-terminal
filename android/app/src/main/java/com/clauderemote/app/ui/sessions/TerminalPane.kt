@@ -60,7 +60,7 @@ fun TerminalPane(
     handle: TerminalHandle,
     fontSizeSp: Int,
     ctrlOn: Boolean,
-    onCtrlConsumed: () -> Unit,
+    onCtrlUsed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -72,11 +72,12 @@ fun TerminalPane(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 TerminalView(ctx).apply {
-                    setPadding(6, 0, 6, 0)
+                    val side = (2 * resources.displayMetrics.density).toInt()
+                    setPadding(side, 0, side, 0)
                     setTerminalViewClient(object : TerminalView.TerminalViewClient {
                         override fun onTerminalSizeChanged(columns: Int, rows: Int) = store.onViewSize(columns, rows)
                         override fun onSelectionChanged(hasSelection: Boolean) { selection = hasSelection }
-                        override fun onCtrlConsumed() = onCtrlConsumed()
+                        override fun onCtrlConsumed() = onCtrlUsed()
                         override fun onScrolledToBottomChanged(bottom: Boolean) { atBottom = bottom }
                     })
                     handle.view = this
@@ -88,10 +89,11 @@ fun TerminalPane(
                     view.attachSession(open.terminal)
                     store.onViewSize(view.calculateColumns(), view.calculateRows())
                 }
-                val px = fontSizeSp.toFloat()
-                if (view.tag != px) {
-                    view.tag = px
-                    view.setTextSizeDp(px)
+                // The setting is named in sp; the view takes dp, which a 1.0 font scale equates.
+                val textSize = fontSizeSp.toFloat()
+                if (view.tag != textSize) {
+                    view.tag = textSize
+                    view.setTextSizeDp(textSize)
                 }
             },
         )

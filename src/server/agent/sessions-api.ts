@@ -1,4 +1,3 @@
-import { pushLandResult } from '../push/wire.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -30,6 +29,7 @@ import {
   type PreflightResult,
 } from '../accounts.js';
 import { notificationService, type NotificationType } from '../notifications/service.js';
+import { pushLandResult } from '../push/wire.js';
 import {
   broadcastLandResult,
   broadcastPromptMissing,

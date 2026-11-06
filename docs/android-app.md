@@ -76,6 +76,13 @@ switch) and then closed; push covers the time away.
 scrollback, which replaces the terminal, so the screen after a wake shows what happened
 while away, with nothing doubled.
 
+After a server restart the open session is parked, not in memory, and the re-attach is
+refused (`Session not found`). The store then stops that terminal (its keys would only draw
+"Not attached" errors), keeps its screen, and shows the server's fresh row: a revivable one
+gets a Revive bar in place of the keys bar. It is never revived automatically, since that
+relaunches `claude`. Revive answers `session.created` with no scrollback, so the same
+terminal carries on below what it showed. `SessionStoreTest` covers this path.
+
 ## Terminal
 
 The terminal is Termux's `View` inside an `AndroidView`, so scrolling and fling are the View
@@ -120,7 +127,10 @@ terminal and the drawer are untouched on the way back.
 
 It works like the Claude app. While the app is on screen it is live on the socket and has
 said `app.state {foreground: true}`, and the server sends that device no push
-(`isDeviceForeground`). Otherwise the server pushes a session that needs input or finished,
+(`isDeviceForeground`). That also needs the socket heard from in the last 45 s (a message,
+or OkHttp's 20 s ping frame): the server never pings, so a phone that dropped off the
+tailnet while on screen would otherwise look foreground until TCP gives up, and get no push.
+Otherwise the server pushes a session that needs input or finished,
 a job newly parked at a gate, and a Land's result. Gate pushes go out once per wait: the
 parked set is diffed on job writes and seeded at boot, so a restart does not re-announce old
 waits.

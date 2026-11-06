@@ -52,9 +52,13 @@ object Notifications {
         else -> CHANNEL_LAND
     }
 
-    /** One notification per session, job or track: a newer event replaces the older one. */
+    /**
+     * One notification per session, job or track: a newer event replaces the older one.
+     * A Land is per track (the server's collapseKey too), so two tracks of one project
+     * landing are two notifications.
+     */
     fun tagFor(data: Map<String, String>): String =
-        data["kind"] + ":" + (data["sessionId"] ?: data["jobId"] ?: data["projectCwd"] ?: "")
+        data["kind"] + ":" + (data["sessionId"] ?: data["jobId"] ?: data["track"] ?: data["projectCwd"] ?: "")
 
     fun show(context: Context, data: Map<String, String>) {
         if (Build.VERSION.SDK_INT >= 33 &&

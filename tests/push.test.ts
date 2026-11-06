@@ -22,6 +22,7 @@ const { FcmSender, signJwt, parseServiceAccount } = await import('../src/server/
 const push = await import('../src/server/push/push.js');
 const { newlyParked } = await import('../src/server/push/wire.js');
 const { deviceIdFromUrl } = await import('../src/server/websocket/validation.js');
+const { connections, isDeviceForeground, FOREGROUND_STALE_MS, WS_OPEN } = await import('../src/server/websocket/connections.js');
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const account = {
@@ -115,6 +116,14 @@ describe('FcmSender', () => {
     });
   });
 
+  it('shares one token exchange between sends that start together', async () => {
+    const { transport, calls } = fakeTransport();
+    const sender = new FcmSender(account, transport);
+    const results = await Promise.all([sender.send('a', { data: {} }), sender.send('b', { data: {} }), sender.send('c', { data: {} })]);
+    expect(results).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(calls.filter((c) => c.url.includes('oauth2'))).toHaveLength(1);
+  });
+
   it('renews the access token when it is about to expire, and once on a 401', async () => {
     let now = 0;
     const { transport, calls } = fakeTransport([401, 200]);
@@ -184,6 +193,7 @@ describe('what is pushed', () => {
     });
     const land = push.landMessage({ projectCwd: 'C:\\p', track: 'Android app', ok: false, detail: 'x'.repeat(500) });
     expect(land.data.title).toBe('Land failed: Android app');
+    expect(land.data.track).toBe('Android app');
     expect(land.data.body).toHaveLength(300);
     for (const value of Object.values(land.data)) expect(typeof value).toBe('string');
   });
@@ -199,6 +209,27 @@ describe('what is pushed', () => {
     expect(state.parked).toEqual([]);
     state = newlyParked(state.keys, [job('parked', 'review', 'review')]);
     expect(state.parked).toHaveLength(1);
+  });
+});
+
+describe('a device in the foreground gets no push', () => {
+  const conn = (lastSeenMs: number, foreground = true) =>
+    ({ id: 'c', ws: { readyState: WS_OPEN }, deviceId: 'device-1234', foreground, lastSeenMs }) as never;
+
+  it('only while its socket has been heard from lately', () => {
+    const now = 10_000_000;
+    try {
+      connections.set('c', conn(now - 1_000));
+      expect(isDeviceForeground('device-1234', now)).toBe(true);
+      expect(isDeviceForeground('device-9999', now)).toBe(false);
+      // Dropped off the tailnet while on screen: the socket looks open, but nothing arrives.
+      connections.set('c', conn(now - FOREGROUND_STALE_MS));
+      expect(isDeviceForeground('device-1234', now)).toBe(false);
+      connections.set('c', conn(now - 1_000, false));
+      expect(isDeviceForeground('device-1234', now)).toBe(false);
+    } finally {
+      connections.delete('c');
+    }
   });
 });
 

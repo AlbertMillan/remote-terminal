@@ -161,6 +161,7 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
     dataUnsubscribe: null,
     exitUnsubscribe: null,
     deviceId: deviceIdFromUrl(request.url),
+    lastSeenMs: Date.now(),
   };
 
   connections.set(clientId, connection);
@@ -180,12 +181,19 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
 
   // Set up message handler with rate limiting
   ws.on('message', (data: Buffer | string) => {
+    connection.lastSeenMs = Date.now();
     if (!rateLimiter.tryAcquire(clientId)) {
       ws.send(createMessage('error', { message: 'Rate limit exceeded' }));
       logger.warn({ clientId }, 'Client rate limited');
       return;
     }
     handleMessage(connection, data.toString());
+  });
+
+  // The app's OkHttp pings every 20 s (`ws` answers by itself): proof the socket is alive,
+  // which isDeviceForeground() needs before it skips a push.
+  ws.on('ping', () => {
+    connection.lastSeenMs = Date.now();
   });
 
   // Set up close handler

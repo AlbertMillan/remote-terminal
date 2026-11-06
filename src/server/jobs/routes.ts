@@ -18,7 +18,8 @@ import { specSlugFor } from './stages/design.js';
 import { COMPANION_DIR } from '../projects/project-store.js';
 import { applySelection, readFindings, writeFindings } from './findings.js';
 // The board's own parse of a parked question, so the Android app shows the same cards
-// without a second parser to drift (docs/android-app.md). Pure: no DOM, no imports.
+// without a second parser to drift (docs/android-app.md). Pure: no DOM, no imports, and
+// held to it by tsconfig.server.json (no DOM lib) in `npm run typecheck`.
 import { parseDecision } from '../../client/decision-format.js';
 
 const logger = createLogger('job-routes');

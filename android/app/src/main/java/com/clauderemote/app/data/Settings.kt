@@ -4,8 +4,13 @@ import android.content.Context
 import com.clauderemote.app.net.ServerAddress
 import java.util.UUID
 
+/** What [com.clauderemote.app.sessions.SessionStore] remembers; an interface so JVM tests need no Context. */
+interface SessionMemory {
+    var lastSessionId: String?
+}
+
 /** The few things the app remembers: the server, this install's id, the last session. */
-class Settings(context: Context) {
+class Settings(context: Context) : SessionMemory {
     private val prefs = context.getSharedPreferences("claude-remote", Context.MODE_PRIVATE)
 
     var server: ServerAddress?
@@ -18,7 +23,7 @@ class Settings(context: Context) {
             prefs.edit().putString(KEY_DEVICE, it).apply()
         }
 
-    var lastSessionId: String?
+    override var lastSessionId: String?
         get() = prefs.getString(KEY_LAST_SESSION, null)
         set(value) = prefs.edit().putString(KEY_LAST_SESSION, value).apply()
 

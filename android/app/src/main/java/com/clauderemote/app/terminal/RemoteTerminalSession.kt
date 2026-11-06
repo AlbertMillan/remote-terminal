@@ -73,6 +73,11 @@ class RemoteTerminalSession(
         feed("\r\n\u001b[2m[process exited]\u001b[0m\r\n")
     }
 
+    /** Revived in place (same id): keys go to the new process. */
+    fun revived() {
+        running = true
+    }
+
     override fun getEmulator(): TerminalEmulator = emulator
 
     override fun write(data: ByteArray, offset: Int, length: Int) {

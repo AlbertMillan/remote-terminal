@@ -67,12 +67,38 @@ function writeLocalProperties(sdkDir) {
   if (current !== content) writeFileSync(file, content);
 }
 
+/**
+ * The `cmd /d /s /c` line for a batch file: every part quoted, the whole wrapped once more,
+ * which `/s` strips. Arguments carrying a quote or a cmd metacharacter are refused rather
+ * than escaped: Gradle arguments never need one, and cmd would act on it.
+ */
+export function cmdLine(bat, args) {
+  for (const a of args) {
+    if (/["%^&|<>!\r\n]/.test(a)) throw new Error(`android: refusing a Gradle argument cmd would interpret: ${a}`);
+  }
+  return `"${[bat, ...args].map((a) => `"${a}"`).join(' ')}"`;
+}
+
 function run(args, env) {
+  let line;
+  try {
+    line = isWindows ? cmdLine(join(androidDir, 'gradlew.bat'), args) : null;
+  } catch (err) {
+    console.error(err.message);
+    return Promise.resolve(2);
+  }
   return new Promise((resolve) => {
     // Node refuses to spawn a .bat directly (CVE-2024-27980), so go through cmd.exe, with a
     // full path: cmd skips the current folder when NoDefaultCurrentDirectoryInExePath is set.
+    // The line is built here and passed verbatim (cmdLine): Node's own quoting breaks under
+    // `cmd /s` for a path with spaces.
     const child = isWindows
-      ? spawn('cmd.exe', ['/d', '/s', '/c', join(androidDir, 'gradlew.bat'), ...args], { cwd: androidDir, env, stdio: 'inherit' })
+      ? spawn('cmd.exe', ['/d', '/s', '/c', line], {
+          cwd: androidDir,
+          env,
+          stdio: 'inherit',
+          windowsVerbatimArguments: true,
+        })
       : spawn(join(androidDir, 'gradlew'), args, { cwd: androidDir, env, stdio: 'inherit' });
     child.on('exit', (code) => resolve(code ?? 1));
     child.on('error', (err) => {
