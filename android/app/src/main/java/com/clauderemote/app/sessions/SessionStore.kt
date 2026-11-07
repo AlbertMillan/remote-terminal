@@ -144,11 +144,17 @@ class SessionStore(
         if (row != null) openRow(row) else attach(sessionId, force = true)
     }
 
-    fun create(name: String?, cwd: String?) {
+    /** A null or blank `account` lets the server pick: the project's, else the configured one. */
+    fun create(name: String?, cwd: String?, account: String? = null) {
         _pending.value = ""
         connection.send(
             ClientType.SESSION_CREATE,
-            Protocol.encode(SessionCreatePayload(name = name?.ifBlank { null }, cwd = cwd?.ifBlank { null }, cols = columns, rows = rows)),
+            Protocol.encode(
+                SessionCreatePayload(
+                    name = name?.ifBlank { null }, cwd = cwd?.ifBlank { null }, cols = columns, rows = rows,
+                    account = account?.ifBlank { null },
+                ),
+            ),
         )
     }
 

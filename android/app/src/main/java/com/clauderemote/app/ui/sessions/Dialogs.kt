@@ -1,6 +1,7 @@
 package com.clauderemote.app.ui.sessions
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -8,7 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -25,14 +31,28 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.clauderemote.app.sessions.AccountOption
+import com.clauderemote.app.sessions.Accounts
+import com.clauderemote.app.sessions.AccountsSummary
+import com.clauderemote.app.sessions.ResolvedAccount
 import com.clauderemote.app.ui.theme.Palette
+import kotlinx.coroutines.delay
 
 /** The one dialog the main screen may show at a time. */
 sealed interface DialogSpec {
     data class Text(val title: String, val initial: String, val confirm: String, val onConfirm: (String) -> Unit) : DialogSpec
     data class Confirm(val title: String, val body: String, val confirm: String, val onConfirm: () -> Unit) : DialogSpec
     data class Choose(val title: String, val options: List<Pair<String, String?>>, val onChoose: (String?) -> Unit) : DialogSpec
-    data class NewSession(val recentPaths: List<String>, val onCreate: (name: String, cwd: String) -> Unit) : DialogSpec
+    /**
+     * `accounts` is `GET /api/accounts` (null: the picker offers only Default); `resolveDefault`
+     * names what Default means for a folder. A null account lets the server pick.
+     */
+    data class NewSession(
+        val recentPaths: List<String>,
+        val accounts: AccountsSummary? = null,
+        val resolveDefault: suspend (cwd: String) -> ResolvedAccount? = { null },
+        val onCreate: (name: String, cwd: String, account: String?) -> Unit,
+    ) : DialogSpec
 }
 
 @Composable
@@ -85,6 +105,14 @@ private fun TextDialog(spec: DialogSpec.Text, onDismiss: () -> Unit) {
 private fun NewSessionDialog(spec: DialogSpec.NewSession, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var cwd by remember { mutableStateOf("") }
+    var account by remember { mutableStateOf<String?>(null) }
+    var resolved by remember { mutableStateOf<ResolvedAccount?>(null) }
+    LaunchedEffect(cwd) {
+        // Re-label Default once typing pauses; a newer folder cancels this lookup.
+        delay(300)
+        resolved = spec.resolveDefault(cwd.trim())
+    }
+    val options = Accounts.options(spec.accounts, resolved)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New session") },
@@ -96,6 +124,7 @@ private fun NewSessionDialog(spec: DialogSpec.NewSession, onDismiss: () -> Unit)
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
+                AccountPicker(options, account) { account = it }
                 if (spec.recentPaths.isNotEmpty()) {
                     Text("Recent", style = MaterialTheme.typography.labelSmall, color = Palette.muted, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                     LazyColumn(Modifier.heightIn(max = 220.dp)) {
@@ -111,7 +140,31 @@ private fun NewSessionDialog(spec: DialogSpec.NewSession, onDismiss: () -> Unit)
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onDismiss(); spec.onCreate(name.trim(), cwd.trim()) }) { Text("Start") } },
+        confirmButton = { TextButton(onClick = { onDismiss(); spec.onCreate(name.trim(), cwd.trim(), account) }) { Text("Start") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** The Account field: the chosen option's label, opening the list on a tap. */
+@Composable
+private fun AccountPicker(options: List<AccountOption>, selected: String?, onSelect: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val label = options.firstOrNull { it.value == selected }?.label ?: options.first().label
+    Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        OutlinedTextField(
+            label, {}, readOnly = true, singleLine = true, label = { Text("Account") },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        // A read-only field swallows taps; this cover takes them.
+        Box(Modifier.matchParentSize().clickable { open = true })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label, color = if (option.value == selected) Palette.accent else Palette.text) },
+                    onClick = { open = false; onSelect(option.value) },
+                )
+            }
+        }
+    }
 }

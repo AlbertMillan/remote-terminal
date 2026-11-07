@@ -8,6 +8,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.clauderemote.app.links.Link
+import com.clauderemote.app.sessions.Accounts
+import com.clauderemote.app.sessions.ResolvedAccount
 import com.clauderemote.app.push.Notifications
 import com.clauderemote.app.push.PushRegistrar
 import android.content.Context
@@ -269,7 +271,22 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                         } catch (_: Exception) {
                             emptyList()
                         }
-                        dialog = DialogSpec.NewSession(recent) { name, cwd -> store.create(name, cwd); setDrawer(false) }
+                        // Without the list the picker offers only Default: the server's choice still applies.
+                        val accounts = try {
+                            Accounts.summary(app.api.get("/api/accounts"))
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val resolve: suspend (String) -> ResolvedAccount? = { cwd ->
+                            try {
+                                Accounts.resolved(app.api.get("/api/accounts/resolve", mapOf("cwd" to cwd)))
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                        dialog = DialogSpec.NewSession(recent, accounts, resolve) { name, cwd, account ->
+                            store.create(name, cwd, account); setDrawer(false)
+                        }
                     }
                 },
                 newCategory = { dialog = DialogSpec.Text("New category", "", "Create") { store.createCategory(it) } },
