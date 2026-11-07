@@ -23,43 +23,49 @@
     <aside id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-title">
+          <!-- Connection state as a dot; its text stays for screen readers and the tooltip. -->
+          <div id="connection-status" class="status disconnected" title="Disconnected">
+            <span class="status-dot"></span>
+            <span class="status-text">Disconnected</span>
+          </div>
           <h1>Claude Remote</h1>
           <!-- The running server is behind its build; opens Settings → Server. See BuildChip in server-restart.ts. -->
           <button type="button" id="build-chip" class="build-chip" hidden></button>
-        </div>
-        <div id="connection-status" class="status disconnected">
-          <span class="status-dot"></span>
-          <span class="status-text">Disconnected</span>
+          <div class="sidebar-header-actions">
+            <button id="shortcuts-btn" class="settings-btn icon-only" title="Keyboard Shortcuts (?)" aria-label="Keyboard Shortcuts">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
+                <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8"></path>
+              </svg>
+            </button>
+            <button id="settings-btn" class="settings-btn icon-only" title="Settings" aria-label="Settings">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
+          </div>
         </div>
         <!-- Plan usage (5-hour and weekly), relayed from the status line; see plan-usage-chip.ts. -->
         <details id="plan-usage" class="plan-usage" hidden>
           <summary class="plan-usage-summary"></summary>
           <div class="plan-usage-body"></div>
         </details>
-        <div class="sidebar-header-actions">
-          <button id="shortcuts-btn" class="settings-btn" title="Keyboard Shortcuts (?)">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="4" width="20" height="16" rx="2" ry="2"></rect>
-              <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M7 12h.01M11 12h.01M15 12h.01M8 16h8"></path>
-            </svg>
-            Shortcuts
-          </button>
-          <button id="settings-btn" class="settings-btn" title="Settings">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-            Settings
-          </button>
-        </div>
       </div>
 
       <div class="sidebar-section">
+        <div class="sidebar-section-top">
         <div class="section-header">
           <div class="sidebar-tabs" role="tablist">
             <button id="tab-sessions" class="sidebar-tab active" data-tab="sessions" role="tab" aria-selected="true">Sessions</button>
             <button id="tab-projects" class="sidebar-tab" data-tab="projects" role="tab" aria-selected="false">Projects</button>
           </div>
+          <button id="add-category-btn" class="btn-icon" title="New category" aria-label="New category">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7h6l2 2h10v10H3z"></path>
+              <path d="M14 13h4M16 11v4"></path>
+            </svg>
+          </button>
           <button id="new-session-btn" class="btn-icon" title="New Session">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -81,6 +87,16 @@
             </svg>
           </button>
         </div>
+        <!-- Sidebar filter (Alt+K); session-list-view.ts owns it. -->
+        <label id="session-filter-row" class="session-filter">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="m20 20-3.5-3.5"></path>
+          </svg>
+          <input type="search" id="session-filter" placeholder="Filter sessions" autocomplete="off" spellcheck="false" aria-label="Filter sessions">
+          <kbd>Alt K</kbd>
+        </label>
+        </div>
         <ul id="session-list" class="session-list">
           <!-- Sessions will be populated here -->
         </ul>
@@ -88,6 +104,9 @@
           <!-- Projects board will be populated here -->
         </ul>
       </div>
+
+      <!-- Copy feedback for a session's @name; session-list-view.ts showToast(). -->
+      <div id="session-toast" class="session-toast" role="status" aria-live="polite" hidden></div>
 
       <div class="sidebar-footer">
         <div id="user-info" class="user-info">
@@ -411,6 +430,17 @@
             <label for="setting-visual-badges">
               Visual badges
               <div class="setting-description">Show colored badges on session items in sidebar</div>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sidebar</div>
+          <div class="setting-item">
+            <input type="checkbox" id="setting-keep-stopped">
+            <label for="setting-keep-stopped">
+              Keep stopped sessions in their category
+              <div class="setting-description">Off: stopped sessions collect in a Stopped drawer at the bottom of the list</div>
             </label>
           </div>
         </div>

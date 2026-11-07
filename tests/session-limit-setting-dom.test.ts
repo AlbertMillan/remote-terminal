@@ -221,6 +221,7 @@ describe('SettingsModal', () => {
       notificationPermission: async () => 'granted',
       jobOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
       syncJobOverlay: vi.fn(),
+      renderSessionList: vi.fn(),
     };
   }
 

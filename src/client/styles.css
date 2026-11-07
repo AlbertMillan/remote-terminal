@@ -143,21 +143,19 @@ body {
 }
 
 .sidebar-header {
-  padding: 20px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: linear-gradient(135deg, rgba(122, 162, 247, 0.05) 0%, transparent 50%);
 }
 
-/* The title row: "Claude Remote", and the build chip at its right end when shown.
-   "New commits" fits the 280px sidebar with 1px to spare; past that it wraps below
-   rather than breaking the title. */
+/* The title row: connection dot, "Claude Remote", the build chip when shown, and the
+   Shortcuts / Settings icons at its right end. Where the build chip doesn't fit beside
+   them it wraps below rather than breaking the title. */
 .sidebar-title {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 14px;
+  gap: 8px;
 }
 
 .sidebar-header h1 {
@@ -172,17 +170,21 @@ body {
   background-clip: text;
 }
 
+/* The connection state is just its dot; the text stays for screen readers (and the
+   element's title, set with it). */
 .status {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle);
-  transition: all var(--transition-smooth);
+  flex-shrink: 0;
+}
+
+.status .status-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -538,16 +540,32 @@ body {
 .sidebar-section {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 0 8px 12px;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
 .section-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 4px;
+}
+
+.section-header .sidebar-tabs {
+  margin-right: auto;
+}
+
+.section-header .btn-icon {
+  padding: 5px;
+}
+
+/* Tabs, actions and the filter stay put while the list scrolls under them. */
+.sidebar-section-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 0;
+  background: var(--bg-secondary);
 }
 
 .section-header h2 {
@@ -559,84 +577,61 @@ body {
   letter-spacing: 1.5px;
 }
 
+/* ── Session list (project/sidebar-redesign.md) ─────────────────────────
+   One 28px line per session; the selected row adds a detail line. Status is a glyph:
+   filled amber = needs input, filled green = done, blue ring = live, dashed ring =
+   stopped; a read-only peer's glyph is square. */
 .session-list {
   list-style: none;
 }
 
 .session-item {
+  position: relative;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--transition-fast);
+}
+
+.session-line {
   display: flex;
   align-items: center;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  margin-bottom: 4px;
-  transition: all var(--transition-fast);
-  border: 1px solid transparent;
-  position: relative;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 2px;
+  min-width: 0;
 }
 
 .session-item:hover {
   background-color: var(--bg-tertiary);
-  border-color: var(--border-subtle);
 }
 
-.session-item.active {
-  background: linear-gradient(135deg, var(--accent) 0%, #6b8de3 100%);
-  color: var(--bg-primary);
-  border-color: transparent;
-  box-shadow: 0 4px 12px var(--accent-glow);
+.session-item.active,
+.session-item.contains-active {
+  background-color: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.session-item.active:hover {
-  box-shadow: 0 6px 16px var(--accent-glow);
-}
-
-.session-item .session-icon {
-  margin-right: 10px;
-  opacity: 0.7;
-  transition: opacity var(--transition-fast);
-}
-
-.session-item:hover .session-icon {
-  opacity: 1;
-}
-
-.session-item.active .session-icon {
-  opacity: 1;
-}
-
-.session-item .session-info {
-  flex: 1;
-  min-width: 0;
+.session-item.just-copied {
+  box-shadow: inset 2px 0 0 var(--success);
 }
 
 .session-item .session-name {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.session-item .session-status {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0.7;
-  letter-spacing: 0.3px;
-}
-
-/* Claude's name for the session when it differs (docs/session-orchestration.md) */
-.session-item .session-claude-name {
-  color: var(--accent);
-}
-
-.session-item.active .session-claude-name {
-  color: inherit;
+.session-item.active .session-name {
   font-weight: 600;
 }
 
-.session-item.terminated {
-  opacity: 0.5;
+.session-item.not-attachable .session-name {
+  color: var(--text-muted);
 }
 
 .session-item.terminated .session-name {
@@ -644,113 +639,314 @@ body {
   text-decoration-color: var(--text-muted);
 }
 
+/* A stopped row can't be opened; its revive button can. */
 .session-item.not-attachable {
-  opacity: 0.5;
-  cursor: not-allowed;
+  cursor: default;
 }
 
-.session-item.not-attachable:hover {
-  background: transparent;
-  border-color: transparent;
-}
-
-/* Sessions a main session started, nested under it (docs/session-orchestration.md).
-   A child has no drag handle (26px: 20px box + 6px margin), so its 42px indent puts its
-   icon 16px right of its parent's. The guide line sits under the parent's arrow. */
-.session-item.session-child {
-  margin-left: 42px;
-}
-
-.session-item.session-child::before {
-  content: '';
-  position: absolute;
-  left: -20px;
-  top: -5px;
-  bottom: -1px;
-  border-left: 1px solid var(--border-subtle);
-}
-
-/* Takes the drag handle's 26px slot on a parent row (32px wide, -6px margin), so the
-   parent lines up with other rows. 32px tap area; its own target, so tapping it never
-   opens the parent. */
+/* The lead slot: fold arrow, drag handle, or an empty spacer, so glyphs line up. */
+.session-lead,
 .session-group-toggle {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  width: 32px;
-  height: 32px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  margin: -8px 0 -8px -6px;
-  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.session-group-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
   border-radius: 4px;
-  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .session-group-toggle:hover {
-  background: var(--bg-primary);
+  background: var(--border-subtle);
   color: var(--text-primary);
-}
-
-.session-item.active .session-group-toggle {
-  color: inherit;
 }
 
 .session-group-toggle svg {
   transition: transform var(--transition-fast);
 }
 
-.session-item .session-summary {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0.7;
-  letter-spacing: 0.3px;
-}
-
-.session-summary-part {
-  white-space: nowrap;
-}
-
 .session-group-toggle.collapsed svg {
   transform: rotate(-90deg);
 }
 
-.session-summary-input {
-  color: var(--warning);
+.session-drag-handle {
+  color: var(--text-muted);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
-.session-item.active .session-summary-input {
-  color: inherit;
-  font-weight: 700;
+.session-item:hover .session-drag-handle {
+  opacity: 0.6;
+}
+
+.session-item:active .session-drag-handle {
+  cursor: grabbing;
+}
+
+.session-glyphs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.session-glyph {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.session-glyph.ro {
+  border-radius: 2px;
+}
+
+.session-glyphs .session-glyph.ro {
+  width: 9px;
+  height: 9px;
+  cursor: pointer;
+}
+
+.session-glyphs .session-glyph.ro:hover,
+.session-glyphs .session-glyph.ro:focus-visible {
+  outline: 1px solid var(--text-secondary);
+  outline-offset: 1px;
+}
+
+.session-glyph.state-input {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgba(224, 175, 104, 0.2);
+  animation: glyph-pulse 1.6s ease-in-out infinite;
+}
+
+.session-glyph.state-done {
+  background: var(--success);
+}
+
+.session-glyph.state-live {
+  border: 2px solid var(--accent);
+}
+
+.session-glyph.state-stopped {
+  border: 1.5px dashed var(--text-muted);
+}
+
+@keyframes glyph-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(224, 175, 104, 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(224, 175, 104, 0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-glyph.state-input { animation: none; }
+}
+
+.session-glyph-more {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.session-context {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-account-warning {
+  color: var(--warning);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.session-category-chip,
+.session-track-chip {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 14px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+/* A folded parent's children: a dot per track at its worst state, then the count. */
+.session-kids {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.tally-dot {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.tally-dot.state-input { background: var(--warning); }
+.tally-dot.state-done { background: var(--success); }
+.tally-dot.state-live { background: var(--accent); }
+.tally-dot.state-stopped { background: var(--text-muted); }
+
+.session-kids-count {
+  margin-left: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* Which login a row runs under, coloured like the usage chip; only with 2+ accounts. */
+.session-account-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.session-account-dot.acct-c0 { background: var(--account-0); }
+.session-account-dot.acct-c1 { background: var(--account-1); }
+.session-account-dot.acct-c2 { background: var(--account-2); }
+.session-account-dot.acct-c3 { background: var(--account-3); }
+
+/* Copy, revive, delete: on hover (and keyboard focus); on touch, on the selected row. */
+.session-actions {
+  display: none;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.session-item:hover .session-actions,
+.session-item:focus-within .session-actions {
+  display: flex;
+}
+
+.session-item:hover .session-account-dot,
+.session-item:focus-within .session-account-dot {
+  display: none;
+}
+
+@media (hover: none) {
+  .session-item.active .session-actions {
+    display: flex;
+  }
+  .session-item.active .session-account-dot {
+    display: none;
+  }
+}
+
+.session-copy-btn,
+.session-revive-btn,
+.session-delete-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.session-copy-btn:hover,
+.session-revive-btn:hover {
+  background: var(--border-subtle);
+  color: var(--accent);
+}
+
+.session-delete-btn:hover {
+  background: var(--border-subtle);
+  color: var(--danger);
+}
+
+.session-copy-btn.copied {
+  color: var(--success);
+  background: rgba(158, 206, 106, 0.16);
+}
+
+/* The selected row's second line: account, folder, mode, read-only, starter, state. */
+.session-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 0 6px 5px 40px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.session-detail-cwd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.session-detail-warning {
+  color: var(--warning);
 }
 
 .session-mode-chip,
 .session-access-chip {
   display: inline-block;
-  margin-right: 6px;
   padding: 0 5px;
-  border-radius: 6px;
+  border-radius: 4px;
   border: 1px solid currentColor;
-  font-size: 9px;
+  font-size: 9.5px;
   line-height: 14px;
 }
 
-.session-account-chip {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  font-size: 9px;
-  line-height: 14px;
+/* Started sessions under their parent, on a guide line below the parent's arrow;
+   a builder's peers one step further in. */
+.session-item.session-child {
+  margin-left: 9px;
+  padding-left: 8px;
+  border-radius: 0 6px 6px 0;
 }
 
-.session-account-chip.session-account-warning {
-  color: var(--warning);
-  border-color: var(--warning);
+.session-item.session-child::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.session-item.session-track-member {
+  margin-left: 25px;
+}
+
+.session-filter-empty {
+  list-style: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .account-refusal-detail {
@@ -766,71 +962,6 @@ body {
 .account-refusal-detail dd {
   margin: 0 0 6px;
   word-break: break-all;
-}
-
-.session-delete-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
-  opacity: 0;
-  transition: all var(--transition-fast);
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.session-item:hover .session-delete-btn {
-  opacity: 0.7;
-}
-
-.session-delete-btn:hover {
-  opacity: 1 !important;
-  background-color: var(--danger);
-  color: white;
-  transform: scale(1.1);
-}
-
-/* Revive button -- only rendered on stale rows (PTY died with the server). Reveals on row
-   hover exactly like the delete button beside it, so the two behave as one control group. */
-.session-revive-btn {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
-  opacity: 0;
-  transition: all var(--transition-fast);
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.session-item:hover .session-revive-btn {
-  opacity: 0.7;
-}
-
-/* Both buttons carry margin-left:auto on their own; side by side, flex would split the free
-   space between them and strand the revive button mid-row. */
-.session-revive-btn + .session-delete-btn {
-  margin-left: 0;
-}
-
-.session-revive-btn:hover {
-  opacity: 1 !important;
-  background-color: var(--accent);
-  color: var(--bg-primary);
-  transform: scale(1.1);
-}
-
-/* The row sets cursor:not-allowed; the one thing you *can* click must not inherit it. */
-.session-item.not-attachable .session-revive-btn {
-  cursor: pointer;
 }
 
 .sidebar-footer {
@@ -1785,274 +1916,314 @@ body {
   }
 }
 
-/* Category styles */
-.add-category-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  background-color: transparent;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  color: var(--text-muted);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.add-category-btn:hover {
-  border-color: var(--accent);
-  border-style: solid;
-  color: var(--accent);
-  background: rgba(122, 162, 247, 0.05);
-  transform: translateY(-1px);
-}
-
-.add-category-btn:active {
-  transform: translateY(0);
-}
-
+/* Category sections, the "Needs you" strip and the "Stopped" drawer
+   (project/sidebar-redesign.md). Headers are one compact line. */
 .category-section {
-  margin-bottom: 20px;
-}
-
-.category-section.uncategorized {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-subtle);
+  margin-bottom: 6px;
 }
 
 .category-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px 3px 2px;
+  border-radius: 6px;
   user-select: none;
-  transition: all var(--transition-fast);
-  margin-bottom: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--transition-fast);
 }
 
 .category-header:hover {
-  background-color: var(--bg-tertiary);
+  background-color: rgba(47, 53, 73, 0.6);
 }
 
 .category-toggle {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   background: transparent;
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 4px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
   border-radius: 4px;
 }
 
-.category-toggle:hover {
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+.category-toggle svg {
+  transition: transform var(--transition-fast);
 }
 
-.category-section.collapsed .category-toggle {
+.category-section.collapsed .category-toggle svg {
   transform: rotate(-90deg);
 }
 
 .category-name {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
   letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .category-count {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted);
-  opacity: 0.6;
-  padding: 2px 6px;
-  background: var(--bg-primary);
-  border-radius: 10px;
+  opacity: 0.8;
 }
+
+.category-tally {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.tally-input { color: var(--warning); }
+.tally-done { color: var(--success); }
 
 .category-actions {
-  display: flex;
-  gap: 4px;
+  display: none;
+  gap: 2px;
   margin-left: auto;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
 }
 
-.category-header:hover .category-actions {
-  opacity: 1;
+.category-header:hover .category-actions,
+.category-header:focus-within .category-actions {
+  display: flex;
+}
+
+/* The tally gives way to the actions while hovered, so the header stays one line. */
+.category-header:hover .category-tally,
+.category-header:focus-within .category-tally {
+  display: none;
 }
 
 .category-rename-btn,
 .category-delete-btn {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-subtle);
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: none;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 5px;
-  border-radius: 6px;
-  transition: all var(--transition-fast);
+  padding: 0;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .category-rename-btn:hover {
-  background-color: var(--bg-tertiary);
+  background: var(--border-subtle);
   color: var(--text-primary);
-  border-color: var(--border);
 }
 
 .category-delete-btn:hover {
-  background-color: var(--danger);
-  border-color: var(--danger);
-  color: white;
+  background: var(--border-subtle);
+  color: var(--danger);
 }
 
 .category-sessions {
   list-style: none;
-  padding-left: 12px;
-  margin-top: 6px;
-  border-left: 2px solid var(--border-subtle);
-  margin-left: 10px;
+  border: 1px dashed transparent;
+  border-radius: 6px;
 }
 
 .category-section.collapsed .category-sessions {
   display: none;
 }
 
+/* An empty category is just its header, dimmed: still a drop target, still renamable. */
+.category-section.empty .category-header {
+  opacity: 0.55;
+}
+
+.category-section.empty .category-sessions {
+  min-height: 0;
+}
+
+.uncategorized .category-header {
+  padding-left: 24px;
+  cursor: default;
+}
+
 .uncategorized .category-name {
   font-style: italic;
-  opacity: 0.6;
 }
 
-/* Drag handle */
-.session-drag-handle {
-  display: flex;
-  align-items: center;
-  color: var(--text-muted);
-  cursor: grab;
-  opacity: 0;
-  transition: all var(--transition-fast);
-  margin-right: 6px;
-  padding: 4px;
-  border-radius: 4px;
+/* "Needs you": every waiting session, wherever it sits; hidden when none waits. */
+.attention-section {
+  background: rgba(224, 175, 104, 0.07);
+  border: 1px solid rgba(224, 175, 104, 0.28);
+  border-radius: 8px;
+  padding: 2px 2px 3px;
+  margin-bottom: 10px;
 }
 
-.session-item:hover .session-drag-handle {
-  opacity: 0.4;
+.attention-section .category-header,
+.matches-section .category-header {
+  padding-left: 6px;
+  cursor: default;
 }
 
-.session-drag-handle:hover {
-  opacity: 1 !important;
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+.attention-section .category-header:hover,
+.matches-section .category-header:hover {
+  background: transparent;
 }
 
-.session-item:active .session-drag-handle {
-  cursor: grabbing;
+.attention-section .category-name,
+.attention-section .category-count {
+  color: var(--warning);
 }
 
-/* Drag and drop visual feedback */
+.stopped-section {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Drag and drop */
 .session-item.dragging {
   opacity: 0.4;
-  background: var(--bg-tertiary);
   border: 1px dashed var(--accent);
-  transform: scale(0.98);
 }
 
 .category-sessions.drop-target {
   background: rgba(122, 162, 247, 0.05);
-  border: 2px dashed var(--accent);
-  border-radius: 10px;
-  min-height: 48px;
-  transition: all var(--transition-fast);
+  border-color: var(--accent);
+  min-height: 28px;
 }
 
 .category-header.drop-target {
-  background: rgba(122, 162, 247, 0.1);
-  border-radius: 8px;
+  background: rgba(122, 162, 247, 0.12);
+  opacity: 1;
 }
 
 .session-item.drop-before {
-  border-top: 2px solid var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .session-item.drop-after {
-  border-bottom: 2px solid var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
-/* Show delete button for all sessions on hover */
-.session-item:hover .session-delete-btn {
-  opacity: 0.7;
+/* Filter box under the tabs (Alt+K). */
+.session-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  color: var(--text-muted);
 }
 
-/* Notification badge */
-.notification-badge {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-right: 6px;
-  position: relative;
+.session-filter.hidden {
+  display: none;
 }
 
-.notification-badge::after {
-  content: '';
+.session-filter:focus-within {
+  border-color: var(--accent);
+}
+
+.session-filter input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  padding: 6px 0;
+}
+
+.session-filter input::placeholder {
+  color: var(--text-muted);
+}
+
+.session-filter kbd {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* Copy feedback, at the foot of the sidebar: names the @name now on the clipboard. */
+.session-toast {
   position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  opacity: 0.3;
+  left: 10px;
+  right: 10px;
+  bottom: 64px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid rgba(158, 206, 106, 0.45);
+  color: var(--text-primary);
+  font-size: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  pointer-events: none;
 }
 
-.notification-badge.needs-input {
-  background-color: var(--warning);
-  box-shadow: 0 0 8px var(--warning-glow);
-  animation: notification-pulse-warning 1.5s ease-in-out infinite;
+.session-toast.show {
+  opacity: 1;
+  transform: none;
 }
 
-.notification-badge.needs-input::after {
-  background: var(--warning);
-  animation: notification-ring 1.5s ease-in-out infinite;
+.session-toast.failed {
+  border-color: rgba(224, 175, 104, 0.5);
+  pointer-events: auto;
 }
 
-.notification-badge.completed {
-  background-color: var(--success);
-  box-shadow: 0 0 8px var(--success-glow);
+.session-toast svg {
+  color: var(--success);
+  flex-shrink: 0;
 }
 
-@keyframes notification-pulse-warning {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(1.1);
-  }
+.session-toast-text {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@keyframes notification-ring {
-  0% {
-    transform: scale(1);
-    opacity: 0.4;
-  }
-  100% {
-    transform: scale(2);
-    opacity: 0;
-  }
+.session-toast-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 
 /* Settings modal */
@@ -2196,11 +2367,22 @@ body {
   box-shadow: 0 0 8px var(--warning-glow);
 }
 
-/* Settings button in sidebar header */
+/* Shortcuts and Settings, icon-only, at the right end of the title row */
 .sidebar-header-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.settings-btn.icon-only {
+  padding: 5px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.settings-btn.icon-only:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-subtle);
 }
 
 .settings-btn {

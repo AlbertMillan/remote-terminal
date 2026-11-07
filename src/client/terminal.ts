@@ -99,6 +99,7 @@ export class TerminalManager {
   private imageListeners: AbortController | null = null;
   private navigateSessionCallback: ((direction: 'prev' | 'next') => void) | null = null;
   private newSessionCallback: (() => void) | null = null;
+  private findSessionCallback: (() => void) | null = null;
   private scrollbar: {
     track: HTMLElement;
     thumb: HTMLElement;
@@ -114,6 +115,10 @@ export class TerminalManager {
 
   setNewSessionCallback(callback: (() => void) | null): void {
     this.newSessionCallback = callback;
+  }
+
+  setFindSessionCallback(callback: (() => void) | null): void {
+    this.findSessionCallback = callback;
   }
 
   initialize(options: TerminalOptions): void {
@@ -150,6 +155,10 @@ export class TerminalManager {
       if (e.type === 'keydown' && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
         if (e.key === 'n' || e.key === 'N') {
           if (this.newSessionCallback) this.newSessionCallback();
+          return false;
+        }
+        if (e.key === 'k' || e.key === 'K') {
+          if (this.findSessionCallback) this.findSessionCallback();
           return false;
         }
       }

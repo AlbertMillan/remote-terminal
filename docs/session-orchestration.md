@@ -270,17 +270,25 @@ runs a plain `git merge main`, which deletes the track's plan.
 
 ## Sidebar
 
-- Children render right after their parent, in the parent's category, in creation order,
-  indented with a guide line. One level only: a child whose parent is missing from the list
-  (deleted) or is itself a child renders top-level.
-- The parent's row gets a collapse arrow — its own button, ≥32 px tap area, stops the event,
-  so tapping it never opens the parent and tapping the row never collapses it. Collapsed
-  parents are remembered per browser in `localStorage` (`claude-remote.collapsedSessionGroups`).
-- The parent gets a summary line under its status, `N needs input · N done · N started`,
-  visible collapsed; it wraps only between parts. The arrow takes the drag handle's slot (the
-  whole row stays draggable), so the parent lines up with other rows and its children read as
-  indented under it.
-- A child whose `permissionMode` is not `auto` shows a chip (`default` reads as `manual`).
+Layout and the reasoning: `project/sidebar-redesign.md` (`session-list-view.ts`).
+
+- Children render under their parent, in the parent's category, in creation order, on a
+  guide line. One level only: a child whose parent is missing from the list (deleted) or is
+  itself a child renders top-level.
+- **Folded by default.** The parent's fold arrow is its own button that stops the event, so
+  tapping it never opens the parent and tapping the row never folds it. Unfolded parents
+  (and tracks, as `track:<builderId>`) are remembered per browser in `localStorage`
+  (`claude-remote.expandedSessionGroups`); the old `collapsedSessionGroups` key meant the
+  opposite and is deleted on load, never read.
+- A folded parent shows one dot per child **track** at its most urgent state, then the child
+  count; its tooltip reads `N needs input · N done · N started`.
+- A builder and the read-only peers beside it (`trackGroups()`, the same pairing as
+  `peersAfterBuilders()`) are one row: the builder's glyph, a square per peer, a `pair` /
+  `1+n` chip. A square opens that peer; the row's own arrow lists the peers by name.
+- A waiting child also shows in the **"Needs you"** strip with its parent's name, and
+  opening it from there unfolds its parent (and track).
+- A child whose `permissionMode` is not `auto` shows the mode in its detail line
+  (`default` reads as `manual`), as do read-only and "started by".
 - Children are not draggable; a drop on one falls through to its category's list.
 
 ## Names agents message each other by
@@ -295,8 +303,10 @@ so an agent asked to message "the planner" can't find it. Spec: `project/peer-se
   the name survives a restart. A name holding `"`, `%`, `$`, a backtick, `!`, a backslash or a
   control character gets no flag (Claude falls back to its own name) rather than a broken
   quote that would run the rest of the line as shell.
-- **The sidebar shows Claude's name** in the status line (`active · @rimworldy-ae`) when it
-  differs from ours, which happens for a `claude` typed by hand. `sessions/claude-registry.ts`
+- **The sidebar copies Claude's name**: every row with a running Claude has an `@` action
+  that copies `@<name>`, with a toast naming what was copied (the name is not printed on
+  the row, so the toast is how you see it). It matters most for a `claude` typed by hand,
+  whose name differs from ours. The sidebar filter matches it too. `sessions/claude-registry.ts`
   reads Claude's live registry, `~/.claude/sessions/<pid>.json` (`{ pid, sessionId, name,
   nameSource }`; `name` is exactly what `ListAgents` shows), matches `sessionId` to the
   session's `claudeSessionId` from the claude-session hook, and skips files whose `pid` is
@@ -311,7 +321,7 @@ so an agent asked to message "the planner" can't find it. Spec: `project/peer-se
   another session's terminal could answer a dialog or run in the shell. A session with no
   Claude running can't be messaged until it is revived.
 - Renaming a session doesn't rename a running Claude; the new name applies at the next typed
-  `claude`, and the sidebar shows the mismatch meanwhile.
+  `claude`; the `@` action copies the name Claude still uses meanwhile.
 
 ## Read-only peers beside a builder
 

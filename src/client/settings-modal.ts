@@ -2,6 +2,7 @@ import type { JobOverlay, OverlayPlacement } from './job-overlay.js';
 import { ServerRestartControl } from './server-restart.js';
 import { SessionLimitSetting } from './session-limit-setting.js';
 import type { NotificationPreferencesPayload } from './session-types.js';
+import { KEEP_STOPPED_IN_PLACE_KEY, readFlag, writeFlag } from './session-list-view.js';
 
 /** What the Settings modal reads from and writes back to the session manager. */
 export interface SettingsModalHost {
@@ -11,6 +12,8 @@ export interface SettingsModalHost {
   notificationPermission(): Promise<'default' | 'granted' | 'denied'>;
   jobOverlay: Pick<JobOverlay, 'isEnabled' | 'getPlacement' | 'setPreferences'>;
   syncJobOverlay(): void;
+  /** Re-render the session list after a sidebar preference changed. */
+  renderSessionList(): void;
 }
 
 /**
@@ -104,6 +107,8 @@ export class SettingsModal {
     const placement = this.host.jobOverlay.getPlacement();
     for (const radio of this.placementRadios()) radio.checked = radio.value === placement;
     this.updatePlacementEnabled();
+    const keepStopped = document.getElementById('setting-keep-stopped') as HTMLInputElement | null;
+    if (keepStopped) keepStopped.checked = readFlag(KEEP_STOPPED_IN_PLACE_KEY);
   }
 
   private placementRadios(): HTMLInputElement[] {
@@ -157,6 +162,9 @@ export class SettingsModal {
       : 'below';
     this.host.jobOverlay.setPreferences(overlayCheckbox?.checked ?? true, placement);
     this.host.syncJobOverlay();
+    const keepStopped = document.getElementById('setting-keep-stopped') as HTMLInputElement | null;
+    if (keepStopped) writeFlag(KEEP_STOPPED_IN_PLACE_KEY, keepStopped.checked);
+    this.host.renderSessionList();
 
     this.hide();
   }

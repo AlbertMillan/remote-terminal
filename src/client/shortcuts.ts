@@ -26,6 +26,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['Ctrl', 'Q'], label: 'Previous session' },
       { keys: ['Ctrl', 'E'], label: 'Next session' },
       { keys: ['Ctrl', 'B'], label: 'Toggle sidebar' },
+      { keys: ['Alt', 'K'], label: 'Filter sessions' },
     ],
   },
   {

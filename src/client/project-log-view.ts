@@ -71,6 +71,8 @@ export class ProjectLogView {
     document.getElementById('session-list')?.classList.toggle('hidden', onProjects);
     document.getElementById('project-list')?.classList.toggle('hidden', !onProjects);
     document.getElementById('new-session-btn')?.classList.toggle('hidden', onProjects);
+    document.getElementById('add-category-btn')?.classList.toggle('hidden', onProjects);
+    document.getElementById('session-filter-row')?.classList.toggle('hidden', onProjects);
     document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
     document.getElementById('overview-btn')?.classList.toggle('hidden', !onProjects);
     if (!onProjects) this.host.rollup.hide();

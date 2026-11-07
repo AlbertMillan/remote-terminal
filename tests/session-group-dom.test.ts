@@ -1,12 +1,22 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SessionListView, peersAfterBuilders, type SessionListViewHost } from '../src/client/session-list-view.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  SessionListView,
+  peersAfterBuilders,
+  trackGroups,
+  needsYou,
+  matchesFilter,
+  rowState,
+  KEEP_STOPPED_IN_PLACE_KEY,
+  type SessionListViewHost,
+} from '../src/client/session-list-view.js';
 import type { SessionInfo, CategoryInfo } from '../src/client/session-types.js';
 
 /**
- * Sessions a main session started render nested under it
- * (docs/session-orchestration.md): in the parent's category, collapsible per
- * browser, with a summary on the parent that stays visible when collapsed.
+ * The sidebar session list (project/sidebar-redesign.md): one-line rows, sessions a main
+ * session started folded under it (docs/session-orchestration.md), a builder and its
+ * read-only peers as one track row, a "Needs you" strip, a "Stopped" drawer, a filter,
+ * and `@` copy of a session's agent address.
  */
 
 function info(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -35,6 +45,9 @@ let host: SessionListViewHost;
 let sessions: Map<string, SessionInfo>;
 let categories: Map<string, CategoryInfo>;
 let notifications: SessionListViewHost['sessionNotifications'];
+let currentId: string | null;
+
+const EXPANDED_KEY = 'claude-remote.expandedSessionGroups';
 
 function view(): SessionListView {
   const v = new SessionListView(host);
@@ -42,25 +55,42 @@ function view(): SessionListView {
   return v;
 }
 
-function rowIds(): string[] {
-  return [...document.querySelectorAll<HTMLElement>('.session-item')].map((li) => li.dataset.sessionId as string);
+function rowIds(scope: ParentNode = document): string[] {
+  return [...scope.querySelectorAll<HTMLElement>('.session-item')].map((li) => li.dataset.sessionId as string);
 }
 
+/** A row in the category tree (not the strip, drawer or matches). */
 function rowOf(id: string): HTMLElement {
-  return document.querySelector<HTMLElement>(`.session-item[data-session-id="${id}"]`) as HTMLElement;
+  const rows = [...document.querySelectorAll<HTMLElement>(`.session-item[data-session-id="${id}"]`)];
+  return (rows.find((r) => !r.closest('.attention-section, .stopped-section, .matches-section')) ?? rows[0]) as HTMLElement;
+}
+
+function section(id: string): HTMLElement {
+  return document.querySelector(`.category-section[data-category-id="${id}"]`) as HTMLElement;
+}
+
+function toggle(id: string): void {
+  (rowOf(id).querySelector('.session-group-toggle') as HTMLElement).click();
+}
+
+function waiting(id: string, timestamp = '2026-10-01T11:00:00.000Z'): void {
+  notifications.set(id, { type: 'needs-input', timestamp });
 }
 
 beforeEach(() => {
   localStorage.clear();
-  document.body.innerHTML = '<ul id="session-list"></ul>';
+  document.body.innerHTML =
+    '<input id="session-filter"><ul id="session-list"></ul><div id="session-toast" hidden></div>';
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
   sessions = new Map();
   categories = new Map([['cat', { id: 'cat', name: 'Work', sortOrder: 0, collapsed: false }]]);
   notifications = new Map();
+  currentId = null;
   host = {
     sessions,
     categories,
     sessionNotifications: notifications,
-    getCurrentSessionId: () => null,
+    getCurrentSessionId: () => currentId,
     attachToSession: vi.fn(),
     reviveSession: vi.fn(),
     deleteSession: vi.fn(),
@@ -78,99 +108,170 @@ beforeEach(() => {
   sessions.set('a', info('a', { spawnedBy: 'main', createdAt: '2026-10-01T10:01:00.000Z', sortOrder: 5, permissionMode: 'acceptEdits' }));
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('nesting', () => {
-  it("renders children right under their parent, in the parent's category, in creation order", () => {
+  it('folds started sessions under their parent by default, with a tally', () => {
     view();
+    expect(rowIds()).toEqual(['main', 'other']);
+    expect(rowOf('main').querySelector('.session-kids-count')?.textContent).toBe('2');
+    expect(rowOf('main').querySelectorAll('.tally-dot')).toHaveLength(2);
+  });
+
+  it("unfolds children right under their parent, in the parent's category, in creation order", () => {
+    view();
+    toggle('main');
     expect(rowIds()).toEqual(['main', 'a', 'b', 'other']);
-    const work = document.querySelector('.category-section[data-category-id="cat"]') as HTMLElement;
-    expect([...work.querySelectorAll<HTMLElement>('.session-item')].map((li) => li.dataset.sessionId)).toEqual(['main', 'a', 'b']);
+    expect(rowIds(section('cat'))).toEqual(['main', 'a', 'b']);
     expect(rowOf('a').classList.contains('session-child')).toBe(true);
     expect(rowOf('main').classList.contains('session-parent')).toBe(true);
+    // Unfolded, the parent drops its tally: the rows say it.
+    expect(rowOf('main').querySelector('.session-kids')).toBeNull();
   });
 
   it('children are not draggable and have no drag handle', () => {
     view();
+    toggle('main');
     expect(rowOf('a').draggable).toBe(false);
     expect(rowOf('a').querySelector('.session-drag-handle')).toBeNull();
     expect(rowOf('main').draggable).toBe(true);
+    expect(rowOf('other').querySelector('.session-drag-handle')).not.toBeNull();
   });
 
-  it("renders a child whose parent was deleted as top-level, in its own category", () => {
+  it('renders a child whose parent was deleted as top-level, in its own category', () => {
     sessions.delete('main');
     view();
     expect(rowIds().sort()).toEqual(['a', 'b', 'other']);
     expect(rowOf('a').classList.contains('session-child')).toBe(false);
   });
 
-  it('keeps the group for a terminated parent that is still listed', () => {
+  it('keeps a stopped parent in place while its started sessions still run', () => {
     sessions.set('main', info('main', { categoryId: 'cat', status: 'terminated', attachable: false }));
     view();
-    expect(rowIds()).toEqual(['main', 'a', 'b', 'other']);
-  });
-
-  it('shows a permission-mode chip only on a child whose mode is not auto', () => {
-    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'auto' });
-    view();
-    expect(rowOf('a').querySelector('.session-mode-chip')?.textContent).toBe('acceptEdits');
-    expect(rowOf('b').querySelector('.session-mode-chip')).toBeNull();
-  });
-
-  it('shows manual, and reads a row stored as default as manual', () => {
-    sessions.set('a', { ...sessions.get('a')!, permissionMode: 'manual' });
-    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'default' });
-    view();
-    expect(rowOf('a').querySelector('.session-mode-chip')?.textContent).toBe('manual');
-    expect(rowOf('b').querySelector('.session-mode-chip')?.textContent).toBe('manual');
+    expect(rowIds(section('cat'))).toEqual(['main']);
+    expect(document.querySelector('.stopped-section')).toBeNull();
   });
 });
 
-describe('summary and collapse', () => {
-  it("summarises the children's notifications on the parent's row", () => {
-    notifications.set('a', { type: 'needs-input', timestamp: '2026-10-01T11:00:00.000Z' });
+describe('row state and the detail line', () => {
+  it('maps notifications and liveness to one glyph state; a stopped row is stopped', () => {
+    const live = info('x');
+    expect(rowState(live, undefined)).toBe('live');
+    expect(rowState(live, { type: 'needs-input', timestamp: '' })).toBe('input');
+    expect(rowState(live, { type: 'completed', timestamp: '' })).toBe('done');
+    expect(rowState(info('y', { attachable: false }), { type: 'needs-input', timestamp: '' })).toBe('stopped');
+  });
+
+  it('shows the detail line only on the selected row', () => {
+    currentId = 'other';
+    view();
+    expect(rowOf('other').querySelector('.session-detail')).not.toBeNull();
+    expect(rowOf('main').querySelector('.session-detail')).toBeNull();
+    expect(rowOf('other').classList.contains('active')).toBe(true);
+  });
+
+  it("puts a child's permission mode in its detail line, only when not auto", () => {
+    sessions.set('b', { ...sessions.get('b')!, permissionMode: 'auto' });
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(['main']));
+    currentId = 'a';
+    view();
+    expect(rowOf('a').querySelector('.session-detail .session-mode-chip')?.textContent).toBe('acceptEdits');
+    currentId = 'b';
+    view();
+    expect(rowOf('b').querySelector('.session-mode-chip')).toBeNull();
+  });
+
+  it('reads a row stored as default as manual', () => {
+    sessions.set('a', { ...sessions.get('a')!, permissionMode: 'default' });
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(['main']));
+    currentId = 'a';
+    view();
+    expect(rowOf('a').querySelector('.session-mode-chip')?.textContent).toBe('manual');
+  });
+
+  it('shows an account warning on the row itself, not only in the detail line', () => {
+    sessions.set('other', { ...sessions.get('other')!, accountWarning: 'login changed' });
+    view();
+    expect(rowOf('other').querySelector('.session-account-warning')?.getAttribute('title')).toBe('login changed');
+  });
+
+  it('shows account dots only when sessions run under more than one account', () => {
+    sessions.set('other', { ...sessions.get('other')!, account: 'work' });
+    sessions.set('main', { ...sessions.get('main')!, account: 'work' });
+    view();
+    expect(rowOf('other').querySelector('.session-account-dot')).toBeNull();
+    sessions.set('main', { ...sessions.get('main')!, account: 'personal' });
+    view();
+    expect(rowOf('other').querySelector('.session-account-dot')?.getAttribute('title')).toContain('work');
+  });
+});
+
+describe('fold, open and stored state', () => {
+  it("summarises the children's notifications on the folded parent, most urgent first", () => {
+    waiting('a');
     notifications.set('b', { type: 'completed', timestamp: '2026-10-01T11:00:00.000Z' });
     view();
-    const status = rowOf('main').querySelector('.session-summary')?.textContent ?? '';
-    expect(status).toContain('1 needs input');
-    expect(status).toContain('1 done');
-    expect(status).toContain('2 started');
+    const tally = rowOf('main').querySelector('.session-kids') as HTMLElement;
+    expect(tally.getAttribute('title')).toBe('1 needs input · 1 done · 2 started');
+    const dots = [...tally.querySelectorAll('.tally-dot')].map((d) => d.className);
+    expect(dots).toEqual(['tally-dot state-input', 'tally-dot state-done']);
   });
 
-  it('collapses with the arrow without opening the parent, keeps the summary, and remembers it', () => {
-    notifications.set('b', { type: 'needs-input', timestamp: '2026-10-01T11:00:00.000Z' });
+  it('unfolds with the arrow without opening the parent, and remembers it', () => {
     view();
-    (rowOf('main').querySelector('.session-group-toggle') as HTMLElement).click();
-
+    toggle('main');
     expect(host.attachToSession).not.toHaveBeenCalled();
-    expect(rowIds()).toEqual(['main', 'other']);
-    expect(rowOf('main').querySelector('.session-summary')?.textContent).toContain('1 needs input');
+    expect(JSON.parse(localStorage.getItem(EXPANDED_KEY) as string)).toEqual(['main']);
 
-    // A fresh view in the same browser starts collapsed.
-    document.body.innerHTML = '<ul id="session-list"></ul>';
+    // A fresh view in the same browser starts unfolded.
+    document.body.innerHTML = '<input id="session-filter"><ul id="session-list"></ul>';
     view();
+    expect(rowIds()).toEqual(['main', 'a', 'b', 'other']);
+  });
+
+  it('drops the old collapsed-groups key, whose meaning was the opposite', () => {
+    localStorage.setItem('claude-remote.collapsedSessionGroups', JSON.stringify(['main']));
+    view();
+    expect(localStorage.getItem('claude-remote.collapsedSessionGroups')).toBeNull();
     expect(rowIds()).toEqual(['main', 'other']);
   });
 
-  it('tapping the parent row opens it and does not collapse the group', () => {
+  it('tapping the parent row opens it and does not unfold the group', () => {
     view();
     (rowOf('main').querySelector('.session-name') as HTMLElement).click();
     expect(host.attachToSession).toHaveBeenCalledWith('main');
-    expect(rowIds()).toEqual(['main', 'a', 'b', 'other']);
+    expect(rowIds()).toEqual(['main', 'other']);
   });
 
   it('tapping a child opens the child', () => {
     view();
+    toggle('main');
     (rowOf('a').querySelector('.session-name') as HTMLElement).click();
     expect(host.attachToSession).toHaveBeenCalledWith('a');
   });
+
+  it('forgets expanded ids of deleted sessions the next time a group is toggled', () => {
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(['gone-parent', 'track:gone-builder']));
+    view();
+    toggle('main');
+    expect(JSON.parse(localStorage.getItem(EXPANDED_KEY) as string)).toEqual(['main']);
+  });
 });
 
-describe('counts, reordering and stored state', () => {
+describe('counts and reordering', () => {
   it("counts a category's nested children with its rows", () => {
     view();
-    const work = document.querySelector('.category-section[data-category-id="cat"] .category-count');
-    expect(work?.textContent).toBe('(3)');
-    const uncategorized = document.querySelector('.category-section.uncategorized .category-count');
-    expect(uncategorized?.textContent).toBe('(1)');
+    expect(section('cat').querySelector('.category-count')?.textContent).toBe('3');
+    expect(document.querySelector('.category-section.uncategorized .category-count')?.textContent).toBe('1');
+  });
+
+  it("tallies what waits in a category, children included", () => {
+    waiting('a');
+    view();
+    expect(section('cat').querySelector('.category-tally')?.textContent).toBe('1 waiting');
+    expect(document.querySelector('.uncategorized .category-tally')).toBeNull();
   });
 
   it('leaves nested children out of a reorder, though they share the category', () => {
@@ -182,33 +283,142 @@ describe('counts, reordering and stored state', () => {
     expect(updates.map((u) => u.id)).toEqual(['x', 'other']);
   });
 
-  it('drops collapsed ids of deleted parents the next time a group is toggled', () => {
-    localStorage.setItem('claude-remote.collapsedSessionGroups', JSON.stringify(['gone-parent']));
+  it('marks an empty category but still renders it, as a drop target', () => {
+    categories.set('empty', { id: 'empty', name: 'Ideas', sortOrder: 1, collapsed: false });
     view();
-    (rowOf('main').querySelector('.session-group-toggle') as HTMLElement).click();
-    expect(JSON.parse(localStorage.getItem('claude-remote.collapsedSessionGroups') as string)).toEqual(['main']);
+    expect(section('empty').classList.contains('empty')).toBe(true);
+    expect(section('empty').querySelector('.category-count')?.textContent).toBe('0');
+  });
+});
+
+describe('"Needs you" strip', () => {
+  it('lists waiting sessions, children included, with the parent as context', () => {
+    waiting('a');
+    view();
+    const strip = document.querySelector('.attention-section') as HTMLElement;
+    expect(rowIds(strip)).toEqual(['a']);
+    expect(strip.querySelector('.session-context')?.textContent).toBe('main');
+    expect((strip.querySelector('.session-item') as HTMLElement).draggable).toBe(false);
+  });
+
+  it('is absent when nothing waits', () => {
+    view();
+    expect(document.querySelector('.attention-section')).toBeNull();
+  });
+
+  it('opening a waiting child from the strip unfolds its parent', () => {
+    waiting('b');
+    view();
+    (document.querySelector('.attention-section .session-name') as HTMLElement).click();
+    expect(host.attachToSession).toHaveBeenCalledWith('b');
+    expect(JSON.parse(localStorage.getItem(EXPANDED_KEY) as string)).toEqual(['main']);
+  });
+
+  it('orders longest-waiting first and skips stopped sessions', () => {
+    waiting('a', '2026-10-01T11:05:00.000Z');
+    waiting('b', '2026-10-01T11:01:00.000Z');
+    waiting('other');
+    sessions.set('other', { ...sessions.get('other')!, attachable: false });
+    expect(needsYou(sessions, notifications).map((s) => s.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('"Stopped" drawer', () => {
+  beforeEach(() => {
+    sessions.set('dead', info('dead', { categoryId: 'cat', attachable: false, revivable: true, sortOrder: 2 }));
+  });
+
+  it('moves stopped rows out of their category into a folded drawer', () => {
+    view();
+    expect(rowIds(section('cat'))).not.toContain('dead');
+    const drawer = document.querySelector('.stopped-section') as HTMLElement;
+    expect(drawer.querySelector('.category-count')?.textContent).toBe('1');
+    expect(rowIds(drawer)).toEqual([]);
+  });
+
+  it('opens on click, names the category, offers revive, and remembers being open', () => {
+    view();
+    (document.querySelector('.stopped-header') as HTMLElement).click();
+    const drawer = document.querySelector('.stopped-section') as HTMLElement;
+    expect(rowIds(drawer)).toEqual(['dead']);
+    expect(drawer.querySelector('.session-category-chip')?.textContent).toBe('Work');
+    (drawer.querySelector('.session-revive-btn') as HTMLElement).click();
+    expect(host.reviveSession).toHaveBeenCalledWith('dead');
+    expect(localStorage.getItem('claude-remote.stoppedDrawerOpen')).toBe('true');
+  });
+
+  it('leaves stopped rows in place when the setting says so', () => {
+    localStorage.setItem(KEEP_STOPPED_IN_PLACE_KEY, 'true');
+    view();
+    expect(rowIds(section('cat'))).toContain('dead');
+    expect(document.querySelector('.stopped-section')).toBeNull();
   });
 });
 
 describe('read-only peers (project/builder-critic-pairs.md)', () => {
   const WT = 'C:\\wt\\split';
   const OTHER_WT = 'C:\\wt\\other';
+  const at = (m: number) => `2026-10-01T10:${String(10 + m).padStart(2, '0')}:00.000Z`;
 
-  it('renders each peer right after its builder, with a read-only chip', () => {
-    // Started in this order: builder, another track's builder, then the first one's peer.
-    sessions.set('b1', info('b1', { spawnedBy: 'main', cwd: WT, createdAt: '2026-10-01T10:03:00.000Z' }));
-    sessions.set('b2', info('b2', { spawnedBy: 'main', cwd: OTHER_WT, createdAt: '2026-10-01T10:04:00.000Z' }));
-    sessions.set('p1', info('p1', { spawnedBy: 'main', cwd: WT, access: 'read', createdAt: '2026-10-01T10:05:00.000Z' }));
+  function builderWithPeers(n: number): void {
+    sessions.set('b1', info('b1', { spawnedBy: 'main', cwd: WT, createdAt: at(0) }));
+    sessions.set('b2', info('b2', { spawnedBy: 'main', cwd: OTHER_WT, createdAt: at(1) }));
+    for (let i = 1; i <= n; i++) {
+      sessions.set(`p${i}`, info(`p${i}`, { spawnedBy: 'main', cwd: WT, access: 'read', createdAt: at(1 + i) }));
+    }
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(['main']));
+  }
+
+  it('renders a builder and its peer as one track row', () => {
+    builderWithPeers(1);
     view();
-    expect(rowIds()).toEqual(['main', 'a', 'b', 'b1', 'p1', 'b2', 'other']);
-    expect(rowOf('p1').querySelector('.session-access-chip')?.textContent).toBe('read-only');
-    expect(rowOf('b1').querySelector('.session-access-chip')).toBeNull();
-    // Not a permission-mode chip: the mode chip still means only the mode.
-    expect(rowOf('p1').querySelector('.session-mode-chip')).toBeNull();
+    expect(rowIds()).toEqual(['main', 'a', 'b', 'b1', 'b2', 'other']);
+    const track = rowOf('b1');
+    expect(track.classList.contains('session-track')).toBe(true);
+    expect(track.querySelector('.session-track-chip')?.textContent).toBe('pair');
+    expect(track.querySelectorAll('.session-glyph.ro')).toHaveLength(1);
   });
 
-  it('keeps two peers in creation order after the builder, and a peer with no builder in its place', () => {
-    const at = (m: number) => `2026-10-01T11:0${m}:00.000Z`;
+  it('shows up to three peer squares, then +n, and a 1+n chip', () => {
+    builderWithPeers(4);
+    view();
+    const track = rowOf('b1');
+    expect(track.querySelectorAll('[data-peer-id]')).toHaveLength(3);
+    expect(track.querySelector('.session-glyph-more')?.textContent).toBe('+1');
+    expect(track.querySelector('.session-track-chip')?.textContent).toBe('1+4');
+  });
+
+  it("a peer's square opens that peer; the rest of the row opens the builder", () => {
+    builderWithPeers(2);
+    view();
+    (rowOf('b1').querySelector('[data-peer-id="p2"]') as HTMLElement).click();
+    expect(host.attachToSession).toHaveBeenLastCalledWith('p2');
+    (rowOf('b1').querySelector('.session-name') as HTMLElement).click();
+    expect(host.attachToSession).toHaveBeenLastCalledWith('b1');
+  });
+
+  it("unfolding a track lists its peers by name under the builder", () => {
+    builderWithPeers(2);
+    view();
+    toggle('b1');
+    expect(rowIds()).toEqual(['main', 'a', 'b', 'b1', 'p1', 'p2', 'b2', 'other']);
+    expect(rowOf('p1').classList.contains('session-track-member')).toBe(true);
+    expect(rowOf('b1').querySelector('[data-peer-id]')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(EXPANDED_KEY) as string)).toEqual(['main', 'track:b1']);
+  });
+
+  it("counts a track once, at its most urgent member, in the parent's tally", () => {
+    builderWithPeers(2);
+    waiting('p2');
+    localStorage.clear();
+    view();
+    const dots = [...rowOf('main').querySelectorAll('.tally-dot')].map((d) => d.className);
+    // a, b, the b1 track, b2: four tracks, the waiting one first.
+    expect(dots).toHaveLength(4);
+    expect(dots[0]).toBe('tally-dot state-input');
+  });
+
+  it('groups any number of peers with their builder, and leaves an orphan peer alone', () => {
     const list = [
       info('orphan', { access: 'read', cwd: OTHER_WT, createdAt: at(0) }),
       info('builder', { cwd: WT, createdAt: at(1) }),
@@ -216,16 +426,103 @@ describe('read-only peers (project/builder-critic-pairs.md)', () => {
       info('peer2', { access: 'read', cwd: WT, createdAt: at(4) }),
       info('peer1', { access: 'read', cwd: WT, createdAt: at(3) }),
     ];
+    expect(trackGroups(list).map((g) => [g.lead.id, g.peers.map((p) => p.id)])).toEqual([
+      ['orphan', []],
+      ['builder', ['peer1', 'peer2']],
+      ['x', []],
+    ]);
     expect(peersAfterBuilders(list).map((s) => s.id)).toEqual(['orphan', 'builder', 'peer1', 'peer2', 'x']);
   });
 
   it('puts a peer after the newest builder in its worktree started before it', () => {
-    const at = (m: number) => `2026-10-01T12:0${m}:00.000Z`;
     const list = [
       info('old', { cwd: WT, status: 'terminated', createdAt: at(0) }),
       info('new', { cwd: WT, createdAt: at(1) }),
       info('peer', { access: 'read', cwd: WT, createdAt: at(2) }),
     ];
     expect(peersAfterBuilders(list).map((s) => s.id)).toEqual(['old', 'new', 'peer']);
+  });
+});
+
+describe('filter', () => {
+  it('matches name, @name, account, category, parent, read-only and stopped, every word', () => {
+    const s = info('x', { name: 'Save system', claudeName: 'claude-remote-31', account: 'work', access: 'read', attachable: false });
+    const ctx = { parentName: 'gladiatory', categoryName: 'Coding' };
+    for (const q of ['save', '@claude-remote', 'work', 'coding', 'gladiatory', 'read-only', 'stopped', 'save WORK']) {
+      expect(matchesFilter(s, q, ctx)).toBe(true);
+    }
+    expect(matchesFilter(s, 'save personal', ctx)).toBe(false);
+    expect(matchesFilter(info('y'), 'stopped')).toBe(false);
+  });
+
+  it('flattens the tree into matching rows with their context, and Escape clears it', () => {
+    view();
+    const input = document.getElementById('session-filter') as HTMLInputElement;
+    input.value = 'b';
+    input.dispatchEvent(new Event('input'));
+    const matches = document.querySelector('.matches-section') as HTMLElement;
+    // The folded child "b" is found, with its parent as context.
+    expect(rowIds(matches)).toEqual(['b']);
+    expect(rowOf('b').querySelector('.session-context')?.textContent).toBe('main');
+    // A parent's name finds what it started.
+    input.value = 'main';
+    input.dispatchEvent(new Event('input'));
+    expect(rowIds(document.querySelector('.matches-section') as HTMLElement)).toEqual(['main', 'a', 'b']);
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(input.value).toBe('');
+    expect(document.querySelector('.matches-section')).toBeNull();
+  });
+
+  it('says so when nothing matches', () => {
+    view();
+    const input = document.getElementById('session-filter') as HTMLInputElement;
+    input.value = 'zzz';
+    input.dispatchEvent(new Event('input'));
+    expect(document.querySelector('.session-filter-empty')?.textContent).toBe('No session matches "zzz".');
+  });
+});
+
+describe('@ copy', () => {
+  it('has a copy action only on rows with a running Claude', () => {
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    view();
+    expect(rowOf('other').querySelector('.session-copy-btn')).not.toBeNull();
+    expect(rowOf('main').querySelector('.session-copy-btn')).toBeNull();
+    // The address is not printed on the row.
+    expect(rowOf('other').textContent).not.toContain('claude-remote-31');
+  });
+
+  it('copies @name and says which, without opening the session', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    view();
+    const btn = rowOf('other').querySelector('.session-copy-btn') as HTMLElement;
+    btn.click();
+    await vi.waitFor(() => expect(btn.classList.contains('copied')).toBe(true));
+    expect(writeText).toHaveBeenCalledWith('@claude-remote-31');
+    expect(host.attachToSession).not.toHaveBeenCalled();
+    expect(rowOf('other').classList.contains('just-copied')).toBe(true);
+    const toast = document.getElementById('session-toast') as HTMLElement;
+    expect(toast.hidden).toBe(false);
+    expect(toast.textContent).toContain('Copied');
+    expect(toast.querySelector('.session-toast-text')?.textContent).toBe('@claude-remote-31');
+  });
+
+  it('never says Copied when the copy failed, and offers the text to select', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('insecure')) } });
+    const execCommand = vi.fn().mockReturnValue(false);
+    (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    view();
+    const btn = rowOf('other').querySelector('.session-copy-btn') as HTMLElement;
+    btn.click();
+    const toast = document.getElementById('session-toast') as HTMLElement;
+    await vi.waitFor(() => expect(toast.hidden).toBe(false));
+    expect(toast.classList.contains('failed')).toBe(true);
+    expect(toast.textContent).not.toContain('Copied');
+    expect((toast.querySelector('input') as HTMLInputElement).value).toBe('@claude-remote-31');
+    expect(btn.classList.contains('copied')).toBe(false);
   });
 });

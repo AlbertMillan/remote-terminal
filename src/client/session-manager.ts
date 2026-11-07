@@ -171,6 +171,7 @@ class SessionManager {
     },
     jobOverlay: this.jobOverlay,
     syncJobOverlay: () => this.syncJobOverlay(),
+    renderSessionList: () => this.renderSessionList(),
   });
   private planUsage = new PlanUsageChip();
   /** The per-account usage page, opened from the chip (docs/plan-usage.md); a discard refreshes the chip's counts. */
@@ -274,6 +275,7 @@ class SessionManager {
 
     // New session buttons
     document.getElementById('new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
+    document.getElementById('add-category-btn')?.addEventListener('click', () => this.showCategoryModal('create'));
     document.getElementById('welcome-new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
 
     // Sidebar tabs (Sessions / Projects board)
@@ -432,6 +434,11 @@ class SessionManager {
           this.showNewSessionModal();
         }
       }
+      // Filter sessions: Alt+K (the terminal forwards it too: xterm's textarea is focused there)
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        this.focusSessionFilter();
+      }
       // Session navigation: Ctrl+Q = prev, Ctrl+E = next
       // Skip when an input/textarea is focused (modal inputs or xterm helper textarea)
       if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
@@ -485,6 +492,17 @@ class SessionManager {
   private openPip(): void {
     if (!this.currentSessionId) return;
     this.pipManager.open(this.currentSessionId, this.sessions, this.sessionNotifications);
+  }
+
+  /** Alt+K: show the Sessions tab (and the sidebar, if folded or off-screen) and focus its filter. */
+  private focusSessionFilter(): void {
+    if (this.projectLogView.isProjectsTabActive()) this.projectLogView.switchTab('sessions');
+    if (document.getElementById('app')?.classList.contains('sidebar-collapsed')) this.toggleSidebar();
+    if (window.matchMedia?.('(max-width: 768px)').matches) {
+      document.getElementById('sidebar')?.classList.add('open');
+      document.getElementById('sidebar-overlay')?.classList.add('open');
+    }
+    this.sessionListView.focusFilter();
   }
 
   private toggleSidebar(): void {
@@ -866,6 +884,7 @@ class SessionManager {
       });
       this.terminalMgr.setNavigateSessionCallback((dir) => this.navigateToSession(dir));
       this.terminalMgr.setNewSessionCallback(() => this.showNewSessionModal());
+      this.terminalMgr.setFindSessionCallback(() => this.focusSessionFilter());
 
       // Write scrollback at the session's original dimensions so escape
       // sequences (cursor positioning, line wrapping) render correctly.
@@ -1138,6 +1157,7 @@ class SessionManager {
     const statusEl = document.getElementById('connection-status');
     if (statusEl) {
       statusEl.className = `status ${status}`;
+      statusEl.title = status.charAt(0).toUpperCase() + status.slice(1);
       const textEl = statusEl.querySelector('.status-text');
       if (textEl) {
         textEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);

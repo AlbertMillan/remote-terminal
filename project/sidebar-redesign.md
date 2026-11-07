@@ -37,7 +37,9 @@ Goals:
 
 1. **One-line rows, 28px.** Leading status glyph (needs input = filled amber, done =
    filled green, live = blue ring, stopped = dashed ring; a read-only peer's glyph is
-   square), name, then an account dot in the `--account-N` colour the usage chip uses.
+   square), name, then an account dot in the `--account-N` colour the usage chip uses
+   (position in `/api/accounts`), shown only when sessions span 2+ accounts. An account
+   warning stays on the row as ⚠.
    Account, cwd, non-`auto` mode, read-only and "started by" move to a **detail line**
    under the selected row only.
 2. **Hover actions:** `@` (copy), revive (only when `revivable`), delete. They replace the
@@ -58,9 +60,10 @@ Goals:
    (`claude-remote.expandedSessionGroups`) holding expanded ids; the old
    `collapsedSessionGroups` key is ignored, or every previously open group would read as
    closed-by-choice the other way round.
-6. **Track rows: one builder, any number of read-only peers.** The server enforces only the
-   single writer per track; the one-critic rule was dropped (`builder-critic-pairs.md`,
-   Superseded design), so a builder may have several peers (critic, perf reviewer, …).
+6. **Track rows: one builder and its read-only peers.** The one-critic rule was dropped
+   (`builder-critic-pairs.md`, Superseded design); the server now allows one writer and up
+   to `MAX_PEERS` (2) read-only peers per caller and track (`sessions-api.ts`). The row
+   doesn't depend on that cap.
    Reuse `peersAfterBuilders()`, which already places **every** peer of a builder right
    after it: the builder and all its peers render as one row with the builder's name, the
    builder's glyph, then one square glyph per peer up to 3 and `+n` beyond, and a chip
@@ -71,17 +74,22 @@ Goals:
    still appears in the "Needs you" strip by its own name. A peer with no builder renders
    alone.
 7. **"Stopped" drawer.** Top-level rows that are not `attachable` leave their category and
-   collect in one collapsed section at the bottom, each with its category as a chip.
+   collect in one collapsed section at the bottom, each with its category as a chip. Only
+   when **nothing in the group is live**: a stopped parent whose children still run stays
+   in place, or they would vanish with it.
    Stopped **children** stay dimmed inside their parent. A setting ("Keep stopped
    sessions in their category", default off) restores the old placement.
-8. **Filter**, focused with `/` (registered in `SHORTCUT_GROUPS`), Esc clears. Matches
+8. **Filter**, focused with **Alt+K** (registered in `SHORTCUT_GROUPS`; the terminal
+   forwards it like Alt+N), Esc clears. Not `/`: the terminal holds focus nearly always,
+   and `/` starts every Claude slash command. Matches
    name, `@claudeName`, category, account, and `read-only`. A non-empty filter flattens
    the tree into matching rows with their parent or category as context, and hides the
    strip and drawer.
-9. **One-line header:** connection dot, title, a 5-hour usage meter that opens the existing
-   plan-usage details, icon buttons for shortcuts and settings. The build chip stays as it
-   is. "Add Category" becomes an icon beside the tabs; empty categories collapse into one
-   "Empty: Ideas, Questions" line that becomes real drop zones while a drag is in progress.
+9. **One-line header:** connection dot, title, icon buttons for shortcuts and settings; the
+   build chip wraps under them when shown. The plan-usage chip stays as it is below (one
+   line per account; a meter would drop the second account). "Add Category" becomes an
+   icon beside the tabs. An empty category is just its dimmed header: one line, still a
+   drop target, still renamable (one combined "Empty: …" line would lose both).
 10. **Category headers** show `n` and a tally (`2 waiting · 1 done`) instead of `(n)`;
     rename/delete stay on hover.
 
@@ -96,7 +104,7 @@ Goals:
 - `src/client/index.html`: header markup, filter input, toast element.
 - `src/client/styles.css`: row, glyph, strip, drawer, tree, toast styles; drop the
   two-line row and chip rules that no longer render. `(hover: none)` variant.
-- `src/client/shortcuts.ts`: `/` Focus session filter.
+- `src/client/shortcuts.ts`: Alt+K Filter sessions (`terminal.ts` forwards it).
 - `src/client/settings-modal.ts`: the "keep stopped sessions in place" toggle
   (client-side, localStorage like the badge setting).
 - Click on a row still closes the mobile overlay as today.
