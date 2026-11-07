@@ -46,7 +46,8 @@ The server reads the stamp once at boot (the build it runs) and again for each
 before they were committed don't count; and `restart` when the running and on-disk trees
 differ in a build input. A rebuild of the same inputs (every Land builds, a docs-only one
 included) is `current`: a restart ends every terminal. Rebuild wins; docs-only and
-uncommitted changes never count. Either shows a chip beside "Connected" that opens
-Settings → Server — never a one-click restart. A Land of this project re-checks and says
+uncommitted changes never count. Either puts an amber dot on the Settings gear and on
+Settings' Server tab (`BuildIndicator`), and the gear then opens on that tab, whose status
+line says which is needed — never a one-click restart. A Land of this project re-checks and says
 which is needed. A `dist/` from before stamps, dev mode, or no git shows nothing
 (`unknown`). Spec: `project/server-behind-build.md`.

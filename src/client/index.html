@@ -29,8 +29,6 @@
             <span class="status-text">Disconnected</span>
           </div>
           <h1>Claude Remote</h1>
-          <!-- The running server is behind its build; opens Settings → Server. See BuildChip in server-restart.ts. -->
-          <button type="button" id="build-chip" class="build-chip" hidden></button>
           <div class="sidebar-header-actions">
             <button id="shortcuts-btn" class="settings-btn icon-only" title="Keyboard Shortcuts (?)" aria-label="Keyboard Shortcuts">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -43,6 +41,8 @@
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
               </svg>
+              <!-- The running server is behind its build; the gear then opens on Settings → Server. See BuildIndicator in server-restart.ts. -->
+              <span id="settings-build-dot" class="settings-build-dot" hidden></span>
             </button>
           </div>
         </div>
@@ -407,118 +407,140 @@
     </div>
   </div>
 
-  <!-- Settings Modal -->
+  <!-- Settings Modal: tabs, each panel `settings-panel-<tab>`; see src/client/settings-modal.ts. -->
   <div id="settings-modal" class="modal hidden">
-    <div class="modal-content">
-      <h3>Settings</h3>
-      <div class="settings-form">
-        <div id="notification-permission-status" class="permission-status default">
-          Checking notification permissions...
+    <div class="modal-content settings-content" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h3 id="settings-title">Settings</h3>
+      <button type="button" id="settings-close" class="settings-close" aria-label="Close settings">×</button>
+
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button type="button" class="settings-tab" role="tab" id="settings-tab-notifications" aria-controls="settings-panel-notifications" aria-selected="true">Notifications<span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
+        <button type="button" class="settings-tab" role="tab" id="settings-tab-display" aria-controls="settings-panel-display" aria-selected="false" tabindex="-1">Display<span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
+        <button type="button" class="settings-tab" role="tab" id="settings-tab-sessions" aria-controls="settings-panel-sessions" aria-selected="false" tabindex="-1">Sessions<span class="settings-tab-scope" title="Saved on the server: applies to every device, without a restart">server</span><span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
+        <button type="button" class="settings-tab" role="tab" id="settings-tab-server" aria-controls="settings-panel-server" aria-selected="false" tabindex="-1">Server<span id="settings-tab-server-dot" class="settings-tab-behind" hidden></span></button>
+      </div>
+
+      <!-- Every panel stays in the layout (hidden ones invisible), so the modal is as tall as
+           the tallest tab and never resizes on a switch; past the viewport the panels scroll. -->
+      <div class="settings-form" id="settings-panels">
+        <div class="settings-panel" role="tabpanel" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications">
+          <div class="settings-section">
+            <div class="settings-section-title">Methods</div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-browser-notifications" checked>
+              <label for="setting-browser-notifications">
+                Browser notifications
+                <div class="setting-description">Show system notifications when tab is not focused</div>
+                <!-- Only while the browser hasn't allowed notifications. -->
+                <div id="setting-browser-notifications-warning" class="setting-warning hidden"></div>
+              </label>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-visual-badges" checked>
+              <label for="setting-visual-badges">
+                Visual badges
+                <div class="setting-description">Show colored badges on session items in sidebar</div>
+              </label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Notify when</div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-notify-input" checked>
+              <label for="setting-notify-input">
+                Input needed
+                <div class="setting-description">Claude Code is waiting for your response</div>
+              </label>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-notify-completed" checked>
+              <label for="setting-notify-completed">
+                Task completed
+                <div class="setting-description">Claude Code has finished the current task</div>
+              </label>
+            </div>
+          </div>
         </div>
 
-        <div class="settings-section">
-          <div class="settings-section-title">Notification Methods</div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-browser-notifications" checked>
-            <label for="setting-browser-notifications">
-              Browser notifications
-              <div class="setting-description">Show system notifications when tab is not focused</div>
-            </label>
+        <!-- Saved in this browser (localStorage), per device. -->
+        <div class="settings-panel" role="tabpanel" id="settings-panel-display" aria-labelledby="settings-tab-display" hidden>
+          <div class="settings-section">
+            <div class="settings-section-title">Sidebar</div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-keep-stopped">
+              <label for="setting-keep-stopped">
+                Keep stopped sessions in their category
+                <div class="setting-description">Off: stopped sessions collect in a Stopped drawer at the bottom of the list</div>
+              </label>
+            </div>
           </div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-visual-badges" checked>
-            <label for="setting-visual-badges">
-              Visual badges
-              <div class="setting-description">Show colored badges on session items in sidebar</div>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Sidebar</div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-keep-stopped">
-            <label for="setting-keep-stopped">
-              Keep stopped sessions in their category
-              <div class="setting-description">Off: stopped sessions collect in a Stopped drawer at the bottom of the list</div>
-            </label>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div class="settings-section-title">Notify When</div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-notify-input" checked>
-            <label for="setting-notify-input">
-              Input needed
-              <div class="setting-description">Claude Code is waiting for your response</div>
-            </label>
-          </div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-notify-completed" checked>
-            <label for="setting-notify-completed">
-              Task completed
-              <div class="setting-description">Claude Code has finished the current task</div>
-            </label>
-          </div>
-        </div>
-        <div class="settings-section">
-          <div class="settings-section-title">Display</div>
-          <div class="setting-item">
-            <input type="checkbox" id="setting-job-overlay" checked>
-            <label for="setting-job-overlay">
-              Job overlay
-              <div class="setting-description">Live pipeline jobs across all projects, over the main area</div>
-            </label>
-          </div>
-          <div class="setting-item setting-sub" id="setting-job-overlay-placement">
-            <div class="setting-radios">
-              <label><input type="radio" name="job-overlay-placement" value="below" checked> Floating below the header</label>
-              <label><input type="radio" name="job-overlay-placement" value="header"> In the session header</label>
+          <div class="settings-section">
+            <div class="settings-section-title">Job overlay</div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-job-overlay" checked>
+              <label for="setting-job-overlay">
+                Job overlay
+                <div class="setting-description">Live pipeline jobs across all projects, over the main area</div>
+              </label>
+            </div>
+            <div class="setting-item setting-sub" id="setting-job-overlay-placement">
+              <div class="setting-radios">
+                <label><input type="radio" name="job-overlay-placement" value="below" checked> Floating below the header</label>
+                <label><input type="radio" name="job-overlay-placement" value="header"> In the session header</label>
+              </div>
             </div>
           </div>
         </div>
 
         <!-- Saved in the server's config, not this browser; see src/client/session-limit-setting.ts. -->
-        <div class="settings-section">
-          <div class="settings-section-title">Sessions</div>
-          <div class="setting-item">
-            <label for="setting-max-sessions">
-              Maximum sessions
-              <div class="setting-description">Every session not closed counts, including ones waiting to be revived after a restart. At the limit new sessions are refused; none are closed. Applies to every device, without a restart. <span id="setting-max-sessions-counted"></span></div>
-            </label>
-            <input type="number" id="setting-max-sessions" step="1" disabled>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-sessions" aria-labelledby="settings-tab-sessions" hidden>
+          <div class="settings-section">
+            <div class="settings-panel-note">At a limit, new sessions are refused; none are closed.</div>
+            <div class="setting-item">
+              <label for="setting-max-sessions">
+                Maximum sessions
+                <div class="setting-description">Every session not closed counts, stopped ones included. <span id="setting-max-sessions-counted"></span></div>
+              </label>
+              <input type="number" id="setting-max-sessions" step="1" disabled>
+            </div>
+            <div class="setting-item">
+              <label for="setting-max-per-parent">
+                Started sessions per session
+                <div class="setting-description">Live sessions one session may start, peers included. 0 turns starting off.</div>
+              </label>
+              <input type="number" id="setting-max-per-parent" step="1" disabled>
+            </div>
+            <div id="setting-session-limits-status" class="setting-error" role="status" aria-live="polite"></div>
           </div>
-          <div class="setting-item">
-            <label for="setting-max-per-parent">
-              Started sessions per session
-              <div class="setting-description">How many sessions one session may start (builders and read-only peers) and have live at once. At the limit further starts are refused; none are closed. 0 stops sessions from starting any. Maximum sessions still applies.</div>
-            </label>
-            <input type="number" id="setting-max-per-parent" step="1" disabled>
-          </div>
-          <div id="setting-session-limits-status" class="setting-error" role="status" aria-live="polite"></div>
         </div>
 
-        <!-- Restart / build & restart; see src/client/server-restart.ts and src/server/server-restart.ts. -->
-        <div class="settings-section" id="server-restart-section">
-          <div class="settings-section-title">Server</div>
-          <div class="setting-description server-restart-note">
-            Picks up a new build. Every open terminal closes, this one included; sessions revive from the sidebar.
+        <!-- Restart / build & restart, acting on their own (no Save/Cancel on this tab); see
+             src/client/server-restart.ts and src/server/server-restart.ts. -->
+        <div class="settings-panel" role="tabpanel" id="settings-panel-server" aria-labelledby="settings-tab-server" hidden>
+          <div class="settings-section">
+            <div class="server-build-status">
+              <span id="server-build-state" class="server-build-state"></span>
+              <span id="server-build-detail" class="server-build-detail"></span>
+            </div>
+            <div class="server-restart-actions">
+              <button type="button" id="server-restart-btn" class="btn-secondary" data-build="false">Restart</button>
+              <button type="button" id="server-build-restart-btn" class="btn-secondary" data-build="true">Build &amp; restart</button>
+            </div>
+            <div class="setting-description server-restart-note">
+              Every open terminal closes, this one included; sessions revive from the sidebar.
+            </div>
+            <div id="server-restart-confirm" class="server-restart-confirm hidden">
+              <span id="server-restart-confirm-text"></span>
+              <button type="button" id="server-restart-go" class="btn-danger">Restart now</button>
+              <button type="button" id="server-restart-cancel" class="btn-secondary">Cancel</button>
+            </div>
+            <div id="server-restart-status" class="server-restart-status" role="status" aria-live="polite"></div>
           </div>
-          <div class="server-restart-actions">
-            <button type="button" id="server-restart-btn" class="btn-secondary" data-build="false">Restart</button>
-            <button type="button" id="server-build-restart-btn" class="btn-secondary" data-build="true">Build &amp; restart</button>
-          </div>
-          <div id="server-restart-confirm" class="server-restart-confirm hidden">
-            <span id="server-restart-confirm-text"></span>
-            <button type="button" id="server-restart-go" class="btn-danger">Restart now</button>
-            <button type="button" id="server-restart-cancel" class="btn-secondary">Cancel</button>
-          </div>
-          <div id="server-restart-status" class="server-restart-status" role="status" aria-live="polite"></div>
         </div>
-
       </div>
-      <div class="modal-actions">
+
+      <div class="modal-actions" id="settings-actions">
+        <span id="settings-unsaved" class="settings-unsaved"></span>
         <button id="settings-cancel" class="btn-secondary">Cancel</button>
         <button id="settings-save" class="btn-primary">Save</button>
       </div>

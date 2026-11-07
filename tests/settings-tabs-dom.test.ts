@@ -1,0 +1,162 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { SettingsModal, type SettingsModalHost } from '../src/client/settings-modal.js';
+
+/**
+ * The Settings modal's tabs, against the real markup in index.html: which tab the gear opens
+ * on, the Server tab without Save/Cancel, the unsaved-changes dots, the notification
+ * permission warning and the restart confirm naming what a restart would discard.
+ */
+
+// happy-dom replaces URL, so not import.meta.url: vitest runs from the repo root.
+const INDEX = readFileSync(join(process.cwd(), 'src', 'client', 'index.html'), 'utf8');
+const MODAL = INDEX.slice(INDEX.indexOf('<div id="settings-modal"'), INDEX.indexOf('<!-- Keyboard Shortcuts Modal -->'));
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const selected = () => document.querySelector('.settings-tab[aria-selected="true"]')?.id;
+const dirty = (tab: string) => !el(`settings-tab-${tab}`).querySelector('.settings-tab-dirty')!.classList.contains('hidden');
+const change = (input: HTMLInputElement, apply: (i: HTMLInputElement) => void) => {
+  apply(input);
+  input.dispatchEvent(new Event(input.type === 'number' ? 'input' : 'change', { bubbles: true }));
+};
+
+let behind = false;
+let permission: 'default' | 'granted' | 'denied' = 'granted';
+
+function host(): SettingsModalHost {
+  return {
+    notificationPreferences: () => ({ browserEnabled: true, visualEnabled: true, notifyOnInput: true, notifyOnCompleted: true }),
+    setNotificationPreferences: vi.fn(),
+    notificationPermission: async () => permission,
+    jobOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
+    syncJobOverlay: vi.fn(),
+    renderSessionList: vi.fn(),
+    buildBehind: () => behind,
+  };
+}
+
+async function open(): Promise<SettingsModal> {
+  const settings = new SettingsModal(host());
+  settings.bind();
+  el('settings-btn').click();
+  await flush();
+  await flush();
+  return settings;
+}
+
+beforeEach(() => {
+  behind = false;
+  permission = 'granted';
+  document.body.innerHTML = `<button id="settings-btn"></button>${MODAL}`;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url === '/api/server/settings') {
+      return json({ maxSessions: 30, range: { min: 1, max: 100 }, counted: 3, maxPerParent: 5, maxPerParentRange: { min: 0, max: 20 } });
+    }
+    if (url === '/api/server/status') return json({ bootId: 'b', canRestart: true, reason: null });
+    return json({}, 404);
+  }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('Settings tabs', () => {
+  it('opens on Notifications, or on Server while the build is behind', async () => {
+    await open();
+    expect(selected()).toBe('settings-tab-notifications');
+    expect(el('settings-panel-notifications').hidden).toBe(false);
+    expect(el('settings-panel-server').hidden).toBe(true);
+
+    document.body.innerHTML = `<button id="settings-btn"></button>${MODAL}`;
+    behind = true;
+    await open();
+    expect(selected()).toBe('settings-tab-server');
+    expect(el('settings-panel-server').hidden).toBe(false);
+  });
+
+  it('has no Save/Cancel on the Server tab, and gets them back elsewhere', async () => {
+    await open();
+    el('settings-tab-server').click();
+    expect(el('settings-actions').classList.contains('hidden')).toBe(true);
+    el('settings-tab-sessions').click();
+    expect(el('settings-actions').classList.contains('hidden')).toBe(false);
+  });
+
+  it('moves between tabs with the arrow keys, wrapping, and Home/End', async () => {
+    await open();
+    const key = (k: string) =>
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+    el('settings-tab-notifications').focus();
+    key('ArrowLeft');
+    expect(selected()).toBe('settings-tab-server');
+    key('ArrowRight');
+    expect(selected()).toBe('settings-tab-notifications');
+    key('End');
+    expect(selected()).toBe('settings-tab-server');
+    key('Home');
+    expect(selected()).toBe('settings-tab-notifications');
+    // Roving tabindex: only the selected tab is in the Tab order.
+    expect(el('settings-tab-notifications').tabIndex).toBe(0);
+    expect(el('settings-tab-display').tabIndex).toBe(-1);
+  });
+
+  it('dots a tab with unsaved changes, and clears it when the change is undone', async () => {
+    await open();
+    const badges = el<HTMLInputElement>('setting-visual-badges');
+    change(badges, (i) => (i.checked = false));
+    expect(dirty('notifications')).toBe(true);
+    expect(dirty('display')).toBe(false);
+    expect(el('settings-unsaved').textContent).toBe('Unsaved: Notifications');
+    expect(el('settings-tab-notifications').textContent).toContain('(unsaved changes)');
+
+    change(badges, (i) => (i.checked = true));
+    expect(dirty('notifications')).toBe(false);
+    expect(el('settings-unsaved').textContent).toBe('');
+  });
+
+  it('does not dot Sessions for the limits loading, only for an edit', async () => {
+    await open();
+    expect(el<HTMLInputElement>('setting-max-per-parent').value).toBe('5');
+    expect(dirty('sessions')).toBe(false);
+    change(el<HTMLInputElement>('setting-max-per-parent'), (i) => (i.value = '8'));
+    expect(dirty('sessions')).toBe(true);
+  });
+
+  it('forgets unsaved changes on Cancel', async () => {
+    const settings = await open();
+    change(el<HTMLInputElement>('setting-visual-badges'), (i) => (i.checked = false));
+    el('settings-cancel').click();
+    await settings.show();
+    await flush();
+    expect(el<HTMLInputElement>('setting-visual-badges').checked).toBe(true);
+    expect(dirty('notifications')).toBe(false);
+  });
+
+  it('warns under Browser notifications only when the browser has not allowed them', async () => {
+    await open();
+    expect(el('setting-browser-notifications-warning').classList.contains('hidden')).toBe(true);
+
+    document.body.innerHTML = `<button id="settings-btn"></button>${MODAL}`;
+    permission = 'denied';
+    await open();
+    const warning = el('setting-browser-notifications-warning');
+    expect(warning.classList.contains('hidden')).toBe(false);
+    expect(warning.textContent).toMatch(/^Blocked by this browser/);
+  });
+
+  it('names the tabs whose unsaved changes a restart would discard', async () => {
+    await open();
+    change(el<HTMLInputElement>('setting-keep-stopped'), (i) => (i.checked = !i.checked));
+    el('settings-tab-server').click();
+    el('server-restart-btn').click();
+    expect(el('server-restart-confirm').classList.contains('hidden')).toBe(false);
+    expect(el('server-restart-confirm-text').textContent).toMatch(/Unsaved changes on Display will be lost\.$/);
+  });
+});

@@ -148,9 +148,9 @@ body {
   background: linear-gradient(135deg, rgba(122, 162, 247, 0.05) 0%, transparent 50%);
 }
 
-/* The title row: connection dot, "Claude Remote", the build chip when shown, and the
-   Shortcuts / Settings icons at its right end. Where the build chip doesn't fit beside
-   them it wraps below rather than breaking the title. */
+/* The title row: connection dot, "Claude Remote", and the Shortcuts / Settings icons at its
+   right end, on one line. A build behind is a dot on the Settings gear (BuildIndicator), not
+   text here: there is no room beside the icons. */
 .sidebar-title {
   display: flex;
   flex-wrap: wrap;
@@ -306,31 +306,6 @@ body {
 .pu-pct.danger {
   color: var(--danger);
 }
-/* "New build": a small note beside the title; only its icon is amber. The tooltip says what to do. */
-.build-chip {
-  flex-shrink: 0;
-  padding: 2px 6px;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.build-chip[hidden] {
-  display: none;
-}
-.build-chip:hover {
-  color: var(--text-primary);
-  border-color: rgba(224, 175, 104, 0.6);
-}
-.build-chip::before {
-  content: '↻ ';
-  color: rgb(224, 175, 104);
-}
-
 .plan-usage-body {
   padding: 4px 12px 10px;
   border-top: 1px solid var(--border-subtle);
@@ -2243,11 +2218,236 @@ body {
   padding: 2px 4px;
 }
 
-/* Settings modal */
+/* Settings modal (settings-modal.ts): tabs over one panel area. Never taller than the
+   viewport: the title, tabs and footer stay put and only the panels scroll (phones). */
+.modal-content.settings-content {
+  display: flex;
+  flex-direction: column;
+  width: 480px;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+}
+
+.settings-content h3 {
+  margin-bottom: 14px;
+  padding-right: 32px;
+}
+
+.settings-content h3,
+.settings-content .modal-actions {
+  flex-shrink: 0;
+}
+
+.settings-content .modal-actions {
+  margin-top: 16px;
+}
+
+.settings-close {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.settings-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  margin: 0 -4px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.settings-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: -1px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+
+.settings-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Settings saved on the server rather than in this browser. */
+.settings-tab-scope {
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+/* Blue: this tab has unsaved changes. Amber: the running build is behind (Server tab, gear). */
+.settings-tab-dirty,
+.settings-tab-behind {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.settings-tab-dirty {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.settings-tab-behind {
+  background: var(--warning);
+}
+
+.settings-tab-behind[hidden] {
+  display: none;
+}
+
+#settings-btn {
+  position: relative;
+}
+
+.settings-build-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--bg-secondary);
+}
+
+.settings-build-dot[hidden] {
+  display: none;
+}
+
 .settings-form {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+/* All panels share one grid cell, so the area is as tall as the tallest tab and a switch
+   never resizes the modal; a hidden panel keeps its size but is invisible and unfocusable. */
+.settings-content .settings-form {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Room for the scrollbar, so it doesn't sit on the setting cards. */
+  margin-right: -10px;
+  padding-right: 10px;
+}
+
+.settings-panel {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.settings-panel[hidden] {
+  visibility: hidden;
+}
+
+.settings-panel-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-unsaved {
+  margin-right: auto;
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.setting-warning {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--warning);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.server-build-status {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.server-build-status:has(.server-build-state:empty) {
+  display: none;
+}
+
+/* The state on its own line, the detail below it. */
+.server-build-state {
+  display: block;
+}
+
+.server-build-state.behind {
+  font-weight: 600;
+  color: var(--warning);
+}
+
+/* pre-line here only: the detail's own newlines are its lines (reason, then the action).
+   On the container it would also render the markup's line breaks, as a blank first line. */
+.server-build-detail {
+  display: block;
+  color: var(--text-secondary);
+  white-space: pre-line;
+}
+
+@media (max-width: 768px) {
+  .modal-content.settings-content {
+    width: calc(100vw - 32px);
+  }
 }
 
 .settings-section {
@@ -2329,59 +2529,6 @@ body {
 
 .setting-error:empty {
   display: none;
-}
-
-.permission-status {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 10px 14px;
-  border-radius: 10px;
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.permission-status::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.permission-status.granted {
-  background-color: rgba(158, 206, 106, 0.1);
-  border: 1px solid rgba(158, 206, 106, 0.3);
-  color: var(--success);
-}
-
-.permission-status.granted::before {
-  background: var(--success);
-  box-shadow: 0 0 8px var(--success-glow);
-}
-
-.permission-status.denied {
-  background-color: rgba(247, 118, 142, 0.1);
-  border: 1px solid rgba(247, 118, 142, 0.3);
-  color: var(--danger);
-}
-
-.permission-status.denied::before {
-  background: var(--danger);
-  box-shadow: 0 0 8px var(--danger-glow);
-}
-
-.permission-status.default {
-  background-color: rgba(224, 175, 104, 0.1);
-  border: 1px solid rgba(224, 175, 104, 0.3);
-  color: var(--warning);
-}
-
-.permission-status.default::before {
-  background: var(--warning);
-  box-shadow: 0 0 8px var(--warning-glow);
 }
 
 /* Shortcuts and Settings, icon-only, at the right end of the title row */
@@ -4680,7 +4827,9 @@ body {
 
 /* Server restart controls in the Settings modal (server-restart.ts). */
 .server-restart-note {
-  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 .server-restart-actions,
 .server-restart-confirm {

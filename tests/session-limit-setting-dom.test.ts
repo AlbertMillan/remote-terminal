@@ -222,6 +222,7 @@ describe('SettingsModal', () => {
       jobOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
       syncJobOverlay: vi.fn(),
       renderSessionList: vi.fn(),
+      buildBehind: () => false,
     };
   }
 

@@ -10,7 +10,7 @@ import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
-import { BUILD_CHANGED_EVENT, BuildChip } from './server-restart.js';
+import { BUILD_CHANGED_EVENT, BuildIndicator } from './server-restart.js';
 import { SettingsModal } from './settings-modal.js';
 import {
   isLandNotification,
@@ -127,8 +127,8 @@ class SessionManager {
   /** The keyboard shortcuts modal and the welcome-screen hints. */
   private shortcutsModal = new ShortcutsModal();
 
-  /** Says when the running server is behind its build; opens Settings → Server. */
-  private buildChip = new BuildChip(() => void this.settingsModal.showServer());
+  /** Says when the running server is behind its build: a dot on the Settings gear and its Server tab. */
+  private buildIndicator = new BuildIndicator();
   /** A notice for the session being created, until the server names its id. */
   private createNotice: { cwd: string; text: string } | null = null;
   /** Notices to write into a session's terminal on its first attach. */
@@ -161,8 +161,9 @@ class SessionManager {
    * messages, so it stays current while a terminal is in front of it.
    */
   private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
-  /** Notifications, display, the session limit and Restart; after jobOverlay, which it is handed. */
+  /** Notifications, display, the session limits and Restart; after jobOverlay and buildIndicator, which it is handed. */
   private settingsModal = new SettingsModal({
+    buildBehind: () => this.buildIndicator.behind,
     notificationPreferences: () => this.notificationPreferences,
     setNotificationPreferences: (prefs) => this.setNotificationPreferences(prefs),
     notificationPermission: async () => {
@@ -196,7 +197,7 @@ class SessionManager {
     this.planUsage.openBreakdown = () => void this.accountUsage.open(this.planUsage.latest());
     this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
     this.planUsage.attach();
-    this.buildChip.start();
+    this.buildIndicator.start();
     this.initBrowserNotifications();
     this.connect();
   }

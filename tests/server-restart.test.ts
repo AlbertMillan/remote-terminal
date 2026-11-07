@@ -17,7 +17,7 @@ import {
 } from '../src/server/server-restart.js';
 // @ts-expect-error — a plain .mjs build script, no types
 import { BUILD_INPUTS as SCRIPT_BUILD_INPUTS, buildInfo, workingTreeId } from '../scripts/write-build-info.mjs';
-import { chipView, waitForNewBoot, type BuildStatus, type ServerStatus } from '../src/client/server-restart.js';
+import { buildView, waitForNewBoot, type BuildStatus, type ServerStatus } from '../src/client/server-restart.js';
 
 /**
  * Restart from the UI kills every terminal, so the route must refuse anything
@@ -398,7 +398,7 @@ describe('isServerRoot', () => {
   });
 });
 
-describe('the build chip', () => {
+describe('the build indicator', () => {
   const status = (state: BuildStatus['state'], canRestart = true): ServerStatus => ({
     bootId: 'b',
     canRestart,
@@ -406,20 +406,34 @@ describe('the build chip', () => {
     build: { state, running: null, onDisk: null, reason: 'why' },
   });
 
-  it('shows only for restart and rebuild', () => {
-    expect(chipView(status('current'))).toBeNull();
-    expect(chipView(status('unknown'))).toBeNull();
-    expect(chipView(null)).toBeNull();
-    expect(chipView({ bootId: 'b', canRestart: true, reason: null })).toBeNull(); // an older server
-    expect(chipView(status('restart'))?.text).toBe('New build');
-    expect(chipView(status('rebuild'))?.text).toBe('New commits');
+  it('lights only for restart and rebuild', () => {
+    expect(buildView(status('current')).behind).toBe(false);
+    expect(buildView(status('unknown')).behind).toBe(false);
+    expect(buildView(null).behind).toBe(false);
+    expect(buildView({ bootId: 'b', canRestart: true, reason: null }).behind).toBe(false); // an older server
+    expect(buildView(status('restart'))).toMatchObject({ behind: true, state: 'New build ready.', lead: 'restart' });
+    expect(buildView(status('rebuild'))).toMatchObject({ behind: true, state: 'New commits on main.', lead: 'build' });
   });
 
-  it('gives the reason and the manual step when this server cannot restart itself', () => {
-    const view = chipView(status('rebuild', false));
-    expect(view?.title).toContain('Not running from dist/.');
-    expect(view?.title).toMatch(/By hand: run npm run build/);
-    expect(chipView(status('restart'))?.title).toMatch(/Settings → Server → Restart/);
+  it('says up to date only when the server says so, not for an unknown build', () => {
+    expect(buildView(status('current')).state).toBe('Up to date.');
+    expect(buildView(status('unknown')).state).toBe('');
+    expect(buildView(null).gearLabel).toBe('Settings');
+  });
+
+  it('names the action in the gear label and the reason in the detail', () => {
+    const view = buildView(status('rebuild'));
+    expect(view.gearLabel).toMatch(/Build & restart/);
+    expect(view.detail).toBe('why\nBuild & restart picks them up.');
+  });
+
+  it('gives the manual step, and leads with no button, when this server cannot restart itself', () => {
+    const view = buildView(status('rebuild', false));
+    expect(view.behind).toBe(true);
+    expect(view.lead).toBeNull();
+    expect(view.detail).toMatch(/By hand: run npm run build/);
+    // Why the buttons are disabled is the restart control's own line, not repeated here.
+    expect(view.detail).not.toContain('Not running from dist/.');
   });
 });
 

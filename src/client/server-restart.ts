@@ -26,7 +26,7 @@ export interface ServerStatus {
   build?: BuildStatus;
 }
 
-/** Fired after something that can change the build state (a Land), so the chip re-checks now. */
+/** Fired after something that can change the build state (a Land), so the indicator re-checks now. */
 export const BUILD_CHANGED_EVENT = 'claude-remote:build-changed';
 
 const POLL_MS = 1000;
@@ -64,7 +64,8 @@ export class ServerRestartControl {
   private pendingBuild = false;
   private running = false;
 
-  constructor() {
+  /** `unsavedTabs`: the Settings tabs a restart would discard edits on, named in the confirm. */
+  constructor(private readonly unsavedTabs: () => string[] = () => []) {
     this.el('server-restart-btn')?.addEventListener('click', () => this.ask(false));
     this.el('server-build-restart-btn')?.addEventListener('click', () => this.ask(true));
     this.el('server-restart-cancel')?.addEventListener('click', () => this.hideConfirm());
@@ -97,9 +98,12 @@ export class ServerRestartControl {
     this.pendingBuild = build;
     const text = this.el('server-restart-confirm-text');
     if (text) {
-      text.textContent = build
-        ? 'Run npm run build, then restart if it passes? Every open terminal will close.'
-        : 'Restart the server now? Every open terminal will close.';
+      const unsaved = this.unsavedTabs();
+      text.textContent =
+        (build
+          ? 'Run npm run build, then restart if it passes? Every open terminal will close.'
+          : 'Restart the server now? Every open terminal will close.') +
+        (unsaved.length ? ` Unsaved changes on ${unsaved.join(', ')} will be lost.` : '');
     }
     this.el('server-restart-confirm')?.classList.remove('hidden');
   }
@@ -158,59 +162,81 @@ export class ServerRestartControl {
   }
 }
 
-const CHIP_POLL_MS = 60_000;
+const BUILD_POLL_MS = 60_000;
 
-export interface ChipView {
-  text: string;
-  title: string;
+export interface BuildView {
+  /** The running build is behind: the gear and the Server tab show an amber dot. */
+  behind: boolean;
+  /** The Settings gear's tooltip and accessible name. */
+  gearLabel: string;
+  /** The Server tab's status line: a short state ("New commits on main.") … */
+  state: string;
+  /** … and what to do about it, which may run to several lines. */
+  detail: string;
+  /** The button the state calls for, shown as the primary one. */
+  lead: 'restart' | 'build' | null;
 }
 
 /**
- * What the chip says, or null to hide it. Only `restart` and `rebuild` show:
+ * What the build indicator shows. Only `restart` and `rebuild` light the dot:
  * `unknown` (dev mode, an unstamped dist/) would otherwise sit lit forever.
- * When this server can't restart itself the chip still shows, and its tooltip
- * gives why and the step to take by hand.
+ * When this server can't restart itself the dot still lights, and the Server tab
+ * gives the step to take by hand.
  */
-export function chipView(status: ServerStatus | null): ChipView | null {
+export function buildView(status: ServerStatus | null): BuildView {
   const build = status?.build;
-  if (!status || !build || (build.state !== 'restart' && build.state !== 'rebuild')) return null;
+  if (!status || !build || (build.state !== 'restart' && build.state !== 'rebuild')) {
+    return {
+      behind: false,
+      gearLabel: 'Settings',
+      state: build?.state === 'current' ? 'Up to date.' : '',
+      detail: build?.state === 'current' ? 'The running build is the latest.' : '',
+      lead: null,
+    };
+  }
   const rebuild = build.state === 'rebuild';
   const lines = [build.reason || ''];
   if (status.canRestart) {
-    lines.push(rebuild ? 'Open Settings → Server → Build & restart.' : 'Open Settings → Server → Restart.');
+    lines.push(rebuild ? 'Build & restart picks them up.' : 'Restart loads it.');
   } else {
+    // Why the buttons are disabled is ServerRestartControl's status line, right below.
     lines.push(
-      status.reason || 'Restart from the UI is unavailable here.',
       rebuild
         ? 'By hand: run npm run build, then restart the server where it was started.'
         : 'By hand: restart the server where it was started.'
     );
   }
   return {
-    text: rebuild ? 'New commits' : 'New build',
-    title: lines.filter(Boolean).join('\n'),
+    behind: true,
+    gearLabel: rebuild
+      ? 'Settings. New commits on main: Build & restart to load them.'
+      : 'Settings. New build ready: Restart to load it.',
+    state: rebuild ? 'New commits on main.' : 'New build ready.',
+    detail: lines.filter(Boolean).join('\n'),
+    lead: status.canRestart ? (rebuild ? 'build' : 'restart') : null,
   };
 }
 
 /**
- * The chip beside the "Claude Remote" title that says the running server is behind its build.
- * It only ever opens Settings → Server: a restart ends every terminal, so the
- * confirm stays there, in ServerRestartControl, never on one click here.
+ * Says when the running server is behind its build: an amber dot on the Settings gear and
+ * on Settings' Server tab, plus that tab's status line. The gear then opens on the Server
+ * tab (SettingsModal reads `behind`). It never restarts anything itself: a restart ends
+ * every terminal, so the confirm stays in ServerRestartControl.
  */
-export class BuildChip {
+export class BuildIndicator {
   private checking = false;
+  private view: BuildView = buildView(null);
 
-  constructor(
-    private readonly openServerSettings: () => void,
-    private readonly poll: () => Promise<ServerStatus | null> = fetchStatus
-  ) {
-    this.el()?.addEventListener('click', () => this.openServerSettings());
+  constructor(private readonly poll: () => Promise<ServerStatus | null> = fetchStatus) {}
+
+  get behind(): boolean {
+    return this.view.behind;
   }
 
   /** Check now, then every minute, on window focus, and after a Land. */
   start(): void {
     void this.refresh();
-    window.setInterval(() => void this.refresh(), CHIP_POLL_MS);
+    window.setInterval(() => void this.refresh(), BUILD_POLL_MS);
     window.addEventListener('focus', () => void this.refresh());
     window.addEventListener(BUILD_CHANGED_EVENT, () => void this.refresh());
   }
@@ -219,23 +245,35 @@ export class BuildChip {
     if (this.checking) return;
     this.checking = true;
     try {
-      this.render(chipView(await this.poll()));
+      this.render(buildView(await this.poll()));
     } finally {
       this.checking = false;
     }
   }
 
-  private el(): HTMLButtonElement | null {
-    return document.getElementById('build-chip') as HTMLButtonElement | null;
-  }
-
-  private render(view: ChipView | null): void {
-    const chip = this.el();
-    if (!chip) return;
-    chip.hidden = !view;
-    if (!view) return;
-    chip.textContent = view.text;
-    chip.title = view.title;
-    chip.setAttribute('aria-label', `${view.text}. ${view.title}`);
+  private render(view: BuildView): void {
+    this.view = view;
+    const dot = document.getElementById('settings-build-dot');
+    if (dot) dot.hidden = !view.behind;
+    const tabDot = document.getElementById('settings-tab-server-dot');
+    if (tabDot) tabDot.hidden = !view.behind;
+    const gear = document.getElementById('settings-btn');
+    if (gear) {
+      gear.title = view.gearLabel;
+      gear.setAttribute('aria-label', view.gearLabel);
+    }
+    const state = document.getElementById('server-build-state');
+    if (state) {
+      state.textContent = view.state;
+      state.classList.toggle('behind', view.behind);
+    }
+    const detail = document.getElementById('server-build-detail');
+    if (detail) detail.textContent = view.detail;
+    for (const [id, lead] of [['server-restart-btn', 'restart'], ['server-build-restart-btn', 'build']] as const) {
+      const button = document.getElementById(id);
+      if (!button) continue;
+      button.classList.toggle('btn-primary', view.lead === lead);
+      button.classList.toggle('btn-secondary', view.lead !== lead);
+    }
   }
 }
