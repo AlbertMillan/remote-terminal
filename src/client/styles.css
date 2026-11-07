@@ -2384,8 +2384,14 @@ body {
   gap: 20px;
 }
 
+/* Hidden by opacity, never `visibility`: visibility is inherited, so the cards and buttons
+   inside (which carry `transition: all`) would animate it, drawing the old tab over the new
+   one, or the new one blank, for the transition's length. Opacity isn't inherited, so a
+   switch is instant. The panel is also `inert` (settings-modal.ts), which keeps it out of
+   clicks, focus and screen readers as visibility did. */
 .settings-panel[hidden] {
-  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .settings-panel-note {

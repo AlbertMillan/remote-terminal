@@ -195,8 +195,13 @@ export class SettingsModal {
         button.tabIndex = on ? 0 : -1;
       }
       // `hidden`, not removed: every panel keeps sizing the modal, so switching never resizes it.
+      // CSS hides it by opacity (see .settings-panel[hidden]); `inert` keeps it out of clicks,
+      // focus and screen readers.
       const panel = this.panel(each);
-      if (panel) panel.hidden = !on;
+      if (panel) {
+        panel.hidden = !on;
+        panel.inert = !on;
+      }
     }
     document.getElementById('settings-actions')?.classList.toggle('hidden', tab === 'server');
     document.getElementById('settings-panels')?.scrollTo?.({ top: 0 });

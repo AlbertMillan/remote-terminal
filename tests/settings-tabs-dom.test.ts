@@ -81,6 +81,22 @@ describe('Settings tabs', () => {
     expect(el('settings-panel-server').hidden).toBe(false);
   });
 
+  it('makes hidden panels inert, and never hides them by an inherited property', async () => {
+    await open();
+    expect(el('settings-panel-notifications').inert).toBe(false);
+    for (const tab of ['display', 'sessions', 'server']) expect(el(`settings-panel-${tab}`).inert).toBe(true);
+    el('settings-tab-server').click();
+    expect(el('settings-panel-server').inert).toBe(false);
+    expect(el('settings-panel-notifications').inert).toBe(true);
+
+    // The cards and buttons inside carry `transition: all`: hiding a panel by `visibility`
+    // (inherited) animated it, drawing the old tab over the new one for ~150ms per switch.
+    const css = readFileSync(join(process.cwd(), 'src', 'client', 'styles.css'), 'utf8');
+    const rule = css.match(/\.settings-panel\[hidden\]\s*\{([^}]*)\}/);
+    expect(rule?.[1]).toContain('opacity: 0');
+    expect(rule?.[1]).not.toMatch(/visibility/);
+  });
+
   it('has no Save/Cancel on the Server tab, and gets them back elsewhere', async () => {
     await open();
     el('settings-tab-server').click();
