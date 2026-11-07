@@ -27,8 +27,10 @@ vi.mock('../src/server/config.js', async () => {
   };
 });
 
+import { getConfig, setServerSettings } from '../src/server/config.js';
 import {
   checkPromptArrived,
+  defaultDeps,
   peerHeader,
   registerAgentSessionRoutes,
   MAX_PROMPT_BYTES,
@@ -225,6 +227,27 @@ describe('auth', () => {
   });
 });
 
+describe('the started-session limit in use', () => {
+  // Every other test injects its own maxPerParent: this is the one that proves a limit
+  // saved from Settings reaches the check on the next start, without a restart.
+  it('reads the limit saved through setServerSettings, without a reload', () => {
+    const previousPath = process.env.CLAUDE_REMOTE_CONFIG;
+    const previousLimit = getConfig().agentSessions.maxPerParent;
+    process.env.CLAUDE_REMOTE_CONFIG = join(dataDir, 'limit-config.json');
+    try {
+      setServerSettings({ maxPerParent: 3 });
+      expect(defaultDeps.maxPerParent()).toBe(3);
+      setServerSettings({ maxPerParent: 0 });
+      expect(defaultDeps.maxPerParent()).toBe(0);
+    } finally {
+      // Still pointed at the temp file: puts the in-memory value back without touching the user's.
+      setServerSettings({ maxPerParent: previousLimit });
+      if (previousPath === undefined) delete process.env.CLAUDE_REMOTE_CONFIG;
+      else process.env.CLAUDE_REMOTE_CONFIG = previousPath;
+    }
+  });
+});
+
 describe('start', () => {
   it('refuses a track nobody planned with 404', async () => {
     const res = await start({ ...GOOD, track: 'Invented' });
@@ -235,7 +258,26 @@ describe('start', () => {
   it('refuses with 429 once the caller has maxPerParent live started sessions', async () => {
     rows.set('c1', row('c1', { spawnedBy: MAIN_ID }));
     rows.set('c2', row('c2', { spawnedBy: MAIN_ID }));
-    expect((await start(GOOD)).statusCode).toBe(429);
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toBe(
+      'This session has 2 started sessions and the limit is 2 (Settings → Sessions → Started sessions per session)'
+    );
+  });
+
+  it('names the live count, not the limit, once the limit is lowered below it', async () => {
+    for (const id of ['c1', 'c2', 'c3', 'c4']) rows.set(id, row(id, { spawnedBy: MAIN_ID }));
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toMatch(/has 4 started sessions and the limit is 2/);
+  });
+
+  it('says starting is turned off when the limit is 0', async () => {
+    deps.maxPerParent = () => 0;
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toMatch(/^Starting sessions is turned off \(Settings/);
+    expect(deps.ensureTrackBranch).not.toHaveBeenCalled();
   });
 
   it('does not count started sessions whose terminal is gone', async () => {

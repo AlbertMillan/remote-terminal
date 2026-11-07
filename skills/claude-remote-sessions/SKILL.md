@@ -337,4 +337,5 @@ node "$CLAUDE_REMOTE_CLI" land --track "Split view"
 
 - Sessions you start cannot start sessions themselves, peers included: only you add a peer.
 - One builder and at most two read-only peers per track.
-- At most `agentSessions.maxPerParent` (default 5) of yours can be live at once.
+- At most `agentSessions.maxPerParent` (default 5) of yours can be live at once. The user
+  sets it in Settings → Sessions; on a 429, ask them rather than editing config.json.

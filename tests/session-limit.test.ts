@@ -5,12 +5,12 @@ import { join } from 'path';
 
 /**
  * The session limit as createSession sees it: read from the live config on every create,
- * so a change made in Settings (setMaxSessions) applies to the next session without a
+ * so a change made in Settings (setServerSettings) applies to the next session without a
  * restart, and counted so that concurrent creates can't all slip under it while one is
  * still awaiting tmux (Linux/macOS) before its row is in the table.
  *
  * Unlike the other session tests, config.ts is real here: the point is the path from
- * setMaxSessions to the check.
+ * setServerSettings to the check.
  */
 
 const createPty = vi.fn(() => ({
@@ -80,7 +80,7 @@ vi.mock('../src/server/projects/worktree-owner.js', () => ({
 }));
 
 import { createSessionManager } from '../src/server/sessions/manager.js';
-import { loadConfig, setMaxSessions } from '../src/server/config.js';
+import { loadConfig, setServerSettings } from '../src/server/config.js';
 
 let dir: string;
 const previousEnv = process.env.CLAUDE_REMOTE_CONFIG;
@@ -107,11 +107,11 @@ afterEach(async () => {
 });
 
 describe('session limit', () => {
-  it('createSession honours a limit changed through setMaxSessions, without a reload', async () => {
+  it('createSession honours a limit changed through setServerSettings, without a reload', async () => {
     await manager.createSession({ cwd: dir });
     await expect(manager.createSession({ cwd: dir })).rejects.toThrow('Maximum session limit (1) reached');
 
-    setMaxSessions(2);
+    setServerSettings({ maxSessions: 2 });
     await manager.createSession({ cwd: dir });
     await expect(manager.createSession({ cwd: dir })).rejects.toThrow('Maximum session limit (2) reached');
     expect(rows.size).toBe(2);

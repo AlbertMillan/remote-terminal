@@ -459,7 +459,14 @@
             </label>
             <input type="number" id="setting-max-sessions" step="1" disabled>
           </div>
-          <div id="setting-max-sessions-status" class="setting-error" role="status" aria-live="polite"></div>
+          <div class="setting-item">
+            <label for="setting-max-per-parent">
+              Started sessions per session
+              <div class="setting-description">How many sessions one session may start (builders and read-only peers) and have live at once. At the limit further starts are refused; none are closed. 0 stops sessions from starting any. Maximum sessions still applies.</div>
+            </label>
+            <input type="number" id="setting-max-per-parent" step="1" disabled>
+          </div>
+          <div id="setting-session-limits-status" class="setting-error" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Restart / build & restart; see src/client/server-restart.ts and src/server/server-restart.ts. -->

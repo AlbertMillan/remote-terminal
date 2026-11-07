@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 /**
- * setMaxSessions writes config.json through config.json.tmp. When the rename fails
+ * setServerSettings writes config.json through config.json.tmp. When the rename fails
  * (a locked file on Windows, a full disk), the temp file is removed, the original is
  * untouched, the error reaches the caller and the live limit stays as it was.
  */
@@ -25,7 +25,7 @@ vi.mock('../src/server/utils/logger.js', () => ({
   createLogger: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
 }));
 
-import { getConfig, loadConfig, setMaxSessions } from '../src/server/config.js';
+import { getConfig, loadConfig, setServerSettings } from '../src/server/config.js';
 
 let dir: string;
 let configPath: string;
@@ -44,13 +44,13 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('setMaxSessions when the write fails', () => {
+describe('setServerSettings when the write fails', () => {
   it('removes the temp file and rethrows, leaving the file and the live limit alone', () => {
     const original = JSON.stringify({ sessions: { maxSessions: 12 } });
     writeFileSync(configPath, original);
     loadConfig();
     failRename.on = true;
-    expect(() => setMaxSessions(20)).toThrow(/EPERM/);
+    expect(() => setServerSettings({ maxSessions: 20 })).toThrow(/EPERM/);
     expect(readdirSync(dir)).toEqual(['config.json']);
     expect(readFileSync(configPath, 'utf-8')).toBe(original);
     expect(getConfig().sessions.maxSessions).toBe(12);

@@ -42,7 +42,13 @@ describe('session limit setting', () => {
     writeFileSync(configPath, JSON.stringify({ sessions: { maxSessions: 12 } }));
     loadConfig();
     const res = await (await appWith()).inject({ method: 'GET', url: '/api/server/settings' });
-    expect(res.json()).toEqual({ maxSessions: 12, range: { min: 1, max: 100 }, counted: 4 });
+    expect(res.json()).toEqual({
+      maxSessions: 12,
+      range: { min: 1, max: 100 },
+      counted: 4,
+      maxPerParent: 5,
+      maxPerParentRange: { min: 0, max: 20 },
+    });
   });
 
   it('applies at once and survives a reload', async () => {
@@ -112,6 +118,73 @@ describe('session limit setting', () => {
     const unverified = await put(await appWith(vi.fn(async () => null)), 20);
     expect(unverified.statusCode).toBe(403);
     expect(existsSync(configPath)).toBe(false);
+  });
+});
+
+describe('started-session limit setting', () => {
+  function putBody(app: Awaited<ReturnType<typeof appWith>>, payload: Record<string, unknown>) {
+    return app.inject({ method: 'PUT', url: '/api/server/settings', headers: SAME_ORIGIN, payload });
+  }
+
+  it('applies at once, survives a reload and writes only its own key', async () => {
+    writeFileSync(configPath, JSON.stringify({ sessions: { maxSessions: 12 } }));
+    loadConfig();
+    const res = await putBody(await appWith(), { maxPerParent: 8 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().maxPerParent).toBe(8);
+    expect(getConfig().agentSessions.maxPerParent).toBe(8);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
+      sessions: { maxSessions: 12 },
+      agentSessions: { maxPerParent: 8 },
+    });
+    expect(loadConfig().agentSessions.maxPerParent).toBe(8);
+  });
+
+  it('accepts 0, which stops sessions from starting any', async () => {
+    loadConfig();
+    expect((await putBody(await appWith(), { maxPerParent: 0 })).statusCode).toBe(200);
+    expect(getConfig().agentSessions.maxPerParent).toBe(0);
+  });
+
+  it('saves both limits in one request', async () => {
+    loadConfig();
+    const res = await putBody(await appWith(), { maxSessions: 40, maxPerParent: 3 });
+    expect(res.statusCode).toBe(200);
+    expect(getConfig().sessions.maxSessions).toBe(40);
+    expect(getConfig().agentSessions.maxPerParent).toBe(3);
+  });
+
+  it.each([-1, 21, 1.5, '3', null])('rejects %s and writes neither limit', async (value) => {
+    loadConfig();
+    const res = await putBody(await appWith(), { maxSessions: 40, maxPerParent: value });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/started-session limit/);
+    expect(existsSync(configPath)).toBe(false);
+    expect(getConfig().sessions.maxSessions).toBe(30);
+  });
+
+  it('rejects a body with neither limit', async () => {
+    loadConfig();
+    expect((await putBody(await appWith(), {})).statusCode).toBe(400);
+  });
+});
+
+describe('agentSessions.maxPerParent as loaded from config.json', () => {
+  it.each(['abc', -1, 2.5, null, true])('falls back to the default for %s', (value) => {
+    writeFileSync(configPath, JSON.stringify({ agentSessions: { maxPerParent: value } }));
+    expect(loadConfig().agentSessions.maxPerParent).toBe(5);
+  });
+
+  it('keeps 0 and a hand-written limit past the Settings range', () => {
+    writeFileSync(configPath, JSON.stringify({ agentSessions: { maxPerParent: 0 } }));
+    expect(loadConfig().agentSessions.maxPerParent).toBe(0);
+    writeFileSync(configPath, JSON.stringify({ agentSessions: { maxPerParent: 50 } }));
+    expect(loadConfig().agentSessions.maxPerParent).toBe(50);
+  });
+
+  it('falls back to the defaults when agentSessions is not an object', () => {
+    writeFileSync(configPath, JSON.stringify({ agentSessions: [1] }));
+    expect(loadConfig().agentSessions).toEqual({ maxPerParent: 5 });
   });
 });
 

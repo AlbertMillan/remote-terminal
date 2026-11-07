@@ -133,7 +133,8 @@ export function loadConfig(): Config {
       if (loaded && typeof loaded.accounts === 'object' && loaded.accounts !== null) {
         currentConfig.accounts = loaded.accounts;
       }
-      currentConfig.sessions = checkedSessions(currentConfig.sessions, configPath);
+      currentConfig.sessions = checkedSection('sessions', currentConfig.sessions, configPath);
+      currentConfig.agentSessions = checkedSection('agentSessions', currentConfig.agentSessions, configPath);
       logger.info({ path: configPath }, 'Loaded configuration');
     } catch (error) {
       logger.error({ error, path: configPath }, 'Failed to load config, using defaults');
@@ -153,49 +154,88 @@ export function loadConfig(): Config {
 }
 
 /**
- * `sessions` as loaded, with an unusable limit replaced by the default. A string would turn
- * the limit off (`count >= "abc"` is never true) and 0 would refuse every session. Any
- * positive whole number stands, even past MAX_SESSIONS_RANGE: that bounds Settings only.
+ * The limits Settings edits, each described once: the loader, setServerSettings and the
+ * route (server-settings.ts) all read this, so a new limit is one entry here plus its field
+ * in the client (session-limit-setting.ts).
+ *
+ * - `range` is what Settings accepts. A limit written into config.json by hand isn't held
+ *   to its max, only to `loadMin`.
+ * - `loadMin` is the smallest value a loaded config keeps; below it, or not a whole number,
+ *   the default is used. A string would turn a limit off (`count >= "abc"` is never true).
+ *   maxSessions keeps 1, as 0 would refuse every session; maxPerParent keeps 0, which means
+ *   no session may start others.
  */
-function checkedSessions(sessions: unknown, configPath: string): Config['sessions'] {
-  if (!isPlainObject(sessions)) {
-    logger.warn({ path: configPath, sessions }, 'sessions is not an object; using the default session settings');
-    return { ...defaultConfig.sessions };
+export const LIMIT_SETTINGS = {
+  maxSessions: { section: 'sessions', range: { min: 1, max: 100 }, loadMin: 1, label: 'The session limit' },
+  maxPerParent: {
+    section: 'agentSessions',
+    range: { min: 0, max: 20 },
+    loadMin: 0,
+    label: 'The started-session limit',
+  },
+} as const;
+
+export type LimitKey = keyof typeof LIMIT_SETTINGS;
+type LimitSection = (typeof LIMIT_SETTINGS)[LimitKey]['section'];
+
+/** The settings the Settings modal writes into config.json. */
+export type ServerSettingsPatch = Partial<Record<LimitKey, number>>;
+
+export const MAX_SESSIONS_RANGE = LIMIT_SETTINGS.maxSessions.range;
+export const MAX_PER_PARENT_RANGE = LIMIT_SETTINGS.maxPerParent.range;
+
+const LIMIT_KEYS = Object.keys(LIMIT_SETTINGS) as LimitKey[];
+
+/** A config section as loaded, with each unusable limit in it replaced by its default. */
+function checkedSection<S extends LimitSection>(section: S, value: unknown, configPath: string): Config[S] {
+  if (!isPlainObject(value)) {
+    logger.warn({ path: configPath, [section]: value }, `${section} is not an object; using its defaults`);
+    return { ...defaultConfig[section] };
   }
-  const checked = sessions as unknown as Config['sessions'];
-  const { maxSessions } = checked;
-  if (typeof maxSessions === 'number' && Number.isInteger(maxSessions) && maxSessions >= 1) return checked;
-  logger.warn(
-    { path: configPath, maxSessions, default: defaultConfig.sessions.maxSessions },
-    'sessions.maxSessions is not a positive whole number; using the default'
-  );
-  return { ...checked, maxSessions: defaultConfig.sessions.maxSessions };
+  let checked = value as Record<string, unknown>;
+  for (const key of LIMIT_KEYS) {
+    const { section: owner, loadMin } = LIMIT_SETTINGS[key];
+    if (owner !== section) continue;
+    const limit = checked[key];
+    if (typeof limit === 'number' && Number.isInteger(limit) && limit >= loadMin) continue;
+    const fallback = (defaultConfig[section] as Record<string, unknown>)[key];
+    logger.warn(
+      { path: configPath, [key]: limit, default: fallback },
+      `${section}.${key} is not a whole number of ${loadMin} or more; using the default`
+    );
+    checked = { ...checked, [key]: fallback };
+  }
+  return checked as unknown as Config[S];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** What Settings accepts. A limit written into config.json by hand isn't held to it. */
-export const MAX_SESSIONS_RANGE = { min: 1, max: 100 };
-
 /**
- * Change the session limit, effective for the next session opened.
+ * Change the session limits, effective for the next session opened or started.
  *
- * Patches the one key in the file as it is on disk rather than writing out the merged
- * config: that would pin every default into the user's file, and a later change to a
- * default would never reach them. An unparseable file throws instead of being
+ * Patches only the given keys in the file as it is on disk rather than writing out the
+ * merged config: that would pin every default into the user's file, and a later change to
+ * a default would never reach them. An unparseable file throws instead of being
  * replaced, or a typo would cost the user their accounts.
  */
-export function setMaxSessions(maxSessions: number): void {
+export function setServerSettings(patch: ServerSettingsPatch): void {
   const configPath = getConfigPath();
   const onDisk: unknown = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf-8')) : {};
   if (!isPlainObject(onDisk)) {
     throw new Error(`${configPath} does not hold a JSON object`);
   }
-  // Not an object (an array, a number): loadConfig ignores it too, so start it afresh.
-  const sessions = isPlainObject(onDisk.sessions) ? onDisk.sessions : {};
-  const next = { ...onDisk, sessions: { ...sessions, maxSessions } };
+  // A section that isn't an object (an array, a number): loadConfig ignores it too, so
+  // start it afresh.
+  // Patched into `next`, not `onDisk`: two limits in one section must both land.
+  const next: Record<string, unknown> = { ...onDisk };
+  const changed = LIMIT_KEYS.filter((key) => patch[key] !== undefined);
+  for (const key of changed) {
+    const { section } = LIMIT_SETTINGS[key];
+    const current = isPlainObject(next[section]) ? next[section] : {};
+    next[section] = { ...current, [key]: patch[key] };
+  }
 
   mkdirSync(dirname(configPath), { recursive: true });
   // Through a temp file: a crash mid-write must not leave a truncated config.
@@ -209,9 +249,14 @@ export function setMaxSessions(maxSessions: number): void {
     throw error;
   }
 
-  // A new object: `sessions` may still be defaultConfig's own, shared by reference.
-  currentConfig = { ...currentConfig, sessions: { ...currentConfig.sessions, maxSessions } };
-  logger.info({ path: configPath, maxSessions }, 'Saved session limit');
+  // New objects: a section may still be defaultConfig's own, shared by reference.
+  const updated: Record<string, unknown> = { ...currentConfig };
+  for (const key of changed) {
+    const { section } = LIMIT_SETTINGS[key];
+    updated[section] = { ...(updated[section] as object), [key]: patch[key] };
+  }
+  currentConfig = updated as unknown as Config;
+  logger.info({ path: configPath, ...patch }, 'Saved session limits');
 }
 
 export function getConfig(): Config {

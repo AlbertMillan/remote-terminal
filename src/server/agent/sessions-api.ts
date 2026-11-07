@@ -429,8 +429,16 @@ export async function startAgentSession(
 
   const children = liveChildren(deps, callerId);
   const limit = deps.maxPerParent();
-  if (children.length + (pendingStarts.get(callerId) ?? 0) >= limit) {
-    throw new AgentSessionError(429, `This session already has ${limit} started sessions running`);
+  const running = children.length + (pendingStarts.get(callerId) ?? 0);
+  if (running >= limit) {
+    // The limit is the user's (Settings), and may have been lowered below `running`: name
+    // both, and where it is set, so the agent can tell the user what to change.
+    throw new AgentSessionError(
+      429,
+      limit === 0
+        ? 'Starting sessions is turned off (Settings → Sessions → Started sessions per session)'
+        : `This session has ${running} started sessions and the limit is ${limit} (Settings → Sessions → Started sessions per session)`
+    );
   }
 
   const track = typeof body.track === 'string' ? body.track.trim() : '';

@@ -15,7 +15,7 @@ export interface SettingsModalHost {
 
 /**
  * The Settings modal: notification and display preferences (applied on Save, so Cancel
- * genuinely cancels), the server's session limit, and Restart.
+ * genuinely cancels), the server's session limits, and Restart.
  */
 export class SettingsModal {
   /** Restart / Build & restart in the Settings modal. */

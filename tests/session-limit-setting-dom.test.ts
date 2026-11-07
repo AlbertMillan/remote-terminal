@@ -24,13 +24,15 @@ function deferred<T>(): Deferred<T> {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-const view = (maxSessions: number, counted = 3) => ({ maxSessions, range: { min: 1, max: 100 }, counted });
+const view = (maxSessions: number, counted = 3, maxPerParent = 5) => ({
+  maxSessions, range: { min: 1, max: 100 }, counted, maxPerParent, maxPerParentRange: { min: 0, max: 20 },
+});
 
 /** Let awaited fetches and their .json() settle. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const input = () => document.getElementById('setting-max-sessions') as HTMLInputElement;
-const status = () => document.getElementById('setting-max-sessions-status')?.textContent ?? '';
+const status = () => document.getElementById('setting-session-limits-status')?.textContent ?? '';
 const counted = () => document.getElementById('setting-max-sessions-counted')?.textContent ?? '';
 const modal = () => document.getElementById('settings-modal') as HTMLElement;
 
@@ -51,7 +53,7 @@ beforeEach(() => {
         </div>
         <span id="setting-max-sessions-counted"></span>
         <input type="number" id="setting-max-sessions" disabled>
-        <div id="setting-max-sessions-status"></div>
+        <div id="setting-session-limits-status"></div>
         <button id="settings-cancel"></button>
         <button id="settings-save"></button>
       </div>
@@ -96,12 +98,12 @@ describe('SessionLimitSetting', () => {
     input().value = '40';
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
     expect(await setting.save()).toBe(false);
-    expect(status()).toBe('Could not reach the server to save the session limit.');
+    expect(status()).toBe('Could not reach the server to save the session limits.');
 
     await setting.refresh();
     expect(input().disabled).toBe(true);
     expect(input().value).toBe('');
-    expect(status()).toBe('Could not read the session limit from the server.');
+    expect(status()).toBe('Could not read the session limits from the server.');
     // Never loaded: Save leaves the limit alone and lets the other settings through.
     expect(await setting.save()).toBe(true);
   });
@@ -117,7 +119,7 @@ describe('SessionLimitSetting', () => {
     await setting.refresh();
     input().value = '40';
     expect(await setting.save()).toBe(false);
-    expect(status()).toBe('The server did not answer in time; the session limit may not have been saved.');
+    expect(status()).toBe('The server did not answer in time; the session limits may not have been saved.');
     expect(signals).toHaveLength(2);
     for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
   });
@@ -161,6 +163,53 @@ describe('SessionLimitSetting', () => {
     await reload;
     expect(input().value).toBe('45');
     expect(input().disabled).toBe(false);
+  });
+});
+
+describe('SessionLimitSetting: started sessions per session', () => {
+  const perParent = () => document.getElementById('setting-max-per-parent') as HTMLInputElement;
+
+  beforeEach(() => {
+    const field = document.createElement('input');
+    field.type = 'number';
+    field.id = 'setting-max-per-parent';
+    field.disabled = true;
+    document.querySelector('.modal-content')!.appendChild(field);
+  });
+
+  it('loads the limit and its range', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(view(30, 3, 4))));
+    await new SessionLimitSetting().refresh();
+    expect(perParent().value).toBe('4');
+    expect(perParent().min).toBe('0');
+    expect(perParent().max).toBe('20');
+    expect(perParent().disabled).toBe(false);
+  });
+
+  it('sends only the limit that changed', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      json(init?.method === 'PUT' ? view(30, 3, 0) : view(30))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const setting = new SessionLimitSetting();
+    await setting.refresh();
+    perParent().value = '0';
+    expect(await setting.save()).toBe(true);
+    const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(JSON.parse(puts[0][1]!.body as string)).toEqual({ maxPerParent: 0 });
+    // Saved: Save again sends nothing.
+    expect(await setting.save()).toBe(true);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1);
+  });
+
+  it('leaves the field disabled against a server that does not report it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ maxSessions: 30, range: { min: 1, max: 100 }, counted: 2 })));
+    const setting = new SessionLimitSetting();
+    await setting.refresh();
+    expect(input().disabled).toBe(false);
+    expect(perParent().disabled).toBe(true);
+    expect(perParent().value).toBe('');
   });
 });
 

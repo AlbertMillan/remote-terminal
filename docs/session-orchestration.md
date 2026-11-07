@@ -60,7 +60,8 @@ session is calling, which is how `spawned_by` and the limit work.
 
 Status codes: 403 not loopback · 401 missing/unknown/revoked token · 403 a started session
 calling `start` · 429 `agentSessions.maxPerParent` reached (counting starts still
-installing) or the global `sessions.maxSessions` · 409 the caller already has a live
+installing; default 5, editable live in Settings → Sessions → "Started sessions per
+session", 0–20, 0 refusing every start) or the global `sessions.maxSessions` · 409 the caller already has a live
 writer on that track, or a start on it still running; a read-only peer with no live writer, or a
 third peer ("Read-only peers" below) · 400 bad body, `bypassPermissions` or `dontAsk`, an `mcpServers` name not in the user's Claude config, or a
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
