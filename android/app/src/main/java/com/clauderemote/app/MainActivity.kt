@@ -2,6 +2,7 @@ package com.clauderemote.app
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.core.content.IntentCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -112,8 +113,14 @@ class MainActivity : ComponentActivity() {
         takeLink(intent)
     }
 
-    /** A notification tap, a claude-remote:// link, or text shared from another app. */
+    /** A notification tap, a claude-remote:// link, or text or an image shared from another app. */
     private fun takeLink(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
+            // The read grant comes with this intent, to this activity, which reads it.
+            val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java)
+            if (uri != null) app.pendingShareImage.value = uri
+            return
+        }
         if (intent?.action == Intent.ACTION_SEND) {
             val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT))
                 .filter { it.isNotBlank() }

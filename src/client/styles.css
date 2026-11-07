@@ -906,14 +906,14 @@ body {
   50% { opacity: 1; }
 }
 
-.fork-error-toast {
+.error-toast {
   background: rgba(247, 118, 142, 0.1);
   border-bottom: 1px solid rgba(247, 118, 142, 0.25);
   color: var(--danger);
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 8px 20px;
-  animation: fork-toast-in 0.2s ease;
+  animation: toast-in 0.2s ease;
 }
 
 .land-result-toast {
@@ -931,7 +931,7 @@ body {
   font-size: 12px;
   color: var(--text-primary);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  animation: fork-toast-in 0.2s ease;
+  animation: toast-in 0.2s ease;
 }
 .land-result-toast.land-result-failed { border-color: var(--danger); }
 .land-result-title { font-weight: 600; margin-bottom: 4px; }
@@ -951,7 +951,7 @@ body {
 }
 .land-result-close:hover { color: var(--text-primary); }
 
-@keyframes fork-toast-in {
+@keyframes toast-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }

@@ -1,7 +1,7 @@
 package com.clauderemote.app.sessions
 
+import com.clauderemote.app.protocol.Protocol
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 
 /** `GET /api/accounts`: the accounts a new session can run under (docs/accounts.md). */
@@ -19,11 +19,10 @@ data class ResolvedAccount(val account: String, val source: String = "default")
 data class AccountOption(val label: String, val value: String?)
 
 object Accounts {
-    private val json = Json { ignoreUnknownKeys = true }
+    // Protocol.json: tolerant of fields a newer server adds, as every REST answer is read.
+    fun summary(body: JsonElement): AccountsSummary = Protocol.json.decodeFromJsonElement(AccountsSummary.serializer(), body)
 
-    fun summary(body: JsonElement): AccountsSummary = json.decodeFromJsonElement(AccountsSummary.serializer(), body)
-
-    fun resolved(body: JsonElement): ResolvedAccount = json.decodeFromJsonElement(ResolvedAccount.serializer(), body)
+    fun resolved(body: JsonElement): ResolvedAccount = Protocol.json.decodeFromJsonElement(ResolvedAccount.serializer(), body)
 
     /**
      * The picker's options, as the web modal's `accountOptionsHtml`: first the server's

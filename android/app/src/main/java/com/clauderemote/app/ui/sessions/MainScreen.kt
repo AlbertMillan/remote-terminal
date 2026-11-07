@@ -9,6 +9,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.clauderemote.app.links.Link
 import com.clauderemote.app.sessions.Accounts
+import com.clauderemote.app.sessions.PastedImages
+import androidx.activity.result.PickVisualMediaRequest
 import com.clauderemote.app.sessions.ResolvedAccount
 import com.clauderemote.app.push.Notifications
 import com.clauderemote.app.push.PushRegistrar
@@ -54,6 +56,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -102,6 +105,29 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
 
     LaunchedEffect(store) { store.messages.collect { snackbar.showSnackbar(it) } }
 
+    // An image for a session (Image key, Paste key, share sheet): uploaded, then its server
+    // path pasted into that session's prompt, never sent (sessions/PastedImages.kt).
+    // A count, not a flag: an Image pick and a Paste can overlap, and the first to finish
+    // must not mark the other done.
+    var uploads by remember { mutableIntStateOf(0) }
+    fun pasteImage(sessionId: String, uri: android.net.Uri) {
+        scope.launch {
+            uploads++
+            try {
+                val body = PastedImages.body(context.contentResolver, uri)
+                store.shareTo(sessionId, PastedImages.upload(app.api, sessionId, body))
+            } catch (e: Exception) {
+                snackbar.showSnackbar("Image not sent: ${e.message ?: "upload failed"}")
+            } finally {
+                uploads--
+            }
+        }
+    }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val id = store.open.value?.session?.id
+        if (uri != null && id != null) pasteImage(id, uri)
+    }
+
     // Push needs the notification permission (Android 13+); ask once, only when this build has push.
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
@@ -123,6 +149,20 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
         }
     }
 
+    /** Something shared into the app: pick a running session (the open one first), or say there is none. */
+    suspend fun chooseLiveSession(title: String, onChoose: (String) -> Unit) {
+        val live = state.sessions.filter { it.attachable && it.status != "terminated" }
+            .sortedByDescending { it.id == open?.session?.id }
+        if (live.isEmpty()) {
+            snackbar.showSnackbar("No running session to share into")
+            return
+        }
+        dialog = DialogSpec.Choose(
+            title,
+            live.map { (if (it.id == open?.session?.id) "${it.name} (open)" else it.name) to it.id },
+        ) { id -> if (id != null) onChoose(id) }
+    }
+
     // Shared from another app: pick the session (the open one first), then it is pasted
     // into that session's prompt, never sent; Enter stays the user's.
     val share by app.pendingShare.collectAsStateWithLifecycle()
@@ -130,17 +170,16 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
         val text = share ?: return@LaunchedEffect
         if (!isConnected || !state.loaded) return@LaunchedEffect
         app.pendingShare.value = null
-        val live = state.sessions.filter { it.attachable && it.status != "terminated" }
-            .sortedByDescending { it.id == open?.session?.id }
-        if (live.isEmpty()) {
-            snackbar.showSnackbar("No running session to share into")
-            return@LaunchedEffect
-        }
-        val preview = text.lines().first().take(60)
-        dialog = DialogSpec.Choose(
-            "Paste “$preview” into",
-            live.map { (if (it.id == open?.session?.id) "${it.name} (open)" else it.name) to it.id },
-        ) { id -> if (id != null) store.shareTo(id, text) }
+        chooseLiveSession("Paste “${text.lines().first().take(60)}” into") { id -> store.shareTo(id, text) }
+    }
+
+    // An image shared from another app (a screenshot): pick the session, as for text.
+    val sharedImage by app.pendingShareImage.collectAsStateWithLifecycle()
+    LaunchedEffect(sharedImage, isConnected, state.loaded) {
+        val uri = sharedImage ?: return@LaunchedEffect
+        if (!isConnected || !state.loaded) return@LaunchedEffect
+        app.pendingShareImage.value = null
+        chooseLiveSession("Paste the image into") { id -> pasteImage(id, uri) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Palette.background)) {
@@ -219,7 +258,14 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                     key = { code -> handle.view?.onKeyDown(code, KeyEvent(KeyEvent.ACTION_DOWN, code)) },
                     onPaste = {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let { store.paste(it) }
+                        val clip = cm.primaryClip
+                        val imageUri = clip?.takeIf { it.description.hasMimeType("image/*") }?.getItemAt(0)?.uri
+                        if (imageUri != null) pasteImage(current.session.id, imageUri)
+                        else clip?.getItemAt(0)?.coerceToText(context)?.toString()?.let { store.paste(it) }
+                    },
+                    imageBusy = uploads > 0,
+                    onImage = {
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
                 )
             } else {

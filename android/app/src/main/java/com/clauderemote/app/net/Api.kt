@@ -13,6 +13,7 @@ import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
@@ -34,6 +35,10 @@ class Api(private val http: OkHttpClient, private val address: () -> ServerAddre
 
     suspend fun post(path: String, body: JsonElement = JsonObject(emptyMap())): JsonElement =
         call(Request.Builder().url(url(path)).post(body.toString().toRequestBody(jsonType)).build())
+
+    /** A raw body (an image upload, streamed); the answer is JSON like every other route's. */
+    suspend fun postBody(path: String, body: RequestBody): JsonElement =
+        call(Request.Builder().url(url(path)).post(body).build())
 
     suspend fun delete(path: String, body: JsonElement = JsonObject(emptyMap())): JsonElement =
         call(Request.Builder().url(url(path)).delete(body.toString().toRequestBody(jsonType)).build())

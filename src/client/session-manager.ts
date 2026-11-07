@@ -1,4 +1,5 @@
 // Session and WebSocket management
+import { pastedImageText, uploadPastedImage } from './pasted-image.js';
 import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager } from './pip-manager.js';
 import { ProjectWorkspace } from './project-workspace.js';
@@ -861,6 +862,7 @@ class SessionManager {
         container,
         onData: (data: string) => this.sendTerminalData(data),
         onResize: (cols: number, rows: number) => this.sendTerminalResize(cols, rows),
+        onImage: (image: File) => void this.pasteImage(payload.session.id, image),
       });
       this.terminalMgr.setNavigateSessionCallback((dir) => this.navigateToSession(dir));
       this.terminalMgr.setNewSessionCallback(() => this.showNewSessionModal());
@@ -1281,12 +1283,28 @@ class SessionManager {
         });
         return;
       }
-      this.showForkError(error instanceof Error ? error.message : 'Failed to fork session');
+      this.showErrorToast(error instanceof Error ? error.message : 'Failed to fork session');
     }
   }
 
-  private showForkError(message: string): void {
-    const toast = document.getElementById('fork-error-toast');
+  /**
+   * Upload a pasted or dropped image and paste its server path into the session it was
+   * dropped on (pasted-image.ts), only while that session is still the one shown: typed into
+   * another, the path would land in the wrong prompt. Switched away, it says so instead.
+   */
+  private async pasteImage(sessionId: string, image: File): Promise<void> {
+    try {
+      const path = await uploadPastedImage(sessionId, image);
+      if (this.currentSessionId === sessionId) this.terminalMgr?.paste(pastedImageText(path));
+      else this.showErrorToast('Image not pasted: the session changed before its upload finished. Paste it again.');
+    } catch (error) {
+      this.showErrorToast(error instanceof Error ? error.message : 'Image upload failed');
+    }
+  }
+
+  /** A short error under the header (a failed fork, an image that could not be pasted). */
+  private showErrorToast(message: string): void {
+    const toast = document.getElementById('error-toast');
     if (!toast) return;
     toast.textContent = message;
     toast.classList.remove('hidden');

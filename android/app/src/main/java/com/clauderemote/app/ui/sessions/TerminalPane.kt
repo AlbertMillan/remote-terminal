@@ -147,6 +147,9 @@ fun KeysBar(
     send: (String) -> Unit,
     key: (Int) -> Unit,
     onPaste: () -> Unit,
+    /** Pick an image to paste into the session (PastedImages.kt); [imageBusy] while one uploads. */
+    onImage: () -> Unit = {},
+    imageBusy: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(color = Palette.surface, modifier = modifier.fillMaxWidth()) {
@@ -167,6 +170,7 @@ fun KeysBar(
             KeyButton("/") { send("/") }
             KeyButton("^C") { send("\u0003") }
             KeyButton("Paste", onClick = onPaste)
+            KeyButton(if (imageBusy) "Image…" else "Image", onClick = { if (!imageBusy) onImage() })
         }
     }
 }

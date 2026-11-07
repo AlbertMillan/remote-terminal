@@ -1,3 +1,5 @@
+import { imageFromTransfer } from './pasted-image.js';
+
 // Terminal management using xterm.js
 
 // Type definitions for xterm.js loaded via script tags
@@ -16,6 +18,8 @@ interface ITerminal {
   rows: number;
   open(container: HTMLElement): void;
   write(data: string): void;
+  /** Sends `data` as typed input, bracketed when the program enabled bracketed paste. */
+  paste(data: string): void;
   writeln(data: string): void;
   clear(): void;
   resize(cols: number, rows: number): void;
@@ -80,6 +84,8 @@ export interface TerminalOptions {
   container: HTMLElement;
   onData: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
+  /** An image pasted or dropped onto the terminal (pasted-image.ts); text pastes stay xterm's. */
+  onImage?: (image: File) => void;
 }
 
 export class TerminalManager {
@@ -89,6 +95,8 @@ export class TerminalManager {
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  /** Removes the image paste/drop listeners with the terminal. */
+  private imageListeners: AbortController | null = null;
   private navigateSessionCallback: ((direction: 'prev' | 'next') => void) | null = null;
   private newSessionCallback: (() => void) | null = null;
   private scrollbar: {
@@ -178,6 +186,26 @@ export class TerminalManager {
       }
     });
 
+    // An image paste or drop: taken in the capture phase, before xterm's textarea, which
+    // would paste nothing (it reads text only).
+    const onImage = options.onImage;
+    if (onImage) {
+      this.imageListeners = new AbortController();
+      const { signal } = this.imageListeners;
+      const take = (e: Event, data: DataTransfer | null) => {
+        const image = imageFromTransfer(data);
+        if (!image) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onImage(image);
+      };
+      this.container.addEventListener('paste', (e) => take(e, e.clipboardData), { capture: true, signal });
+      this.container.addEventListener('dragover', (e) => {
+        if (Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file')) e.preventDefault();
+      }, { signal });
+      this.container.addEventListener('drop', (e) => take(e, e.dataTransfer), { capture: true, signal });
+    }
+
     // Set up resize observer
     this.resizeObserver = new ResizeObserver(() => {
       this.fit();
@@ -192,6 +220,11 @@ export class TerminalManager {
     if (this.terminal) {
       this.terminal.write(data);
     }
+  }
+
+  /** Pastes into the session as a user paste would (bracketed when Claude Code asked). */
+  paste(data: string): void {
+    this.terminal?.paste(data);
   }
 
   writeln(data: string): void {
@@ -333,6 +366,8 @@ export class TerminalManager {
   }
 
   dispose(): void {
+    this.imageListeners?.abort();
+    this.imageListeners = null;
     if (this.scrollbar) {
       this.scrollbar.abortController.abort();
       this.scrollbar.observer.disconnect();

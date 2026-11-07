@@ -24,7 +24,7 @@ import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames
 import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
-import { setClaudeSessionId, getSession as getSessionFromDb } from './db/queries.js';
+import { setClaudeSessionId, getSession as getSessionFromDb, getAllSessions as getAllSessionsFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
 import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
 import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
@@ -40,6 +40,7 @@ import { registerServerRestartRoutes } from './server-restart.js';
 import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
+import { registerPastedImageRoutes, sweepPastedImages } from './sessions/pasted-images.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
@@ -71,6 +72,8 @@ export async function createApp(): Promise<FastifyInstance> {
   // Initialize database
   initDatabase();
   cleanupOrphanedForkFiles();
+  // Images of deleted sessions, and any older than 30 days (sessions/pasted-images.ts).
+  sweepPastedImages(new Set(getAllSessionsFromDb().map((s) => s.id)));
   // Retroactively log sessions that ended via crash/OS-shutdown (no-op if disabled)
   sweepUnloggedSessions();
   // A job marked running cannot have survived the restart — re-queue it.
@@ -213,6 +216,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerProjectRoutes(app);
   // Pipeline jobs: worktree-isolated stages with approval gates.
   registerJobRoutes(app);
+  // Images pasted or shared into a session from another device (sessions/pasted-images.ts).
+  registerPastedImageRoutes(app);
   registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
   registerServerSettingsRoutes(app);
