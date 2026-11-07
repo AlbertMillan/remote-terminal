@@ -8,6 +8,9 @@ import {
   matchesFilter,
   rowState,
   KEEP_STOPPED_IN_PLACE_KEY,
+  isFilterShortcut,
+  openMobileSidebar,
+  closeMobileSidebar,
   type SessionListViewHost,
 } from '../src/client/session-list-view.js';
 import type { SessionInfo, CategoryInfo } from '../src/client/session-types.js';
@@ -500,7 +503,10 @@ describe('@ copy', () => {
     view();
     const btn = rowOf('other').querySelector('.session-copy-btn') as HTMLElement;
     btn.click();
-    await vi.waitFor(() => expect(btn.classList.contains('copied')).toBe(true));
+    // The copy re-renders the row, so look the button up again.
+    await vi.waitFor(() =>
+      expect(rowOf('other').querySelector('.session-copy-btn')?.classList.contains('copied')).toBe(true)
+    );
     expect(writeText).toHaveBeenCalledWith('@claude-remote-31');
     expect(host.attachToSession).not.toHaveBeenCalled();
     expect(rowOf('other').classList.contains('just-copied')).toBe(true);
@@ -524,5 +530,99 @@ describe('@ copy', () => {
     expect(toast.textContent).not.toContain('Copied');
     expect((toast.querySelector('input') as HTMLInputElement).value).toBe('@claude-remote-31');
     expect(btn.classList.contains('copied')).toBe(false);
+  });
+});
+
+describe('copy feedback and focus', () => {
+  it('keeps the check and the green edge through a re-render, then drops them', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    const v = view();
+    (rowOf('other').querySelector('.session-copy-btn') as HTMLElement).click();
+    await vi.waitFor(() => expect(rowOf('other').classList.contains('just-copied')).toBe(true));
+
+    // A notification or a name broadcast rebuilds every row.
+    v.render();
+    expect(rowOf('other').classList.contains('just-copied')).toBe(true);
+    expect(rowOf('other').querySelector('.session-copy-btn')?.classList.contains('copied')).toBe(true);
+
+    await vi.waitFor(() => expect(rowOf('other').classList.contains('just-copied')).toBe(false), { timeout: 2500 });
+    expect(rowOf('other').querySelector('.session-copy-btn')?.classList.contains('copied')).toBe(false);
+  });
+
+  it('gives focus back after the selection fallback', async () => {
+    vi.stubGlobal('navigator', {});
+    (document as unknown as { execCommand: () => boolean }).execCommand = vi.fn().mockReturnValue(true);
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    document.body.insertAdjacentHTML('beforeend', '<textarea id="term"></textarea>');
+    view();
+    const term = document.getElementById('term') as HTMLTextAreaElement;
+    term.focus();
+    (rowOf('other').querySelector('.session-copy-btn') as HTMLElement).click();
+    await vi.waitFor(() => expect(document.getElementById('session-toast')?.hidden).toBe(false));
+    expect(document.activeElement).toBe(term);
+    expect(document.getElementById('session-toast')?.textContent).toContain('Copied');
+    // Let the feedback timer run out here: it re-renders this view, which would
+    // otherwise draw this test's sessions over the next test's list.
+    await vi.waitFor(() => expect(rowOf('other').classList.contains('just-copied')).toBe(false), { timeout: 2500 });
+  });
+});
+
+describe('keyboard order (Ctrl+Q / Ctrl+E)', () => {
+  it('follows what the tree shows: no folded children, strip copies, drawer or folded category', () => {
+    sessions.set('dead', info('dead', { categoryId: 'cat', attachable: false, sortOrder: 3 }));
+    categories.set('shut', { id: 'shut', name: 'Shut', sortOrder: 1, collapsed: true });
+    sessions.set('hidden', info('hidden', { categoryId: 'shut' }));
+    waiting('a');
+    const v = view();
+    expect(v.visibleOrder()).toEqual(['main', 'other']);
+    toggle('main');
+    expect(v.visibleOrder()).toEqual(['main', 'a', 'b', 'other']);
+  });
+
+  it('walks the matches while a filter is on', () => {
+    const v = view();
+    const input = document.getElementById('session-filter') as HTMLInputElement;
+    input.value = 'b';
+    input.dispatchEvent(new Event('input'));
+    expect(v.visibleOrder()).toEqual(['b']);
+  });
+});
+
+describe('Alt+K and the phone sidebar', () => {
+  it('recognises Alt+K only', () => {
+    const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', init);
+    expect(isFilterShortcut(key({ key: 'k', altKey: true }))).toBe(true);
+    expect(isFilterShortcut(key({ key: 'K', altKey: true }))).toBe(true);
+    expect(isFilterShortcut(key({ key: 'k', altKey: true, ctrlKey: true }))).toBe(false);
+    expect(isFilterShortcut(key({ key: 'k' }))).toBe(false);
+  });
+
+  it('hides the menu button while the overlay is open, and brings it back on close', () => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<button id="mobile-menu-btn"></button><aside id="sidebar"></aside><div id="sidebar-overlay"></div>'
+    );
+    openMobileSidebar();
+    expect(document.getElementById('sidebar')?.classList.contains('open')).toBe(true);
+    expect(document.getElementById('mobile-menu-btn')?.classList.contains('hidden')).toBe(true);
+    closeMobileSidebar();
+    expect(document.getElementById('sidebar-overlay')?.classList.contains('open')).toBe(false);
+    expect(document.getElementById('mobile-menu-btn')?.classList.contains('hidden')).toBe(false);
+  });
+});
+
+describe('account colours', () => {
+  it('re-reads the account order on refresh, so the dots follow a config change', async () => {
+    sessions.set('other', { ...sessions.get('other')!, account: 'work' });
+    sessions.set('main', { ...sessions.get('main')!, account: 'personal' });
+    const order = (names: string[]) => ({ ok: true, json: async () => ({ accounts: names.map((name) => ({ name })) }) });
+    const fetchMock = vi.fn().mockResolvedValueOnce(order(['work', 'personal'])).mockResolvedValueOnce(order(['personal', 'work']));
+    vi.stubGlobal('fetch', fetchMock);
+    const v = view();
+    await vi.waitFor(() => expect(rowOf('other').querySelector('.session-account-dot')?.classList.contains('acct-c0')).toBe(true));
+    await v.refreshAccountOrder();
+    expect(rowOf('other').querySelector('.session-account-dot')?.classList.contains('acct-c1')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

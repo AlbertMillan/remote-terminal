@@ -208,6 +208,9 @@ async function copyText(text: string): Promise<boolean> {
   } catch {
     /* refused (insecure origin, no permission): try the fallback */
   }
+  // The fallback has to focus a textarea to select it; give focus back afterwards, or the
+  // terminal stops taking keystrokes (this is the normal path over plain HTTP).
+  const previous = document.activeElement as HTMLElement | null;
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -218,10 +221,34 @@ async function copyText(text: string): Promise<boolean> {
     ta.select();
     const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
     ta.remove();
+    previous?.focus?.();
     return ok;
   } catch {
+    previous?.focus?.();
     return false;
   }
+}
+
+/** Alt+K, the sidebar filter shortcut; `terminal.ts` and the document handler share it. */
+export function isFilterShortcut(e: KeyboardEvent): boolean {
+  return e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'k' || e.key === 'K');
+}
+
+/**
+ * Show the sidebar as the phone overlay. The menu button hides while it is open, as the
+ * button's own handler does: left visible, its next tap would close the sidebar and hide
+ * itself, leaving nothing to reopen it.
+ */
+export function openMobileSidebar(): void {
+  document.getElementById('sidebar')?.classList.add('open');
+  document.getElementById('sidebar-overlay')?.classList.add('open');
+  document.getElementById('mobile-menu-btn')?.classList.add('hidden');
+}
+
+export function closeMobileSidebar(): void {
+  document.getElementById('sidebar')?.classList.remove('open');
+  document.getElementById('sidebar-overlay')?.classList.remove('open');
+  document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
 }
 
 const ICON = {
@@ -244,6 +271,8 @@ interface RowOptions {
   child?: boolean;
   /** The sessions it started; a folded parent shows them as a tally. */
   children?: SessionInfo[];
+  /** `children` as tracks, computed once by the caller. */
+  groups?: TrackGroup[];
   /** A builder's track: its peers as squares and its own fold arrow. */
   track?: TrackGroup;
   /** Outside the category tree (strip, drawer, filter matches): no fold, no drag. */
@@ -273,6 +302,14 @@ export class SessionListView {
   /** Account names in config order (GET /api/accounts), for the dot colours; null until loaded. */
   private accountOrder: string[] | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Sessions span 2+ accounts, so rows show account dots; computed once per render. */
+  private multiAccount = false;
+  /**
+   * The row whose `@name` was just copied. Kept here, not only on its DOM node, because
+   * any render in the next moments (a notification, a name broadcast) rebuilds every row.
+   */
+  private copied: { id: string; until: number } | null = null;
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly host: SessionListViewHost) {}
 
@@ -299,10 +336,11 @@ export class SessionListView {
       input.blur();
       this.render();
     });
-    void this.loadAccountOrder();
+    void this.refreshAccountOrder();
   }
 
-  private async loadAccountOrder(): Promise<void> {
+  /** Account order for the dot colours: at first render and on every reconnect (accounts may change). */
+  async refreshAccountOrder(): Promise<void> {
     try {
       const res = await fetch('/api/accounts');
       if (!res.ok) return;
@@ -335,6 +373,23 @@ export class SessionListView {
     this.render();
   }
 
+  /**
+   * Openable sessions in the order the tree shows them, for Ctrl+Q / Ctrl+E: unfolded
+   * children and peers included; folded ones, folded categories, the "Needs you" strip
+   * (duplicates) and the Stopped drawer left out. With a filter, the matches.
+   */
+  visibleOrder(): string[] {
+    const listEl = document.getElementById('session-list');
+    if (!listEl) return [];
+    const ids: string[] = [];
+    for (const li of listEl.querySelectorAll<HTMLElement>('.session-item:not(.not-attachable)')) {
+      if (li.closest('.attention-section, .stopped-section, .category-section.collapsed')) continue;
+      const id = li.dataset.sessionId;
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids;
+  }
+
   private stateOf(session: SessionInfo): RowState {
     return rowState(session, this.host.sessionNotifications.get(session.id));
   }
@@ -351,6 +406,8 @@ export class SessionListView {
     const { childrenOf, nested } = groupStartedSessions(this.host.sessions);
     this.childrenOf = childrenOf;
     this.nested = nested;
+    this.multiAccount = new Set([...this.host.sessions.values()].map((s) => s.account).filter(Boolean)).size > 1;
+    if (this.copied && this.copied.until <= Date.now()) this.copied = null;
 
     if (this.filter.trim()) {
       this.renderMatches(listEl, this.filter.trim());
@@ -583,9 +640,10 @@ export class SessionListView {
    */
   private renderSessionGroup(container: HTMLElement, session: SessionInfo, opts: RowOptions = {}): void {
     const children = this.childrenOf.get(session.id) ?? [];
-    this.renderSessionItem(container, session, { ...opts, children });
+    const groups = children.length > 0 ? trackGroups(children) : [];
+    this.renderSessionItem(container, session, { ...opts, children, groups });
     if (children.length === 0 || !this.expanded.has(session.id)) return;
-    for (const group of trackGroups(children)) {
+    for (const group of groups) {
       if (group.peers.length === 0) {
         this.renderSessionItem(container, group.lead, { child: true });
         continue;
@@ -605,8 +663,8 @@ export class SessionListView {
   }
 
   /** A folded parent's children: one dot per track at its worst state, then the count. */
-  private kidsTally(children: SessionInfo[]): string {
-    const groups = trackGroups(children).map((g) => worstState([g.lead, ...g.peers].map((s) => this.stateOf(s))));
+  private kidsTally(children: SessionInfo[], tracks: TrackGroup[]): string {
+    const groups = tracks.map((g) => worstState([g.lead, ...g.peers].map((s) => this.stateOf(s))));
     groups.sort((a, b) => STATE_RANK[a] - STATE_RANK[b]);
     let waiting = 0;
     let done = 0;
@@ -627,9 +685,7 @@ export class SessionListView {
   }
 
   private accountDot(session: SessionInfo): string {
-    if (!session.account) return '';
-    const accounts = new Set([...this.host.sessions.values()].map((s) => s.account).filter(Boolean));
-    if (accounts.size < 2) return '';
+    if (!session.account || !this.multiAccount) return '';
     const index = this.accountOrder?.indexOf(session.account) ?? -1;
     const colour = index >= 0 ? ` acct-c${index % ACCOUNT_COLOURS}` : '';
     return `<span class="session-account-dot${colour}" title="Runs under the ${escapeAttr(session.account)} Claude account"></span>`;
@@ -723,13 +779,17 @@ export class SessionListView {
     const warning = session.accountWarning
       ? `<span class="session-account-warning" title="${escapeAttr(session.accountWarning)}">⚠</span>`
       : '';
-    const tally = children.length > 0 && !this.expanded.has(session.id) ? this.kidsTally(children) : '';
+    const tally =
+      children.length > 0 && !this.expanded.has(session.id) ? this.kidsTally(children, opts.groups ?? trackGroups(children)) : '';
+    // Copy feedback comes from state, so a render inside its 1.6 s keeps it.
+    const justCopied = this.copied?.id === session.id;
+    if (justCopied) li.classList.add('just-copied');
 
     // Whether a row can be revived (stale ones, and exited ones with a conversation) is the
     // server's call: `revivable` comes from the same rule reviveSession() enforces.
     const escapedId = escapeAttr(session.id);
     const copyHtml = session.claudeName
-      ? `<button class="session-copy-btn" data-copy="@${escapeAttr(session.claudeName)}" title="Copy @${escapeAttr(session.claudeName)}: the name other agents message this session by" aria-label="Copy the name agents use for ${escapeAttr(session.name)}">${ICON.at}</button>`
+      ? `<button class="session-copy-btn${justCopied ? ' copied' : ''}" data-copy="@${escapeAttr(session.claudeName)}" title="Copy @${escapeAttr(session.claudeName)}: the name other agents message this session by" aria-label="Copy the name agents use for ${escapeAttr(session.name)}">${justCopied ? ICON.check : ICON.at}</button>`
       : '';
     const reviveHtml = session.revivable
       ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedId}">${ICON.play}</button>`
@@ -777,7 +837,7 @@ export class SessionListView {
     li.querySelector('.session-copy-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
       const btn = e.currentTarget as HTMLElement;
-      void this.copyAddress(btn, li, btn.dataset.copy ?? '');
+      void this.copyAddress(session.id, btn.dataset.copy ?? '');
     });
     li.querySelector('.session-revive-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -806,9 +866,7 @@ export class SessionListView {
       if (this.expanded.size !== before) this.saveExpanded();
     }
     this.host.attachToSession(session.id);
-    document.getElementById('sidebar')?.classList.remove('open');
-    document.getElementById('sidebar-overlay')?.classList.remove('open');
-    document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
+    closeMobileSidebar();
   }
 
   /**
@@ -816,18 +874,17 @@ export class SessionListView {
    * the icon turns into a check, the row's edge goes green, and a toast says what was
    * copied. A copy that failed says so and selects the text instead, never "Copied".
    */
-  private async copyAddress(btn: HTMLElement, li: HTMLElement, text: string): Promise<void> {
+  private async copyAddress(sessionId: string, text: string): Promise<void> {
     if (!text) return;
     const ok = await copyText(text);
     this.showToast(text, ok);
     if (!ok) return;
-    btn.innerHTML = ICON.check;
-    btn.classList.add('copied');
-    li.classList.add('just-copied');
-    setTimeout(() => {
-      btn.innerHTML = ICON.at;
-      btn.classList.remove('copied');
-      li.classList.remove('just-copied');
+    this.copied = { id: sessionId, until: Date.now() + COPY_FEEDBACK_MS };
+    this.render();
+    if (this.copiedTimer) clearTimeout(this.copiedTimer);
+    this.copiedTimer = setTimeout(() => {
+      this.copied = null;
+      this.render();
     }, COPY_FEEDBACK_MS);
   }
 

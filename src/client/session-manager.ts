@@ -26,7 +26,7 @@ import {
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
-import { SessionListView } from './session-list-view.js';
+import { SessionListView, isFilterShortcut, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
   SessionInfo,
@@ -434,10 +434,14 @@ class SessionManager {
           this.showNewSessionModal();
         }
       }
-      // Filter sessions: Alt+K (the terminal forwards it too: xterm's textarea is focused there)
-      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        this.focusSessionFilter();
+      // Filter sessions: Alt+K. Not while typing in a field (a modal, the filter itself);
+      // inside the terminal, terminal.ts handles it, since xterm's textarea is focused there.
+      if (isFilterShortcut(e)) {
+        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') {
+          e.preventDefault();
+          this.focusSessionFilter();
+        }
       }
       // Session navigation: Ctrl+Q = prev, Ctrl+E = next
       // Skip when an input/textarea is focused (modal inputs or xterm helper textarea)
@@ -498,10 +502,7 @@ class SessionManager {
   private focusSessionFilter(): void {
     if (this.projectLogView.isProjectsTabActive()) this.projectLogView.switchTab('sessions');
     if (document.getElementById('app')?.classList.contains('sidebar-collapsed')) this.toggleSidebar();
-    if (window.matchMedia?.('(max-width: 768px)').matches) {
-      document.getElementById('sidebar')?.classList.add('open');
-      document.getElementById('sidebar-overlay')?.classList.add('open');
-    }
+    if (window.matchMedia?.('(max-width: 768px)').matches) openMobileSidebar();
     this.sessionListView.focusFilter();
   }
 
@@ -542,6 +543,7 @@ class SessionManager {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
       this.updateConnectionStatus('connected');
+      void this.sessionListView.refreshAccountOrder();
       this.listSessions();
       this.listCategories();
       this.getNotificationPreferences();
@@ -1165,34 +1167,10 @@ class SessionManager {
     }
   }
 
-  private getOrderedVisibleSessionIds(): string[] {
-    const sortedSessions = Array.from(this.sessions.values()).sort(
-      (a, b) => a.sortOrder - b.sortOrder
-    );
-    const sortedCategories = Array.from(this.categories.values()).sort(
-      (a, b) => a.sortOrder - b.sortOrder
-    );
-
-    if (sortedCategories.length === 0) {
-      return sortedSessions.map(s => s.id);
-    }
-
-    const result: string[] = [];
-    for (const category of sortedCategories) {
-      if (category.collapsed) continue;
-      for (const session of sortedSessions) {
-        if (session.categoryId === category.id) result.push(session.id);
-      }
-    }
-    // Uncategorized sessions last
-    for (const session of sortedSessions) {
-      if (!session.categoryId) result.push(session.id);
-    }
-    return result;
-  }
-
   private navigateToSession(direction: 'prev' | 'next'): void {
-    const sessionIds = this.getOrderedVisibleSessionIds();
+    // The order the sidebar shows (visibleOrder()), so the keys never land on a folded
+    // child or a stopped session.
+    const sessionIds = this.sessionListView.visibleOrder();
     if (sessionIds.length === 0) return;
 
     const currentIndex = this.currentSessionId ? sessionIds.indexOf(this.currentSessionId) : -1;

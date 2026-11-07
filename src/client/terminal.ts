@@ -1,4 +1,5 @@
 import { imageFromTransfer } from './pasted-image.js';
+import { isFilterShortcut } from './session-list-view.js';
 
 // Terminal management using xterm.js
 
@@ -157,7 +158,7 @@ export class TerminalManager {
           if (this.newSessionCallback) this.newSessionCallback();
           return false;
         }
-        if (e.key === 'k' || e.key === 'K') {
+        if (isFilterShortcut(e)) {
           if (this.findSessionCallback) this.findSessionCallback();
           return false;
         }
