@@ -67,6 +67,8 @@ status: active
 ## Track: Plan usage limits
 - [x] `f-jmqczy` P2 Plan usage chip — 5-hour and weekly percentages with reset times, relayed from the status line → project/plan-usage-limits.md
 ## Track: UI Improvements
+- [ ] `f-epu9bh` P2 Compact session sidebar — one-line rows, detail line on the selected row, hover actions with `@` copy feedback, one-line header → project/sidebar-redesign.md
+- [ ] `f-p1i90s` P2 Sidebar attention and clutter — "Needs you" strip, children folded with builder/critic pair rows, Stopped drawer, `/` filter → project/sidebar-redesign.md
 
 ## Track: Project Session Log
 - [x] `f-j6jxm9` Step 1 — Plan / design doc
