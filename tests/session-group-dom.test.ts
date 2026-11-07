@@ -626,3 +626,68 @@ describe('account colours', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('keyboard access (rows are Tab stops)', () => {
+  const enter = () => new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+
+  it('makes every row focusable, in the tree and in the strip', () => {
+    waiting('a');
+    view();
+    for (const li of document.querySelectorAll<HTMLElement>('.session-item')) expect(li.tabIndex).toBe(0);
+  });
+
+  it('opens a row with Enter, but not a stopped one', () => {
+    sessions.set('dead', info('dead', { attachable: false }));
+    localStorage.setItem(KEEP_STOPPED_IN_PLACE_KEY, 'true');
+    view();
+    rowOf('other').dispatchEvent(enter());
+    expect(host.attachToSession).toHaveBeenCalledWith('other');
+    rowOf('dead').dispatchEvent(enter());
+    expect(host.attachToSession).not.toHaveBeenCalledWith('dead');
+  });
+
+  it('Enter on a row button presses the button, not the row', () => {
+    view();
+    const del = rowOf('other').querySelector('.session-delete-btn') as HTMLElement;
+    del.dispatchEvent(enter());
+    expect(host.attachToSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps focus on the same row through a re-render', () => {
+    const v = view();
+    rowOf('other').focus();
+    v.render();
+    expect(document.activeElement).toBe(rowOf('other'));
+  });
+
+  it("keeps focus on a row's button, and on the fold arrow it just pressed", () => {
+    sessions.set('other', { ...sessions.get('other')!, claudeName: 'claude-remote-31' });
+    const v = view();
+    (rowOf('other').querySelector('.session-copy-btn') as HTMLElement).focus();
+    v.render();
+    expect(document.activeElement).toBe(rowOf('other').querySelector('.session-copy-btn'));
+
+    const arrow = rowOf('main').querySelector('.session-group-toggle') as HTMLElement;
+    arrow.focus();
+    arrow.click();
+    expect(rowIds()).toContain('a');
+    expect(document.activeElement).toBe(rowOf('main').querySelector('.session-group-toggle'));
+  });
+
+  it("keeps focus on a category's fold button through the re-render it causes", () => {
+    const v = view();
+    (section('cat').querySelector('.category-toggle') as HTMLElement).focus();
+    categories.set('cat', { ...categories.get('cat')!, collapsed: true });
+    v.render();
+    expect(document.activeElement).toBe(section('cat').querySelector('.category-toggle'));
+  });
+
+  it('keeps the strip copy focused in the strip, not the tree copy', () => {
+    waiting('other');
+    const v = view();
+    const stripRow = document.querySelector('.attention-section .session-item') as HTMLElement;
+    stripRow.focus();
+    v.render();
+    expect((document.activeElement as HTMLElement).closest('.attention-section')).not.toBeNull();
+  });
+});

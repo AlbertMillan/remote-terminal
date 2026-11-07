@@ -606,6 +606,16 @@ body {
   background-color: var(--bg-tertiary);
 }
 
+/* Rows are Tab stops (focus a row, then Tab into its actions); a ring only for the keyboard. */
+.session-item:focus {
+  outline: none;
+}
+
+.session-item:focus-visible {
+  background-color: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .session-item.active,
 .session-item.contains-active {
   background-color: var(--bg-tertiary);
@@ -826,7 +836,10 @@ body {
 .session-account-dot.acct-c2 { background: var(--account-2); }
 .session-account-dot.acct-c3 { background: var(--account-3); }
 
-/* Copy, revive, delete: on hover (and keyboard focus); on touch, on the selected row. */
+/* Copy, revive, delete: on hover, and while the row or one of its buttons has focus (one
+   rule for both, so Tab from a row to its first button never passes through a moment
+   where the buttons are hidden: a hidden button drops focus to the page). On touch, on
+   the selected row. */
 .session-actions {
   display: none;
   align-items: center;

@@ -251,6 +251,60 @@ export function closeMobileSidebar(): void {
   document.getElementById('mobile-menu-btn')?.classList.remove('hidden');
 }
 
+/**
+ * Where keyboard focus sits in the list: a row (by session and section) and maybe one of
+ * its controls, or a section header's button. Found again by comparing data attributes,
+ * so no id is ever spliced into a selector.
+ */
+type FocusKey =
+  | { kind: 'row'; sessionId: string; section: string; control: string | null; peerId: string | null }
+  | { kind: 'category'; categoryId: string; control: string }
+  | { kind: 'stopped' };
+
+const ROW_CONTROLS = ['session-copy-btn', 'session-revive-btn', 'session-delete-btn', 'session-group-toggle'];
+const HEADER_CONTROLS = ['category-toggle', 'category-rename-btn', 'category-delete-btn'];
+const SECTION_SELECTOR = '.attention-section, .stopped-section, .matches-section';
+
+function sectionOf(el: HTMLElement): string {
+  const s = el.closest(SECTION_SELECTOR);
+  if (!s) return 'tree';
+  return s.classList.contains('attention-section') ? 'attention' : s.classList.contains('stopped-section') ? 'stopped' : 'matches';
+}
+
+function focusKey(listEl: HTMLElement): FocusKey | null {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || !listEl.contains(active)) return null;
+  if (active.classList.contains('stopped-header')) return { kind: 'stopped' };
+  if (active.closest('.category-header')) {
+    const categoryId = active.closest<HTMLElement>('.category-section')?.dataset.categoryId;
+    const control = HEADER_CONTROLS.find((c) => active.classList.contains(c));
+    return categoryId && control ? { kind: 'category', categoryId, control } : null;
+  }
+  const li = active.closest<HTMLElement>('.session-item');
+  if (!li?.dataset.sessionId) return null;
+  const control = active === li ? null : (ROW_CONTROLS.find((c) => active.classList.contains(c)) ?? null);
+  return { kind: 'row', sessionId: li.dataset.sessionId, section: sectionOf(li), control, peerId: active.dataset.peerId ?? null };
+}
+
+function restoreFocus(listEl: HTMLElement, key: FocusKey): void {
+  let target: HTMLElement | null | undefined = null;
+  if (key.kind === 'stopped') {
+    target = listEl.querySelector<HTMLElement>('.stopped-header');
+  } else if (key.kind === 'category') {
+    const section = [...listEl.querySelectorAll<HTMLElement>('.category-section')].find((el) => el.dataset.categoryId === key.categoryId);
+    target = section?.querySelector<HTMLElement>(`.category-header .${key.control}`);
+  } else {
+    const rows = [...listEl.querySelectorAll<HTMLElement>('.session-item')].filter((li) => li.dataset.sessionId === key.sessionId);
+    const li = rows.find((r) => sectionOf(r) === key.section) ?? rows[0];
+    if (!li) return;
+    target =
+      (key.peerId ? [...li.querySelectorAll<HTMLElement>('[data-peer-id]')].find((el) => el.dataset.peerId === key.peerId) : null) ||
+      (key.control ? li.querySelector<HTMLElement>(`.${key.control}`) : null) ||
+      li;
+  }
+  target?.focus({ preventScroll: true });
+}
+
 const ICON = {
   chevron:
     '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>',
@@ -399,6 +453,17 @@ export class SessionListView {
     if (!listEl) return;
     this.wireOnce();
 
+    // Rows are focusable (Tab reaches them and their actions), but render() replaces every
+    // row; without this a notification arriving mid-Tab would drop focus to the page.
+    const refocus = focusKey(listEl);
+    try {
+      this.renderInto(listEl);
+    } finally {
+      if (refocus) restoreFocus(listEl, refocus);
+    }
+  }
+
+  private renderInto(listEl: HTMLElement): void {
     listEl.innerHTML = '';
 
     // Started sessions are rendered by their parent's row, so only top-level ones
@@ -732,6 +797,8 @@ export class SessionListView {
     // the category tree (strip, drawer, matches) have no category to drop into.
     const draggable = !isChild && !flat && opts.noDrag !== true;
     li.draggable = draggable;
+    // A Tab stop: focusing a row shows its actions, which come next in Tab order; Enter opens.
+    li.tabIndex = 0;
     li.dataset.sessionId = session.id;
     if (isChild) li.classList.add('session-child');
     if (children.length > 0) li.classList.add('session-parent');
@@ -809,6 +876,12 @@ export class SessionListView {
     `;
 
     if (draggable) this.attachDragHandlers(li, session);
+
+    li.addEventListener('keydown', (e) => {
+      if (e.target !== li || e.key !== 'Enter') return;
+      e.preventDefault();
+      this.open(session);
+    });
 
     li.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
