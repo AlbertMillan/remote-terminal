@@ -1935,12 +1935,16 @@ body {
   margin-bottom: 6px;
 }
 
+/* A fixed height that already fits the 20px rename/delete buttons: they replace the tally
+   on hover, and a header sized to its content grew by 4px then, shifting the list. */
 .category-header {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 3px 4px 3px 2px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 4px 0 2px;
   border-radius: 6px;
   user-select: none;
   cursor: pointer;
