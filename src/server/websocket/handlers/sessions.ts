@@ -14,6 +14,7 @@ import {
   type SessionOpenPayload,
   type SessionRevivePayload,
   type SessionKeepPayload,
+  type SessionStopPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
   type SessionErrorPayload,
@@ -36,6 +37,9 @@ import {
   storedSessionFields,
   broadcastSessionUpdate,
   broadcastSessionKept,
+  broadcastSessionRow,
+  detachViewers,
+  viewersOf,
   broadcastLoginEnded,
   broadcastSessionMoved,
   broadcastSessionReordered,
@@ -489,6 +493,44 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
     attachToSession(connection, session.id);
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to revive session'), message.id));
+  }
+}
+
+/**
+ * Stop a session (and the sessions it started) so it can be resumed later. Refused with
+ * `code: 'viewers'` while another browser views one of them, unless `force`: the client
+ * confirms first. Every sidebar gets each row back, now not attachable, which is also how a
+ * browser watching one learns to show its Resume prompt. project/stop-sessions.md
+ */
+export async function handleSessionStop(connection: ClientConnection, message: ClientMessage): Promise<void> {
+  const payload = message.payload as SessionStopPayload | undefined;
+  try {
+    if (!payload?.sessionId) throw new Error('Session ID required');
+    const targets = sessionManager.stopTargets(payload.sessionId);
+    const others = viewersOf(targets, connection);
+    if (others > 0 && !payload.force) {
+      const error: SessionErrorPayload = {
+        message: `${others === 1 ? 'Another browser is' : `${others} other browsers are`} viewing this session`,
+        code: 'viewers',
+      };
+      connection.ws.send(createMessage('session.error', error, message.id));
+      return;
+    }
+    try {
+      // Each session's browsers are detached just before its own kill, so a stop that
+      // fails part-way leaves the sessions it did not reach running and still attached.
+      const sessionIds = await sessionManager.stopSession(payload.sessionId, {
+        targets,
+        beforeKill: (id) => detachViewers([id]),
+      });
+      connection.ws.send(createMessage('session.stopped', { sessionIds }, message.id));
+    } finally {
+      // Every target, stopped or not: after a failure, the ones that did stop must still
+      // leave every sidebar, and the rest are re-sent as they are.
+      for (const id of targets) broadcastSessionRow(id);
+    }
+  } catch (error) {
+    connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to stop session'), message.id));
   }
 }
 

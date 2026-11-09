@@ -14,6 +14,7 @@ export interface SessionListViewHost {
   getCurrentSessionId(): string | null;
   attachToSession(sessionId: string): void;
   reviveSession(sessionId: string): void;
+  stopSession(sessionId: string): void;
   deleteSession(sessionId: string): void;
   moveSession(sessionId: string, categoryId: string | null): void;
   toggleCategory(categoryId: string, collapsed: boolean): void;
@@ -261,7 +262,7 @@ type FocusKey =
   | { kind: 'category'; categoryId: string; control: string }
   | { kind: 'stopped' };
 
-const ROW_CONTROLS = ['session-copy-btn', 'session-revive-btn', 'session-delete-btn', 'session-group-toggle'];
+const ROW_CONTROLS = ['session-copy-btn', 'session-stop-btn', 'session-revive-btn', 'session-delete-btn', 'session-group-toggle'];
 const HEADER_CONTROLS = ['category-toggle', 'category-rename-btn', 'category-delete-btn'];
 const SECTION_SELECTOR = '.attention-section, .stopped-section, .matches-section';
 
@@ -313,6 +314,7 @@ const ICON = {
   at: '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path></svg>',
   check:
     '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"></polyline></svg>',
+  stop: '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>',
   play: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
   trash:
     '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
@@ -861,6 +863,18 @@ export class SessionListView {
     const reviveHtml = session.revivable
       ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedId}">${ICON.play}</button>`
       : '';
+    // Stop parks a live session to resume later, in the slot Play takes once it is stopped.
+    // Not for a fork (it could not come back) or a shell that already exited.
+    // project/stop-sessions.md
+    const stoppable = session.attachable && session.status !== 'terminated' && !session.isFork;
+    const started = (this.childrenOf.get(session.id) ?? []).filter(
+      (c) => c.attachable && c.status !== 'terminated' && !c.isFork
+    ).length;
+    const stopTitle =
+      started > 0 ? `Stop session and its ${started} started session${started === 1 ? '' : 's'}` : 'Stop session (resume later)';
+    const stopHtml = stoppable
+      ? `<button class="session-stop-btn" title="${stopTitle}" aria-label="${escapeAttr(`${stopTitle}: ${session.name}`)}" data-session-id="${escapedId}">${ICON.stop}</button>`
+      : '';
     const deleteHtml = `<button class="session-delete-btn" title="Delete session" data-session-id="${escapedId}">${ICON.trash}</button>`;
 
     li.innerHTML = `
@@ -870,7 +884,7 @@ export class SessionListView {
         <span class="session-name">${escapeHtml(session.name)}</span>
         ${context}${warning}${chip}${trackChip}${tally}
         ${this.accountDot(session)}
-        <span class="session-actions">${copyHtml}${reviveHtml}${deleteHtml}</span>
+        <span class="session-actions">${copyHtml}${stopHtml}${reviveHtml}${deleteHtml}</span>
       </div>
       ${isActive ? this.detailLine(session, isChild) : ''}
     `;
@@ -911,6 +925,10 @@ export class SessionListView {
       e.stopPropagation();
       const btn = e.currentTarget as HTMLElement;
       void this.copyAddress(session.id, btn.dataset.copy ?? '');
+    });
+    li.querySelector('.session-stop-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.host.stopSession(session.id);
     });
     li.querySelector('.session-revive-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();

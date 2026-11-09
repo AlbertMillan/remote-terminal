@@ -106,6 +106,27 @@ export function detachFromSession(connection: ClientConnection): void {
   logger.debug({ clientId: connection.id, sessionId }, 'Client detached from session');
 }
 
+/** How many browsers other than `except` are attached to any of `sessionIds`. */
+export function viewersOf(sessionIds: string[], except: ClientConnection): number {
+  const ids = new Set(sessionIds);
+  let n = 0;
+  for (const conn of connections.values()) {
+    if (conn !== except && conn.attachedSession && ids.has(conn.attachedSession)) n++;
+  }
+  return n;
+}
+
+/**
+ * Detach every browser from `sessionIds` before they are stopped, so none holds a listener
+ * on a dead PTY or a `connectedClients` entry; each learns from the `session.updated` row.
+ */
+export function detachViewers(sessionIds: string[]): void {
+  const ids = new Set(sessionIds);
+  for (const conn of connections.values()) {
+    if (conn.attachedSession && ids.has(conn.attachedSession)) detachFromSession(conn);
+  }
+}
+
 export function broadcastSessionUpdate(sessionId: string, event: 'terminated' | 'deleted'): void {
   const messageType = event === 'terminated' ? 'session.terminated' : 'session.deleted';
 

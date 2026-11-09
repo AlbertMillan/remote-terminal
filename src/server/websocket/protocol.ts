@@ -22,6 +22,7 @@ export const CLIENT_MESSAGE_TYPES = [
   'session.fork',
   'session.open',
   'session.revive',
+  'session.stop',
   'session.keep',
   'terminal.data',
   'terminal.resize',
@@ -56,6 +57,7 @@ export const SERVER_MESSAGE_TYPES = [
   'session.list',
   'session.forked',
   'session.kept',
+  'session.stopped',
   'session.claudeNames',
   'session.accountWarnings',
   'session.loginEnded',
@@ -245,6 +247,18 @@ export interface SessionRevivePayload {
   rows?: number;
 }
 
+/** Stop a running session so it can be resumed later (project/stop-sessions.md). */
+export interface SessionStopPayload {
+  sessionId: string;
+  /** Stop even though another browser is viewing one of the sessions. */
+  force?: boolean;
+}
+
+/** The requester's answer to session.stop: every id stopped, children first. */
+export interface SessionStoppedPayload {
+  sessionIds: string[];
+}
+
 export interface SessionKeepPayload {
   sessionId: string;
 }
@@ -422,6 +436,8 @@ export interface SessionLoginEndedPayload {
 /** `session.error`; `refusal` when a launch was refused by preflight (accounts.ts). */
 export interface SessionErrorPayload {
   message: string;
+  /** 'viewers': session.stop refused because another browser is viewing (resend with force). */
+  code?: string;
   refusal?: PreflightRefusal;
 }
 

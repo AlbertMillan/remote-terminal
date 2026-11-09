@@ -115,6 +115,13 @@ data class SessionOpenPayload(
 @Serializable
 data class SessionRevivePayload(val sessionId: String, val cols: Int? = null, val rows: Int? = null)
 
+/** Stop a running session to resume later; force: stop despite another viewer. */
+@Serializable
+data class SessionStopPayload(val sessionId: String, val force: Boolean? = null)
+
+@Serializable
+data class SessionStoppedPayload(val sessionIds: List<String>)
+
 @Serializable
 data class TerminalDataPayload(val sessionId: String, val data: String)
 
@@ -161,7 +168,7 @@ data class MessagePayload(val message: String, val code: String? = null)
 
 /** `refusal` is the account preflight's (accounts.ts); the app shows only its message. */
 @Serializable
-data class SessionErrorPayload(val message: String, val refusal: JsonElement? = null)
+data class SessionErrorPayload(val message: String, val refusal: JsonElement? = null, val code: String? = null)
 
 @Serializable
 data class SessionPayload(val session: SessionInfo, val scrollback: String? = null)
@@ -236,6 +243,7 @@ object ClientType {
     const val SESSION_FORK = "session.fork"
     const val SESSION_OPEN = "session.open"
     const val SESSION_REVIVE = "session.revive"
+    const val SESSION_STOP = "session.stop"
     const val SESSION_KEEP = "session.keep"
     const val TERMINAL_DATA = "terminal.data"
     const val TERMINAL_RESIZE = "terminal.resize"
@@ -268,6 +276,7 @@ object ServerType {
     const val SESSION_LIST = "session.list"
     const val SESSION_FORKED = "session.forked"
     const val SESSION_KEPT = "session.kept"
+    const val SESSION_STOPPED = "session.stopped"
     const val SESSION_CLAUDE_NAMES = "session.claudeNames"
     const val SESSION_ACCOUNT_WARNINGS = "session.accountWarnings"
     const val SESSION_LOGIN_ENDED = "session.loginEnded"
@@ -321,6 +330,7 @@ object Protocol {
         ClientType.SESSION_FORK to s<SessionIdPayload>(),
         ClientType.SESSION_OPEN to s<SessionOpenPayload>(),
         ClientType.SESSION_REVIVE to s<SessionRevivePayload>(),
+        ClientType.SESSION_STOP to s<SessionStopPayload>(),
         ClientType.SESSION_KEEP to s<SessionIdPayload>(),
         ClientType.TERMINAL_DATA to s<TerminalDataPayload>(),
         ClientType.TERMINAL_RESIZE to s<TerminalResizePayload>(),
@@ -354,6 +364,7 @@ object Protocol {
         ServerType.SESSION_LIST to s<SessionListPayload>(),
         ServerType.SESSION_FORKED to s<SessionPayload>(),
         ServerType.SESSION_KEPT to s<SessionIdPayload>(),
+        ServerType.SESSION_STOPPED to s<SessionStoppedPayload>(),
         ServerType.SESSION_CLAUDE_NAMES to s<ClaudeNamesPayload>(),
         ServerType.SESSION_ACCOUNT_WARNINGS to s<AccountWarningsPayload>(),
         ServerType.SESSION_LOGIN_ENDED to s<ExitPayload>(),

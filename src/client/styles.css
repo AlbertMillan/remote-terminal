@@ -842,6 +842,7 @@ body {
 }
 
 .session-copy-btn,
+.session-stop-btn,
 .session-revive-btn,
 .session-delete-btn {
   width: 22px;
@@ -859,6 +860,7 @@ body {
 }
 
 .session-copy-btn:hover,
+.session-stop-btn:hover,
 .session-revive-btn:hover {
   background: var(--border-subtle);
   color: var(--accent);
@@ -1104,6 +1106,41 @@ body {
 
 #terminal-container .xterm {
   height: 100%;
+}
+
+/* A stopped session keeps its last output on screen under this, until it is resumed or
+   another session opens (the attach empties the container). project/stop-sessions.md */
+.session-stopped-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - 32px);
+  padding: 10px 12px 10px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.session-stopped-prompt p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-stopped-prompt .btn-primary {
+  flex-shrink: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+  border-radius: 7px;
 }
 
 /* Welcome Screen */

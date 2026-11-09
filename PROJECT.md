@@ -20,6 +20,8 @@ status: active
 - [x] `f-shu9vw` Windows auto-start via start-server.bat and the hidden VBS launcher
 - [x] `f-2wq7bd` P1 Revive stale sessions from the sidebar — respawn the PTY in place and resume the conversation → project/revive-stale-sessions.md
 - [x] `f-t188v6` P2 Restart and Build & restart from Settings — detached restart-server.vbs, build gate, same-origin + Tailscale check, reload on a new boot id
+- [x] `f-jobirk` P2 Stop a session on demand — park it idle (no PTY) to resume later; stops its started sessions too → project/stop-sessions.md
+- [ ] `f-k4w9zd` P2 Drop any file into a session — web drop/paste uploads any type (20 MB), keeps its name under <dataDir>/uploads, pastes every path → project/file-uploads.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
@@ -125,3 +127,4 @@ status: active
 - [x] `f-cr85qn` P1 Push notifications — FCM like the Claude app: device tokens, FCM HTTP v1 sender, no push while in the foreground, tapping opens the session or job; off when unconfigured → project/android-app.md
 - [x] `f-h5txr3` P2 Projects and job gates — board, jobs, answering design/review/merge gates → project/android-app.md
 - [x] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md
+- [ ] `f-q2m7vx` P2 Attach and share any file — pinned Attach key (Photo / File menu), share target for any file(s), Paste takes any URI → project/file-uploads.md

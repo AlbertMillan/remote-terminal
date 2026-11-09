@@ -26,6 +26,7 @@ import {
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
+import { StopRequests, currentAfterRevive, isLive } from './session-stop.js';
 import { SessionListView, isFilterShortcut, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
@@ -92,6 +93,7 @@ class SessionManager {
     getCurrentSessionId: () => this.currentSessionId,
     attachToSession: (sessionId) => this.attachToSession(sessionId),
     reviveSession: (sessionId) => this.reviveSession(sessionId),
+    stopSession: (sessionId) => this.stopSession(sessionId),
     deleteSession: (sessionId) => this.deleteSession(sessionId),
     moveSession: (sessionId, categoryId) => this.moveSession(sessionId, categoryId),
     toggleCategory: (categoryId, collapsed) => this.toggleCategory(categoryId, collapsed),
@@ -121,6 +123,8 @@ class SessionManager {
   });
   /** How to send a launch (create, open, revive) again, by its message id, until it is answered. */
   private launchRetries = new Map<string, () => void>();
+  /** session.stop requests in flight: a second click waits, a viewers refusal is retried. */
+  private stopRequests = new StopRequests();
   /** Launches waiting on a Log in session, retried once it exits (`session.loginEnded`). */
   private loginRetries = new LoginRetries();
 
@@ -573,6 +577,9 @@ class SessionManager {
         this.currentSessionId = null;
       }
       this.attachingSessionId = null;
+      // No answer is coming for a stop sent before the drop; keeping it would make the
+      // next click on that session's Stop wait forever.
+      this.stopRequests.clear();
       // Job states from before the drop go stale silently -- no further push is
       // coming -- so show nothing until the server re-seeds us after auth.
       this.jobOverlay.clear();
@@ -703,6 +710,9 @@ class SessionManager {
       case 'session.forked':
         this.handleSessionForked(message.payload);
         break;
+      case 'session.stopped':
+        this.stopRequests.answered(message.id);
+        break;
       case 'session.kept':
         this.handleSessionKept(message.payload);
         break;
@@ -776,6 +786,12 @@ class SessionManager {
   private handleSessionError(payload: ErrorPayload, messageId?: string): void {
     console.error('Session error:', payload.message);
     const retry = messageId ? this.launchRetries.get(messageId) : undefined;
+    // Another browser is viewing a session this stop would take down: ask, then insist.
+    const stopping = this.stopRequests.refused(messageId, payload.code);
+    if (stopping) {
+      if (confirm(`${payload.message}. Stop it anyway?`)) this.stopSession(stopping, true);
+      return;
+    }
     if (messageId) {
       this.launchRetries.delete(messageId);
       this.loginRetries.failed(messageId);
@@ -847,6 +863,32 @@ class SessionManager {
     this.sessions.set(payload.session.id, payload.session);
     this.renderSessionList();
     this.syncPip();
+    // Stopped under us (here or in another browser): the server already detached this
+    // connection. Keep the last output on screen and offer to resume it.
+    if (payload.session.id === this.currentSessionId && !payload.session.attachable) {
+      this.showStoppedPrompt(payload.session);
+    }
+  }
+
+  /** Over the stopped session's last output: its name and a Resume button. */
+  private showStoppedPrompt(session: SessionInfo): void {
+    const container = document.getElementById('terminal-container');
+    if (!container) return;
+    container.querySelector('.session-stopped-prompt')?.remove();
+    const prompt = document.createElement('div');
+    prompt.className = 'session-stopped-prompt';
+    const text = document.createElement('p');
+    text.textContent = `${session.name} was stopped.`;
+    prompt.appendChild(text);
+    if (session.revivable) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn-primary';
+      button.textContent = session.claudeSessionId ? 'Resume conversation' : 'Restart shell';
+      button.addEventListener('click', () => this.reviveSession(session.id));
+      prompt.appendChild(button);
+    }
+    container.appendChild(prompt);
   }
 
   private handleSessionAttached(payload: { session: SessionInfo; scrollback: string }): void {
@@ -1354,9 +1396,9 @@ class SessionManager {
     if (this.currentSessionId === sessionId) return;
     if (this.attachingSessionId === sessionId) return;
 
-    // Detach from current session
+    // Detach from current session (a stopped one was detached by the server already)
     if (this.currentSessionId) {
-      this.send('session.detach', { sessionId: this.currentSessionId });
+      if (this.currentIsLive()) this.send('session.detach', { sessionId: this.currentSessionId });
       if (this.terminalMgr) {
         this.terminalMgr.dispose();
       }
@@ -1371,9 +1413,22 @@ class SessionManager {
    * id, so handleSessionCreated updates the existing row and attaches -- no new row appears.
    */
   reviveSession(sessionId: string): void {
+    // Forgets a stopped session still on screen, or the attach that follows early-returns.
+    this.currentSessionId = currentAfterRevive(this.currentSessionId, sessionId);
     const dims = this.terminalMgr.getDimensions();
     const id = this.send('session.revive', { sessionId, cols: dims.cols, rows: dims.rows });
     this.launchRetries.set(id, () => this.reviveSession(sessionId));
+  }
+
+  /**
+   * Stop a session (and the sessions it started) to resume later. The server refuses while
+   * another browser views one of them; handleSessionError confirms and calls this with force.
+   */
+  stopSession(sessionId: string, force = false): void {
+    // A second click before the answer: the row only re-renders once the shell has exited.
+    if (this.stopRequests.inFlight(sessionId)) return;
+    const id = this.send('session.stop', { sessionId, ...(force ? { force: true } : {}) });
+    this.stopRequests.sent(id, sessionId);
   }
 
   deleteSession(sessionId: string): void {
@@ -1390,14 +1445,19 @@ class SessionManager {
     this.send('session.rename', { sessionId, name });
   }
 
+  /** The session on screen still has a shell (a stopped one stays on screen without one). */
+  private currentIsLive(): boolean {
+    return !!this.currentSessionId && isLive(this.sessions.get(this.currentSessionId));
+  }
+
   sendTerminalData(data: string): void {
-    if (this.currentSessionId) {
+    if (this.currentIsLive()) {
       this.send('terminal.data', { sessionId: this.currentSessionId, data });
     }
   }
 
   sendTerminalResize(cols: number, rows: number): void {
-    if (this.currentSessionId) {
+    if (this.currentIsLive()) {
       this.send('terminal.resize', { sessionId: this.currentSessionId, cols, rows });
     }
   }

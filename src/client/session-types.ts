@@ -213,6 +213,8 @@ export interface ErrorPayload {
   message: string;
   /** A launch refused by the account preflight: offer Log in / Clean up (account-refusal-modal.ts). */
   refusal?: AccountRefusal;
+  /** 'viewers': session.stop refused while another browser views it; confirm, resend with force. */
+  code?: string;
 }
 
 export interface NotificationPreferencesPayload {
@@ -265,6 +267,7 @@ export type ServerMessage =
   | { type: 'session.reordered'; id?: string; payload: SessionReorderedPayload }
   | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }
   | { type: 'session.kept'; id?: string; payload: { sessionId: string } }
+  | { type: 'session.stopped'; id?: string; payload: { sessionIds: string[] } }
   | { type: 'session.error'; id?: string; payload: ErrorPayload }
   | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
   | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }

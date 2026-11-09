@@ -78,6 +78,13 @@ class SessionManager {
 
     pty.onExit(({ exitCode }) => {
       logger.info({ id, exitCode }, 'Session PTY exited');
+      // Only the id's live shell may act on it. A shell killed by terminate or stop is
+      // already out of activeSessions, and one that reports its exit late (past
+      // PTY_EXIT_WAIT_MS) may have been revived in place meanwhile: acting on the id then
+      // would revoke the new shell's token, mark its row terminated and close its viewers.
+      // Every caller registers the session in the same tick as this wiring, so a genuine
+      // exit always finds its own PTY.
+      if (this.activeSessions.get(id)?.pty !== pty) return;
       this.handleSessionExit(id, exitCode);
     });
   }
@@ -285,33 +292,7 @@ class SessionManager {
       persistScrollback(id, scrollback);
     }
 
-    // Kill tmux session if exists
-    if (session.tmuxSession) {
-      await killTmuxSession(session.tmuxSession);
-    }
-
-    // Kill PTY. kill() only signals it; Land and Delete track tear the
-    // session's folder down once this resolves, and on Windows a shell still
-    // exiting holds its cwd, so wait (bounded) for the shell's exit before
-    // returning. That is the SHELL only: node-pty kills the rest of the
-    // console's processes through a helper that can fail (`AttachConsole
-    // failed` with no console attached), so a child such as `claude` may
-    // outlive it. removeWorktree's busy-folder retry is the backstop.
-    const exited = session.status === 'terminated' ? Promise.resolve() : ptyExit(session.pty, PTY_EXIT_WAIT_MS);
-    killPty(session.pty);
-    revokeSessionToken(id);
-
-    // Clean up listeners and buffers
-    this.dataListeners.delete(id);
-    this.exitListeners.delete(id);
-    this.scrollbackBuffers.delete(id);
-
-    // Clean up debounce timer
-    const debounceTimer = this.touchDebounceTimers.get(id);
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      this.touchDebounceTimers.delete(id);
-    }
+    const { exited } = await this.teardownPty(id, session);
 
     // Update database
     updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
@@ -330,13 +311,113 @@ class SessionManager {
       }
     }
 
-    // Remove from active sessions
-    this.activeSessions.delete(id);
-
-    // Only after the delete: the exit handler finds no session then, so it
-    // cannot mark it terminated and log it a second time.
     await exited;
 
+    return true;
+  }
+
+  /**
+   * The shell half of terminate and stop: out of activeSessions, tmux and PTY killed, token
+   * revoked, listeners, buffer and debounce dropped. Resolves once the kill is sent, with the
+   * shell's exit wrapped (a bare promise would be flattened and awaited here), so the caller
+   * writes its row first and then awaits it.
+   *
+   * activeSessions loses the id BEFORE the kill: the exit then finds no session of its own
+   * (onExit checks the PTY is the live one), so it never marks the row 'terminated' or logs
+   * it a second time. The exit is awaited at all because Land and Delete track tear the
+   * folder down next, and on Windows a still-exiting shell holds its cwd. That is the SHELL
+   * only: node-pty kills the rest of the console through a helper that can fail
+   * (`AttachConsole failed`), so a child such as `claude` may outlive it; removeWorktree's
+   * busy-folder retry is the backstop.
+   */
+  private async teardownPty(id: string, session: ActiveSession): Promise<{ exited: Promise<void> }> {
+    this.activeSessions.delete(id);
+    if (session.tmuxSession) await killTmuxSession(session.tmuxSession);
+
+    const exited = session.status === 'terminated' ? Promise.resolve() : ptyExit(session.pty, PTY_EXIT_WAIT_MS);
+    killPty(session.pty);
+    revokeSessionToken(id);
+
+    this.dataListeners.delete(id);
+    this.exitListeners.delete(id);
+    this.scrollbackBuffers.delete(id);
+    const debounceTimer = this.touchDebounceTimers.get(id);
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      this.touchDebounceTimers.delete(id);
+    }
+    return { exited };
+  }
+
+  /**
+   * Stop a running session so it can be revived later: the shell (and its `claude`) is
+   * killed, the row is parked `idle` with its scrollback persisted, exactly the state
+   * shutdown() leaves every session in. reviveSession() brings it back unchanged.
+   * The sessions it started (`spawned_by`) are stopped first; running forks among them and
+   * exited ones are left alone. A fork itself is refused: its transcript is removed on
+   * restart, so it could not come back. Returns the ids stopped, parent last.
+   *
+   * `targets` is the stopTargets() list the caller already checked (its viewers), so a child
+   * started in between is not stopped unchecked. `beforeKill(id)` runs for each session once
+   * nothing can fail before its kill: the handler detaches that session's browsers there, so
+   * a stop that fails part-way never leaves a running session with no one attached.
+   * project/stop-sessions.md
+   */
+  async stopSession(
+    id: string,
+    options: { targets?: string[]; beforeKill?: (id: string) => void } = {}
+  ): Promise<string[]> {
+    const stopped: string[] = [];
+    for (const sid of options.targets ?? this.stopTargets(id)) {
+      if (await this.parkSession(sid, options.beforeKill)) stopped.push(sid);
+    }
+    return stopped;
+  }
+
+  /**
+   * What stopSession(id) would stop, children first and `id` last; throws why it would
+   * refuse. The handler asks first, to find browsers viewing any of them.
+   */
+  stopTargets(id: string): string[] {
+    const session = this.activeSessions.get(id);
+    if (!session) throw new Error('Session is not running');
+    if (session.status === 'terminated') throw new Error('Session has already exited');
+    if (getSessionMetadata(id)?.isFork) {
+      throw new Error('Forked sessions cannot be stopped; they could not be resumed');
+    }
+    const running = (sid: string) => {
+      const s = this.activeSessions.get(sid);
+      return !!s && s.status !== 'terminated';
+    };
+    const children = getAllSessionsFromDb()
+      .filter((s) => s.spawnedBy === id && !s.isFork && running(s.id))
+      .map((s) => s.id);
+    return [...children, id];
+  }
+
+  /**
+   * One session's half of stopSession(). False when it was no longer running (a second
+   * click, or it exited meanwhile): nothing is done and it is not reported as stopped.
+   */
+  private async parkSession(id: string, beforeKill?: (id: string) => void): Promise<boolean> {
+    const session = this.activeSessions.get(id);
+    if (!session || session.status === 'terminated') return false;
+    logger.info({ id, name: session.name }, 'Stopping session');
+    const metadata = getSessionMetadata(id);
+
+    // On every platform, as shutdown() does: revive seeds the new shell from it. First, so a
+    // failed write leaves the session running and its browsers still attached.
+    const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
+    if (scrollback.length > 0) persistScrollback(id, scrollback);
+
+    beforeKill?.(id);
+    const { exited } = await this.teardownPty(id, session);
+
+    updateSession(id, { status: 'idle', lastAccessedAt: new Date().toISOString() });
+    logSessionEvent(id, 'stopped');
+    this.maybeLogSession(metadata);
+
+    await exited;
     return true;
   }
 

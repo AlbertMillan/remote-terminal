@@ -46,6 +46,31 @@ was the alternative (reusing `session.open`) and it leaves a dead row behind eve
   refresh/retry elsewhere in the app. It reveals on row hover exactly like the Delete button
   beside it. The row carries `cursor: not-allowed`, which the button overrides for itself.
 
+## Stopping a session on demand
+
+The sidebar's Stop button (filled square, in the slot Play takes once stopped) makes a row
+stale on purpose: `stopSession()` persists the scrollback on every platform, kills the shell
+and parks the row `idle`, the state `shutdown()` leaves it in, so revive needs nothing new.
+Spec: `project/stop-sessions.md`.
+
+- Terminate and stop share `teardownPty()`, which drops the session from `activeSessions`
+  **before** the kill. A PTY's exit acts only while it is still its id's live PTY: a shell
+  reporting its exit past `PTY_EXIT_WAIT_MS` may have been revived in place meanwhile, and
+  acting on the id would revoke the new token and mark the new row `terminated`.
+- The sessions it started (`spawned_by`) stop first; a fork is refused (it could not come
+  back). The handler passes the `stopTargets()` list it checked for viewers to `stopSession()`.
+- Each session's browsers are detached in `beforeKill`, after its scrollback is saved: a
+  stop failing part-way leaves the sessions it did not reach running and attached. The
+  handler broadcasts every target in a `finally`, stopped or not.
+- A stopped row still counts toward `maxSessions` (it is `idle`). A `stopped` status that
+  frees the slot would need `assertSessionSlot()` on revive, as `terminated` rows get.
+- The handler refuses with `code: 'viewers'` while another browser is attached; the client
+  confirms and resends with `force`. It detaches every viewer, then broadcasts each row:
+  a browser whose current session goes non-attachable keeps its output on screen with a
+  Resume prompt and sends no input or resize to it.
+- On Windows the replayed scrollback is sent, but cmd.exe/ConPTY opens with a clear-screen
+  that wipes it from view; revive after a restart behaves the same.
+
 Two review findings are worth not re-introducing:
 
 - A rejected `session.attach` must clear the client's `attachingSessionId` (`handleSessionError`).
