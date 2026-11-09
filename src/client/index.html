@@ -519,13 +519,16 @@
         <div class="settings-panel" role="tabpanel" id="settings-panel-server" aria-labelledby="settings-tab-server" hidden>
           <div class="settings-section">
             <div class="server-build-status">
-              <span id="server-build-state" class="server-build-state"></span>
-              <span id="server-build-detail" class="server-build-detail"></span>
+              <div id="server-build-state" class="server-build-state"></div>
+              <div id="server-build-summary" class="server-build-summary"></div>
+              <ul id="server-build-files" class="server-build-files" hidden></ul>
             </div>
             <div class="server-restart-actions">
               <button type="button" id="server-restart-btn" class="btn-secondary" data-build="false">Restart</button>
               <button type="button" id="server-build-restart-btn" class="btn-secondary" data-build="true">Build &amp; restart</button>
             </div>
+            <!-- Only when this server can't restart itself; it then replaces the note below. -->
+            <div id="server-build-manual" class="server-build-manual"></div>
             <div class="setting-description server-restart-note">
               Every open terminal closes, this one included; sessions revive from the sidebar.
             </div>

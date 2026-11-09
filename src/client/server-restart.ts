@@ -16,6 +16,8 @@ export interface BuildStatus {
   running: { sha: string; builtAt: string } | null;
   onDisk: { sha: string; builtAt: string } | null;
   reason: string | null;
+  /** Absent from a server older than the list. */
+  files?: string[] | null;
 }
 
 export interface ServerStatus {
@@ -164,55 +166,101 @@ export class ServerRestartControl {
 
 const BUILD_POLL_MS = 60_000;
 
+/** A line of text, with commit ids set in monospace. */
+export type BuildText = Array<string | { code: string }>;
+
 export interface BuildView {
   /** The running build is behind: the gear and the Server tab show an amber dot. */
   behind: boolean;
   /** The Settings gear's tooltip and accessible name. */
   gearLabel: string;
-  /** The Server tab's status line: a short state ("New commits on main.") … */
+  /** The Server tab's headline ("New commits on main"); empty shows no status at all. */
   state: string;
-  /** … and what to do about it, which may run to several lines. */
-  detail: string;
+  /** One plain line under it: how many files, and which build. */
+  summary: BuildText;
+  /** The changed build inputs, listed one per line under the summary. */
+  files: string[];
+  /** The step to take by hand when this server can't restart itself; else empty. */
+  manual: string;
   /** The button the state calls for, shown as the primary one. */
   lead: 'restart' | 'build' | null;
 }
+
+/** How many files the Server tab lists before "and N more". */
+export const BUILD_FILES_SHOWN = 5;
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** A build time in local time, short: "today 01:32", "yesterday 21:46", "Nov 7, 21:46". */
+export function formatBuiltAt(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(now) - day(at)) / 86_400_000);
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `yesterday ${time}`;
+  const month = at.toLocaleString('en', { month: 'short' });
+  return `${month} ${at.getDate()}${at.getFullYear() === now.getFullYear() ? '' : ` ${at.getFullYear()}`}, ${time}`;
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 /**
  * What the build indicator shows. Only `restart` and `rebuild` light the dot:
  * `unknown` (dev mode, an unstamped dist/) would otherwise sit lit forever.
  * When this server can't restart itself the dot still lights, and the Server tab
- * gives the step to take by hand.
+ * gives the step to take by hand. The highlighted button says which action to
+ * take, so no line repeats it.
  */
-export function buildView(status: ServerStatus | null): BuildView {
+export function buildView(status: ServerStatus | null, now: Date = new Date()): BuildView {
   const build = status?.build;
+  const stamp = (s: { sha: string; builtAt: string }): BuildText => [{ code: s.sha.slice(0, 7) }, `, ${formatBuiltAt(s.builtAt, now)}`];
   if (!status || !build || (build.state !== 'restart' && build.state !== 'rebuild')) {
+    const current = build?.state === 'current';
     return {
       behind: false,
       gearLabel: 'Settings',
-      state: build?.state === 'current' ? 'Up to date.' : '',
-      detail: build?.state === 'current' ? 'The running build is the latest.' : '',
+      state: current ? 'Up to date' : '',
+      summary: current && build.running ? ['Running the latest build (', ...stamp(build.running), ').'] : [],
+      files: [],
+      manual: '',
       lead: null,
     };
   }
   const rebuild = build.state === 'rebuild';
-  const lines = [build.reason || ''];
-  if (status.canRestart) {
-    lines.push(rebuild ? 'Build & restart picks them up.' : 'Restart loads it.');
+  const files = build.files ?? [];
+  let summary: BuildText;
+  if (rebuild) {
+    summary = build.onDisk
+      ? [`${plural(files.length, 'file')} changed since this build (`, ...stamp(build.onDisk), ').']
+      : [`${plural(files.length, 'file')} changed since this build.`];
   } else {
-    // Why the buttons are disabled is ServerRestartControl's status line, right below.
-    lines.push(
-      rebuild
-        ? 'By hand: run npm run build, then restart the server where it was started.'
-        : 'By hand: restart the server where it was started.'
-    );
+    summary =
+      build.onDisk && build.running
+        ? [
+            `Built ${formatBuiltAt(build.onDisk.builtAt, now)} (`,
+            { code: build.onDisk.sha.slice(0, 7) },
+            `); this server runs the build from ${formatBuiltAt(build.running.builtAt, now)}.`,
+          ]
+        : ['dist/ holds a newer build than this server runs.'];
   }
+  // An older server sends only its sentence: show that rather than nothing.
+  if (build.files === undefined && build.reason) summary = [build.reason];
   return {
     behind: true,
     gearLabel: rebuild
       ? 'Settings. New commits on main: Build & restart to load them.'
       : 'Settings. New build ready: Restart to load it.',
-    state: rebuild ? 'New commits on main.' : 'New build ready.',
-    detail: lines.filter(Boolean).join('\n'),
+    state: rebuild ? 'New commits on main' : 'New build ready',
+    summary,
+    files,
+    // Why the buttons are disabled is ServerRestartControl's status line, right below.
+    manual: status.canRestart
+      ? ''
+      : rebuild
+        ? 'By hand: run npm run build, then restart the server where it was started.'
+        : 'By hand: restart the server where it was started.',
     lead: status.canRestart ? (rebuild ? 'build' : 'restart') : null,
   };
 }
@@ -266,9 +314,45 @@ export class BuildIndicator {
     if (state) {
       state.textContent = view.state;
       state.classList.toggle('behind', view.behind);
+      state.classList.toggle('current', !view.behind && !!view.state);
     }
-    const detail = document.getElementById('server-build-detail');
-    if (detail) detail.textContent = view.detail;
+    const summary = document.getElementById('server-build-summary');
+    if (summary) {
+      summary.replaceChildren(
+        ...view.summary.map((part) => {
+          if (typeof part === 'string') return document.createTextNode(part);
+          const code = document.createElement('code');
+          code.textContent = part.code;
+          return code;
+        })
+      );
+    }
+    const files = document.getElementById('server-build-files');
+    if (files) {
+      const items = view.files.slice(0, BUILD_FILES_SHOWN).map((file) => {
+        const li = document.createElement('li');
+        li.title = file;
+        const cut = file.lastIndexOf('/') + 1;
+        if (cut > 0) {
+          const dir = document.createElement('span');
+          dir.className = 'server-build-dir';
+          dir.textContent = file.slice(0, cut);
+          li.append(dir);
+        }
+        li.append(file.slice(cut));
+        return li;
+      });
+      if (view.files.length > BUILD_FILES_SHOWN) {
+        const more = document.createElement('li');
+        more.className = 'server-build-more';
+        more.textContent = `and ${view.files.length - BUILD_FILES_SHOWN} more`;
+        items.push(more);
+      }
+      files.replaceChildren(...items);
+      files.hidden = items.length === 0;
+    }
+    const manual = document.getElementById('server-build-manual');
+    if (manual) manual.textContent = view.manual;
     for (const [id, lead] of [['server-restart-btn', 'restart'], ['server-build-restart-btn', 'build']] as const) {
       const button = document.getElementById(id);
       if (!button) continue;

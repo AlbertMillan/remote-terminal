@@ -17,7 +17,7 @@ import {
 } from '../src/server/server-restart.js';
 // @ts-expect-error — a plain .mjs build script, no types
 import { BUILD_INPUTS as SCRIPT_BUILD_INPUTS, buildInfo, workingTreeId } from '../scripts/write-build-info.mjs';
-import { buildView, waitForNewBoot, type BuildStatus, type ServerStatus } from '../src/client/server-restart.js';
+import { buildView, formatBuiltAt, waitForNewBoot, type BuildStatus, type BuildText, type ServerStatus } from '../src/client/server-restart.js';
 
 /**
  * Restart from the UI kills every terminal, so the route must refuse anything
@@ -228,6 +228,7 @@ describe('build state (server behind its build)', () => {
     const status = await createBuildStateChecker(repo, running).check();
     expect(status.state).toBe('restart');
     expect(status.reason).toMatch(/dist\/ holds .*Changed: src\/server\/app\.ts/);
+    expect(status.files).toEqual(['src/server/app.ts']);
   });
 
   it('stays current after a rebuild that changed no input: every Land rebuilds, a docs-only one too', async () => {
@@ -270,6 +271,7 @@ describe('build state (server behind its build)', () => {
     const status = await createBuildStateChecker(repo, running).check();
     expect(status.state).toBe('rebuild');
     expect(status.reason).toContain('src/server/app.ts');
+    expect(status.files).toEqual(['src/server/app.ts']);
   });
 
   it('stays current after a docs-only commit', async () => {
@@ -399,41 +401,75 @@ describe('isServerRoot', () => {
 });
 
 describe('the build indicator', () => {
-  const status = (state: BuildStatus['state'], canRestart = true): ServerStatus => ({
+  // Local times, so the "today"/"yesterday" wording doesn't depend on the machine's zone.
+  const NOW = new Date(2026, 10, 9, 15, 0);
+  const at = (day: number, h: number, m: number) => new Date(2026, 10, day, h, m).toISOString();
+  const onDisk = { sha: '38fb1d4bb7288a87', builtAt: at(9, 1, 32) };
+  const running = { sha: 'a7d314d000000000', builtAt: at(8, 21, 46) };
+  const FILES = ['src/client/settings-modal.ts', 'src/client/styles.css'];
+  const status = (state: BuildStatus['state'], canRestart = true, files: string[] | null = FILES): ServerStatus => ({
     bootId: 'b',
     canRestart,
     reason: canRestart ? null : 'Not running from dist/.',
-    build: { state, running: null, onDisk: null, reason: 'why' },
+    build: { state, running, onDisk, reason: 'why', files },
   });
+  const text = (parts: BuildText) => parts.map((p) => (typeof p === 'string' ? p : p.code)).join('');
 
   it('lights only for restart and rebuild', () => {
-    expect(buildView(status('current')).behind).toBe(false);
-    expect(buildView(status('unknown')).behind).toBe(false);
-    expect(buildView(null).behind).toBe(false);
-    expect(buildView({ bootId: 'b', canRestart: true, reason: null }).behind).toBe(false); // an older server
-    expect(buildView(status('restart'))).toMatchObject({ behind: true, state: 'New build ready.', lead: 'restart' });
-    expect(buildView(status('rebuild'))).toMatchObject({ behind: true, state: 'New commits on main.', lead: 'build' });
+    expect(buildView(status('current'), NOW).behind).toBe(false);
+    expect(buildView(status('unknown'), NOW).behind).toBe(false);
+    expect(buildView(null, NOW).behind).toBe(false);
+    expect(buildView({ bootId: 'b', canRestart: true, reason: null }, NOW).behind).toBe(false); // an older server
+    expect(buildView(status('restart'), NOW)).toMatchObject({ behind: true, state: 'New build ready', lead: 'restart' });
+    expect(buildView(status('rebuild'), NOW)).toMatchObject({ behind: true, state: 'New commits on main', lead: 'build' });
   });
 
   it('says up to date only when the server says so, not for an unknown build', () => {
-    expect(buildView(status('current')).state).toBe('Up to date.');
-    expect(buildView(status('unknown')).state).toBe('');
-    expect(buildView(null).gearLabel).toBe('Settings');
+    const current = buildView(status('current'), NOW);
+    expect(current.state).toBe('Up to date');
+    expect(text(current.summary)).toBe('Running the latest build (a7d314d, yesterday 21:46).');
+    expect(buildView(status('unknown'), NOW)).toMatchObject({ state: '', summary: [], files: [] });
+    expect(buildView(null, NOW).gearLabel).toBe('Settings');
   });
 
-  it('names the action in the gear label and the reason in the detail', () => {
-    const view = buildView(status('rebuild'));
+  it('counts and lists the changed files, with the build as a short local time', () => {
+    const view = buildView(status('rebuild'), NOW);
     expect(view.gearLabel).toMatch(/Build & restart/);
-    expect(view.detail).toBe('why\nBuild & restart picks them up.');
+    expect(text(view.summary)).toBe('2 files changed since this build (38fb1d4, today 01:32).');
+    expect(view.summary).toContainEqual({ code: '38fb1d4' });
+    expect(view.files).toEqual(FILES);
+    expect(view.manual).toBe('');
+    expect(text(buildView(status('rebuild', true, ['src/a.ts']), NOW).summary)).toMatch(/^1 file changed/);
+  });
+
+  it('names both builds for a restart', () => {
+    expect(text(buildView(status('restart'), NOW).summary)).toBe(
+      'Built today 01:32 (38fb1d4); this server runs the build from yesterday 21:46.'
+    );
+    // git couldn't say which files differ: no list, still a restart.
+    expect(buildView(status('restart', true, null), NOW).files).toEqual([]);
+  });
+
+  it("shows an older server's sentence, which has no file list", () => {
+    const older: ServerStatus = { bootId: 'b', canRestart: true, reason: null, build: { state: 'rebuild', running, onDisk, reason: 'why' } };
+    expect(buildView(older, NOW)).toMatchObject({ summary: ['why'], files: [] });
   });
 
   it('gives the manual step, and leads with no button, when this server cannot restart itself', () => {
-    const view = buildView(status('rebuild', false));
+    const view = buildView(status('rebuild', false), NOW);
     expect(view.behind).toBe(true);
     expect(view.lead).toBeNull();
-    expect(view.detail).toMatch(/By hand: run npm run build/);
+    expect(view.manual).toMatch(/^By hand: run npm run build/);
     // Why the buttons are disabled is the restart control's own line, not repeated here.
-    expect(view.detail).not.toContain('Not running from dist/.');
+    expect(view.manual).not.toContain('Not running from dist/.');
+  });
+
+  it('formats build times as today, yesterday, or a short date', () => {
+    expect(formatBuiltAt(at(9, 1, 32), NOW)).toBe('today 01:32');
+    expect(formatBuiltAt(at(8, 21, 46), NOW)).toBe('yesterday 21:46');
+    expect(formatBuiltAt(at(2, 9, 5), NOW)).toBe('Nov 2, 09:05');
+    expect(formatBuiltAt(new Date(2025, 11, 31, 23, 0).toISOString(), NOW)).toBe('Dec 31 2025, 23:00');
+    expect(formatBuiltAt('not a date', NOW)).toBe('not a date');
   });
 });
 

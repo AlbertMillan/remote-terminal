@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { SettingsModal, type SettingsModalHost } from '../src/client/settings-modal.js';
+import { BuildIndicator } from '../src/client/server-restart.js';
 
 /**
  * The Settings modal's tabs, against the real markup in index.html: which tab the gear opens
@@ -173,6 +174,26 @@ describe('Settings tabs', () => {
     const warning = el('setting-browser-notifications-warning');
     expect(warning.classList.contains('hidden')).toBe(false);
     expect(warning.textContent).toMatch(/^Blocked by this browser/);
+  });
+
+  it('lists the changed files one per line, the folder apart, capped with "and N more"', async () => {
+    const files = ['src/a/one.ts', 'src/a/two.ts', 'src/b/three.ts', 'src/b/four.ts', 'src/c/five.ts', 'package.json', 'src/c/six.ts'];
+    const stamp = { sha: '38fb1d4bb7288a87', builtAt: new Date().toISOString() };
+    const indicator = new BuildIndicator(async () => ({
+      bootId: 'b',
+      canRestart: false,
+      reason: 'dev mode',
+      build: { state: 'rebuild', running: stamp, onDisk: stamp, reason: 'why', files },
+    }));
+    await indicator.refresh();
+    expect(el('server-build-state').textContent).toBe('New commits on main');
+    expect(el('server-build-summary').textContent).toMatch(/^7 files changed since this build \(38fb1d4, today \d\d:\d\d\)\.$/);
+    expect(el('server-build-summary').querySelector('code')?.textContent).toBe('38fb1d4');
+    const items = [...el('server-build-files').querySelectorAll('li')].map((li) => li.textContent);
+    expect(items).toEqual(['src/a/one.ts', 'src/a/two.ts', 'src/b/three.ts', 'src/b/four.ts', 'src/c/five.ts', 'and 2 more']);
+    expect(el('server-build-files').querySelector('.server-build-dir')?.textContent).toBe('src/a/');
+    expect(el('server-build-files').hidden).toBe(false);
+    expect(el('server-build-manual').textContent).toMatch(/^By hand: run npm run build/);
   });
 
   it('names the tabs whose unsaved changes a restart would discard', async () => {

@@ -107,6 +107,13 @@ export interface BuildStatus {
   running: BuildStamp | null;
   onDisk: BuildStamp | null;
   reason: string | null;
+  /**
+   * The build inputs behind the state, for the Settings list: committed since dist/ was
+   * built (`rebuild`), or differing between the running and on-disk builds (`restart`).
+   * Empty when there are none, null when git couldn't say. `reason` says the same in a
+   * sentence, capped at five files.
+   */
+  files: string[] | null;
 }
 
 /**
@@ -227,13 +234,14 @@ export function createBuildStateChecker(
           running,
           onDisk,
           reason: opts.unknownReason ?? 'This server started from a build with no stamp.',
+          files: null,
         };
       }
-      if (!onDisk) return { state: 'unknown', running, onDisk, reason: 'dist/ has no build stamp.' };
+      if (!onDisk) return { state: 'unknown', running, onDisk, reason: 'dist/ has no build stamp.', files: null };
 
       const behind = await diff(builtFrom(onDisk), 'HEAD');
       if (behind === null) {
-        return { state: 'unknown', running, onDisk, reason: `git could not compare ${onDisk.sha.slice(0, 8)} with HEAD.` };
+        return { state: 'unknown', running, onDisk, reason: `git could not compare ${onDisk.sha.slice(0, 8)} with HEAD.`, files: null };
       }
       // Rebuild wins: a plain restart would only load a build that is already stale.
       if (behind.length > 0) {
@@ -242,11 +250,12 @@ export function createBuildStateChecker(
           running,
           onDisk,
           reason: `Committed since dist/ was built (${describeStamp(onDisk)}): ${listFiles(behind)}.`,
+          files: behind,
         };
       }
 
       if (onDisk.sha === running.sha && onDisk.builtAt === running.builtAt) {
-        return { state: 'current', running, onDisk, reason: null };
+        return { state: 'current', running, onDisk, reason: null, files: [] };
       }
       // A newer build is only worth a restart — which ends every terminal —
       // when it compiled different inputs. Every Land rebuilds, a docs-only
@@ -254,7 +263,7 @@ export function createBuildStateChecker(
       // build that does differ is the worse mistake.
       const newer = await diff(builtFrom(running), builtFrom(onDisk));
       if (newer !== null && newer.length === 0) {
-        return { state: 'current', running, onDisk, reason: null };
+        return { state: 'current', running, onDisk, reason: null, files: [] };
       }
       return {
         state: 'restart',
@@ -263,6 +272,7 @@ export function createBuildStateChecker(
         reason:
           `dist/ holds ${describeStamp(onDisk)}; this server runs ${describeStamp(running)}` +
           (newer ? `. Changed: ${listFiles(newer)}.` : '.'),
+        files: newer,
       };
     },
   };

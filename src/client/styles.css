@@ -2440,22 +2440,89 @@ body {
   display: none;
 }
 
-/* The state on its own line, the detail below it. */
+/* Headline with a dot (amber behind, green up to date), one plain line, then the files. */
 .server-build-state {
-  display: block;
-}
-
-.server-build-state.behind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--warning);
+  color: var(--text-primary);
 }
 
-/* pre-line here only: the detail's own newlines are its lines (reason, then the action).
-   On the container it would also render the markup's line breaks, as a blank first line. */
-.server-build-detail {
-  display: block;
+.server-build-state::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.server-build-state.behind { color: var(--warning); }
+.server-build-state.current { color: var(--success); }
+
+.server-build-summary {
+  margin-top: 4px;
   color: var(--text-secondary);
-  white-space: pre-line;
+}
+
+.server-build-status code,
+.server-build-manual code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* One file per line, never wrapped mid-path: a long one is cut with an ellipsis (its
+   full path is the tooltip). The folder is dimmed so the file names read first. */
+.server-build-files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.server-build-files[hidden] {
+  display: none;
+}
+
+.server-build-files li {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.server-build-dir,
+.server-build-files .server-build-more {
+  color: var(--text-muted);
+}
+
+.server-build-files .server-build-more {
+  font-family: var(--font-ui);
+}
+
+.server-build-manual {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.server-build-manual:empty {
+  display: none;
+}
+
+/* With no restart from here, the terminals-close warning has nothing to warn about. */
+.server-build-manual:not(:empty) + .server-restart-note {
+  display: none;
 }
 
 @media (max-width: 768px) {
