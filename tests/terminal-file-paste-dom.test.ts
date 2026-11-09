@@ -3,23 +3,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TerminalManager } from '../src/client/terminal.js';
 
 /**
- * The terminal's image paste/drop wiring (terminal.ts): an image is taken before xterm's
+ * The terminal's file paste/drop wiring (terminal.ts): files are taken before xterm's
  * textarea sees the event, a text paste is left to xterm, and the listeners go with the
  * terminal. xterm itself is loaded by a script tag, so a stand-in plays it here.
  */
 
 /** A paste or drop event carrying `items`, as the browser builds it. */
-function transferEvent(type: 'paste' | 'drop', items: { kind: string; type: string }[]): Event {
+function transferEvent(type: 'paste' | 'drop' | 'dragover', items: { kind: string; type: string; name?: string }[]): Event {
   const data = {
-    items: items.map((i) => ({ ...i, getAsFile: () => new File([new Uint8Array([1])], 'x', { type: i.type }) })),
+    items: items.map((i) => ({ ...i, getAsFile: () => new File([new Uint8Array([1])], i.name ?? 'x', { type: i.type }) })),
     files: [],
+    types: [],
   };
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, type === 'paste' ? 'clipboardData' : 'dataTransfer', { value: data });
   return event;
 }
 
-describe('terminal image paste', () => {
+describe('terminal file paste and drop', () => {
   let container: HTMLElement;
   let textarea: HTMLTextAreaElement;
   let xtermSaw: string[];
@@ -62,9 +63,9 @@ describe('terminal image paste', () => {
     vi.unstubAllGlobals();
   });
 
-  function init(onImage: (f: File) => void): TerminalManager {
+  function init(onFile: (f: File) => void): TerminalManager {
     const manager = new TerminalManager();
-    manager.initialize({ container, onData: () => {}, onResize: () => {}, onImage });
+    manager.initialize({ container, onData: () => {}, onResize: () => {}, onFiles: (files) => files.forEach(onFile) });
     return manager;
   }
 
@@ -86,6 +87,35 @@ describe('terminal image paste', () => {
     expect(images).toHaveLength(1);
     expect(event.defaultPrevented).toBe(true);
     expect(xtermSaw).toEqual([]);
+  });
+
+  it('takes every dropped file, in order, whatever its type', () => {
+    const batches: string[][] = [];
+    const manager = new TerminalManager();
+    manager.initialize({ container, onData: () => {}, onResize: () => {}, onFiles: (files) => batches.push(files.map((f) => f.name)) });
+    const event = transferEvent('drop', [
+      { kind: 'file', type: 'application/pdf', name: 'spec.pdf' },
+      { kind: 'file', type: 'text/markdown', name: 'notes.md' },
+    ]);
+    textarea.dispatchEvent(event);
+    expect(batches).toEqual([['spec.pdf', 'notes.md']]);
+    expect(event.defaultPrevented).toBe(true);
+    expect(xtermSaw).toEqual([]);
+  });
+
+  it('outlines the terminal while files are dragged over it, until they are dropped', () => {
+    init(() => {});
+    const over = transferEvent('dragover', [{ kind: 'file', type: 'application/pdf' }]);
+    container.dispatchEvent(over);
+    expect(over.defaultPrevented).toBe(true);
+    expect(container.classList.contains('file-drag-over')).toBe(true);
+    textarea.dispatchEvent(transferEvent('drop', [{ kind: 'file', type: 'application/pdf' }]));
+    expect(container.classList.contains('file-drag-over')).toBe(false);
+
+    const text = transferEvent('dragover', [{ kind: 'string', type: 'text/plain' }]);
+    container.dispatchEvent(text);
+    expect(text.defaultPrevented).toBe(false);
+    expect(container.classList.contains('file-drag-over')).toBe(false);
   });
 
   it('leaves a text paste to xterm', () => {

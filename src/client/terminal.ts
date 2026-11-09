@@ -1,4 +1,4 @@
-import { imageFromTransfer } from './pasted-image.js';
+import { dragHasFiles, filesFromTransfer } from './pasted-file.js';
 import { isFilterShortcut } from './session-list-view.js';
 
 // Terminal management using xterm.js
@@ -85,8 +85,8 @@ export interface TerminalOptions {
   container: HTMLElement;
   onData: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
-  /** An image pasted or dropped onto the terminal (pasted-image.ts); text pastes stay xterm's. */
-  onImage?: (image: File) => void;
+  /** Files pasted or dropped onto the terminal, in order (pasted-file.ts); text pastes stay xterm's. */
+  onFiles?: (files: File[]) => void;
 }
 
 export class TerminalManager {
@@ -96,8 +96,8 @@ export class TerminalManager {
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  /** Removes the image paste/drop listeners with the terminal. */
-  private imageListeners: AbortController | null = null;
+  /** Removes the file paste/drop listeners with the terminal. */
+  private fileListeners: AbortController | null = null;
   private navigateSessionCallback: ((direction: 'prev' | 'next') => void) | null = null;
   private newSessionCallback: (() => void) | null = null;
   private findSessionCallback: (() => void) | null = null;
@@ -196,24 +196,36 @@ export class TerminalManager {
       }
     });
 
-    // An image paste or drop: taken in the capture phase, before xterm's textarea, which
+    // A file paste or drop: taken in the capture phase, before xterm's textarea, which
     // would paste nothing (it reads text only).
-    const onImage = options.onImage;
-    if (onImage) {
-      this.imageListeners = new AbortController();
-      const { signal } = this.imageListeners;
+    const onFiles = options.onFiles;
+    if (onFiles) {
+      this.fileListeners = new AbortController();
+      const { signal } = this.fileListeners;
+      const container = this.container;
+      // An outline while files are dragged over the terminal: they will be attached there.
+      const highlight = (on: boolean) => container.classList.toggle('file-drag-over', on);
       const take = (e: Event, data: DataTransfer | null) => {
-        const image = imageFromTransfer(data);
-        if (!image) return;
+        const files = filesFromTransfer(data);
+        if (!files.length) return;
         e.preventDefault();
         e.stopPropagation();
-        onImage(image);
+        onFiles(files);
       };
-      this.container.addEventListener('paste', (e) => take(e, e.clipboardData), { capture: true, signal });
-      this.container.addEventListener('dragover', (e) => {
-        if (Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file')) e.preventDefault();
+      container.addEventListener('paste', (e) => take(e, e.clipboardData), { capture: true, signal });
+      container.addEventListener('dragover', (e) => {
+        if (!dragHasFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        highlight(true);
       }, { signal });
-      this.container.addEventListener('drop', (e) => take(e, e.dataTransfer), { capture: true, signal });
+      container.addEventListener('dragleave', (e) => {
+        // Leaving one child for another fires this too; only leaving the terminal counts.
+        if (!(e.relatedTarget instanceof Node) || !container.contains(e.relatedTarget)) highlight(false);
+      }, { signal });
+      container.addEventListener('drop', (e) => {
+        highlight(false);
+        take(e, e.dataTransfer);
+      }, { capture: true, signal });
     }
 
     // Set up resize observer
@@ -376,8 +388,9 @@ export class TerminalManager {
   }
 
   dispose(): void {
-    this.imageListeners?.abort();
-    this.imageListeners = null;
+    this.fileListeners?.abort();
+    this.fileListeners = null;
+    this.container?.classList.remove('file-drag-over');
     if (this.scrollbar) {
       this.scrollbar.abortController.abort();
       this.scrollbar.observer.disconnect();

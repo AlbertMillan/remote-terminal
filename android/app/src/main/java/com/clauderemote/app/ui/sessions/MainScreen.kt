@@ -9,7 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.clauderemote.app.links.Link
 import com.clauderemote.app.sessions.Accounts
-import com.clauderemote.app.sessions.PastedImages
+import com.clauderemote.app.sessions.PastedFiles
 import androidx.activity.result.PickVisualMediaRequest
 import com.clauderemote.app.sessions.ResolvedAccount
 import com.clauderemote.app.push.Notifications
@@ -105,27 +105,44 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
 
     LaunchedEffect(store) { store.messages.collect { snackbar.showSnackbar(it) } }
 
-    // An image for a session (Image key, Paste key, share sheet): uploaded, then its server
-    // path pasted into that session's prompt, never sent (sessions/PastedImages.kt).
-    // A count, not a flag: an Image pick and a Paste can overlap, and the first to finish
-    // must not mark the other done.
+    // Files for a session (Attach key, Paste key, share sheet): uploaded one after another,
+    // then their server paths pasted in one go into that session's prompt, never sent
+    // (sessions/PastedFiles.kt). A count, not a flag: an Attach pick and a Paste can overlap,
+    // and the first to finish must not mark the other done.
     var uploads by remember { mutableIntStateOf(0) }
-    fun pasteImage(sessionId: String, uri: android.net.Uri) {
+    fun pasteFiles(sessionId: String, uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
         scope.launch {
             uploads++
             try {
-                val body = PastedImages.body(context.contentResolver, uri)
-                store.shareTo(sessionId, PastedImages.upload(app.api, sessionId, body))
-            } catch (e: Exception) {
-                snackbar.showSnackbar("Image not sent: ${e.message ?: "upload failed"}")
+                val pasted = mutableListOf<String>()
+                val failed = mutableListOf<String>()
+                for (uri in uris) {
+                    val name = PastedFiles.displayName(context.contentResolver, uri)
+                    try {
+                        val body = PastedFiles.body(context.contentResolver, uri)
+                        pasted += PastedFiles.upload(app.api, sessionId, name, body)
+                    } catch (e: Exception) {
+                        failed += "$name (${e.message ?: "upload failed"})"
+                    }
+                }
+                if (pasted.isNotEmpty()) store.shareTo(sessionId, pasted.joinToString(""))
+                if (failed.isNotEmpty()) {
+                    val what = if (failed.size == 1) "1 file not sent" else "${failed.size} files not sent"
+                    snackbar.showSnackbar("$what: ${failed.joinToString(", ")}")
+                }
             } finally {
                 uploads--
             }
         }
     }
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val id = store.open.value?.session?.id
-        if (uri != null && id != null) pasteImage(id, uri)
+        if (uri != null && id != null) pasteFiles(id, listOf(uri))
+    }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val id = store.open.value?.session?.id
+        if (uris.isNotEmpty() && id != null) pasteFiles(id, uris)
     }
 
     // Push needs the notification permission (Android 13+); ask once, only when this build has push.
@@ -173,13 +190,13 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
         chooseLiveSession("Paste “${text.lines().first().take(60)}” into") { id -> store.shareTo(id, text) }
     }
 
-    // An image shared from another app (a screenshot): pick the session, as for text.
-    val sharedImage by app.pendingShareImage.collectAsStateWithLifecycle()
-    LaunchedEffect(sharedImage, isConnected, state.loaded) {
-        val uri = sharedImage ?: return@LaunchedEffect
+    // Files shared from another app (a screenshot, a PDF): pick the session, as for text.
+    val sharedFiles by app.pendingShareFiles.collectAsStateWithLifecycle()
+    LaunchedEffect(sharedFiles, isConnected, state.loaded) {
+        val uris = sharedFiles ?: return@LaunchedEffect
         if (!isConnected || !state.loaded) return@LaunchedEffect
-        app.pendingShareImage.value = null
-        chooseLiveSession("Paste the image into") { id -> pasteImage(id, uri) }
+        app.pendingShareFiles.value = null
+        chooseLiveSession("Paste the files into") { id -> pasteFiles(id, uris) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Palette.background)) {
@@ -259,14 +276,16 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
                     onPaste = {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         val clip = cm.primaryClip
-                        val imageUri = clip?.takeIf { it.description.hasMimeType("image/*") }?.getItemAt(0)?.uri
-                        if (imageUri != null) pasteImage(current.session.id, imageUri)
+                        // A content URI of any type is a file to upload; otherwise the text.
+                        val fileUri = clip?.getItemAt(0)?.uri?.takeIf { it.scheme == "content" }
+                        if (fileUri != null) pasteFiles(current.session.id, listOf(fileUri))
                         else clip?.getItemAt(0)?.coerceToText(context)?.toString()?.let { store.paste(it) }
                     },
-                    imageBusy = uploads > 0,
-                    onImage = {
-                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    attachBusy = uploads > 0,
+                    onPhoto = {
+                        pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
+                    onFile = { pickFiles.launch(arrayOf("*/*")) },
                 )
             } else {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

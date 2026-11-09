@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import com.clauderemote.app.links.Link
+import com.clauderemote.app.sessions.PastedFiles
 import com.clauderemote.app.net.Api
 import com.clauderemote.app.ui.connect.ConnectScreen
 import com.clauderemote.app.ui.sessions.MainScreen
@@ -113,22 +114,31 @@ class MainActivity : ComponentActivity() {
         takeLink(intent)
     }
 
-    /** A notification tap, a claude-remote:// link, or text or an image shared from another app. */
+    /** A notification tap, a claude-remote:// link, or text or files shared from another app. */
     private fun takeLink(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("image/") == true) {
-            // The read grant comes with this intent, to this activity, which reads it.
-            val uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java)
-            if (uri != null) app.pendingShareImage.value = uri
-            return
-        }
-        if (intent?.action == Intent.ACTION_SEND) {
-            val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT))
-                .filter { it.isNotBlank() }
-                .distinct()
-                .joinToString("\n")
-            if (text.isNotBlank()) app.pendingShare.value = text
+        if (intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE) {
+            // The read grants come with this intent, to this activity, which reads them.
+            val streams = if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+                IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java).orEmpty()
+            } else {
+                listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java))
+            }
+            val hasText = !intent.getStringExtra(Intent.EXTRA_TEXT).isNullOrBlank()
+            when (val share = PastedFiles.parseShare(intent.action, intent.type, hasText, streams)) {
+                is PastedFiles.Share.Files -> app.pendingShareFiles.value = share.streams
+                PastedFiles.Share.Text -> shareText(intent)
+                null -> Unit
+            }
             return
         }
         Link.parse(intent?.dataString)?.let { app.pendingLink.value = it }
+    }
+
+    private fun shareText(intent: Intent) {
+        val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT))
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString("\n")
+        if (text.isNotBlank()) app.pendingShare.value = text
     }
 }

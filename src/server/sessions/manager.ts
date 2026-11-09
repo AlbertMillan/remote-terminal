@@ -4,7 +4,7 @@ import { createPty, resizePty, writeToPty, killPty, ptyExit, ScrollbackBuffer } 
 import { generateSessionLog } from './project-log.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
-import { deletePastedImages } from './pasted-images.js';
+import { deleteUploads } from './uploads.js';
 import { createLogger } from '../utils/logger.js';
 import { getDefaultShell, isWindows } from '../utils/platform.js';
 import { sessionsInWorktree } from '../utils/paths.js';
@@ -439,7 +439,7 @@ class SessionManager {
     }
 
     deletePromptFile(id);
-    deletePastedImages(id);
+    deleteUploads(id);
 
     // Log before deleting (foreign key constraint)
     logSessionEvent(id, 'deleted');

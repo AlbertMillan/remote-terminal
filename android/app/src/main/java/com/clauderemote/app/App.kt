@@ -66,8 +66,8 @@ class App : Application() {
     /** Text shared to the app (Android share sheet), waiting for the user to pick a session. */
     val pendingShare = MutableStateFlow<String?>(null)
 
-    /** An image shared to the app (a screenshot), waiting for the user to pick a session. */
-    val pendingShareImage = MutableStateFlow<android.net.Uri?>(null)
+    /** Files shared to the app (a screenshot, a PDF), waiting for the user to pick a session. */
+    val pendingShareFiles = MutableStateFlow<List<android.net.Uri>?>(null)
 
     val http: OkHttpClient by lazy {
         OkHttpClient.Builder()

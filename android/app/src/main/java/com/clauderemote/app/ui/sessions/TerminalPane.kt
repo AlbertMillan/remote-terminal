@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -18,9 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
@@ -35,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -147,30 +155,64 @@ fun KeysBar(
     send: (String) -> Unit,
     key: (Int) -> Unit,
     onPaste: () -> Unit,
-    /** Pick an image to paste into the session (PastedImages.kt); [imageBusy] while one uploads. */
-    onImage: () -> Unit = {},
-    imageBusy: Boolean = false,
+    /** Pick a photo / any files to paste into the session (PastedFiles.kt); [attachBusy] while one uploads. */
+    onPhoto: () -> Unit = {},
+    onFile: () -> Unit = {},
+    attachBusy: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Surface(color = Palette.surface, modifier = modifier.fillMaxWidth()) {
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).height(44.dp).padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Keys go through the view, so the arrows follow the cursor-key mode and Ctrl applies.
-            KeyButton("Esc") { key(KeyEvent.KEYCODE_ESCAPE) }
-            KeyButton("Tab") { key(KeyEvent.KEYCODE_TAB) }
-            KeyButton("⇧Tab") { send("\u001b[Z") }
-            KeyButton("Ctrl", highlighted = ctrlOn, onClick = onCtrl)
-            KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { key(KeyEvent.KEYCODE_DPAD_LEFT) }
-            KeyIcon(Icons.Default.KeyboardArrowUp, "Up") { key(KeyEvent.KEYCODE_DPAD_UP) }
-            KeyIcon(Icons.Default.KeyboardArrowDown, "Down") { key(KeyEvent.KEYCODE_DPAD_DOWN) }
-            KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
-            KeyButton("/") { send("/") }
-            KeyButton("^C") { send("\u0003") }
-            KeyButton("Paste", onClick = onPaste)
-            KeyButton(if (imageBusy) "Image…" else "Image", onClick = { if (!imageBusy) onImage() })
+        Row(Modifier.height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()).height(48.dp).padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Keys go through the view, so the arrows follow the cursor-key mode and Ctrl applies.
+                    KeyButton("Esc") { key(KeyEvent.KEYCODE_ESCAPE) }
+                    KeyButton("Tab") { key(KeyEvent.KEYCODE_TAB) }
+                    KeyButton("⇧Tab") { send("\u001b[Z") }
+                    KeyButton("Ctrl", highlighted = ctrlOn, onClick = onCtrl)
+                    KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { key(KeyEvent.KEYCODE_DPAD_LEFT) }
+                    KeyIcon(Icons.Default.KeyboardArrowUp, "Up") { key(KeyEvent.KEYCODE_DPAD_UP) }
+                    KeyIcon(Icons.Default.KeyboardArrowDown, "Down") { key(KeyEvent.KEYCODE_DPAD_DOWN) }
+                    KeyIcon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
+                    KeyButton("/") { send("/") }
+                    KeyButton("^C") { send("\u0003") }
+                    KeyButton("Paste", onClick = onPaste)
+                }
+                // A short fade over the keys' right edge: more of them scroll underneath.
+                Box(
+                    Modifier.align(Alignment.CenterEnd).width(20.dp).fillMaxHeight().background(
+                        Brush.horizontalGradient(listOf(Color.Transparent, Palette.surface)),
+                    ),
+                )
+            }
+            // Pinned outside the scroll: always on screen, full size.
+            Box(Modifier.fillMaxHeight().width(1.dp).background(Palette.surfaceHigh))
+            var menu by remember { mutableStateOf(false) }
+            Box(Modifier.fillMaxHeight()) {
+                TextButton(
+                    onClick = { if (!attachBusy) menu = true },
+                    modifier = Modifier.fillMaxHeight().widthIn(min = 72.dp),
+                    shape = RoundedCornerShape(0.dp),
+                ) {
+                    Text(if (attachBusy) "Attach…" else "Attach", color = Palette.accent, style = MaterialTheme.typography.labelLarge)
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Photo") },
+                        leadingIcon = { Icon(Icons.Default.Image, null) },
+                        onClick = { menu = false; onPhoto() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("File") },
+                        leadingIcon = { Icon(Icons.Default.AttachFile, null) },
+                        onClick = { menu = false; onFile() },
+                    )
+                }
+            }
         }
     }
 }

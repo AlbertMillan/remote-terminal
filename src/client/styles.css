@@ -1108,6 +1108,12 @@ body {
   height: 100%;
 }
 
+/* Files dragged over the terminal: dropping attaches them (pasted-file.ts). */
+#terminal-container.file-drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
 /* A stopped session keeps its last output on screen under this, until it is resumed or
    another session opens (the attach empties the container). project/stop-sessions.md */
 .session-stopped-prompt {

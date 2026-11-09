@@ -40,7 +40,7 @@ import { registerServerRestartRoutes } from './server-restart.js';
 import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
-import { registerPastedImageRoutes, sweepPastedImages } from './sessions/pasted-images.js';
+import { registerUploadRoutes, sweepUploads } from './sessions/uploads.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
@@ -72,8 +72,8 @@ export async function createApp(): Promise<FastifyInstance> {
   // Initialize database
   initDatabase();
   cleanupOrphanedForkFiles();
-  // Images of deleted sessions, and any older than 30 days (sessions/pasted-images.ts).
-  sweepPastedImages(new Set(getAllSessionsFromDb().map((s) => s.id)));
+  // Uploads of deleted sessions, and any older than 30 days (sessions/uploads.ts).
+  sweepUploads(new Set(getAllSessionsFromDb().map((s) => s.id)));
   // Retroactively log sessions that ended via crash/OS-shutdown (no-op if disabled)
   sweepUnloggedSessions();
   // A job marked running cannot have survived the restart — re-queue it.
@@ -216,8 +216,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerProjectRoutes(app);
   // Pipeline jobs: worktree-isolated stages with approval gates.
   registerJobRoutes(app);
-  // Images pasted or shared into a session from another device (sessions/pasted-images.ts).
-  registerPastedImageRoutes(app);
+  // Files dropped, pasted or shared into a session from another device (sessions/uploads.ts).
+  registerUploadRoutes(app);
   registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
   registerServerSettingsRoutes(app);
