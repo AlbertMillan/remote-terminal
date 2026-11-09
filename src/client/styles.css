@@ -2394,6 +2394,14 @@ body {
   pointer-events: none;
 }
 
+/* The Server tab has no Save/Cancel, but the footer keeps its room (same opacity rule, for
+   the same reason: its buttons carry `transition: all`), so the modal keeps one height. */
+.settings-content .modal-actions[hidden] {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .settings-panel-note {
   font-size: 12px;
   color: var(--text-muted);

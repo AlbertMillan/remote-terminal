@@ -100,9 +100,17 @@ describe('Settings tabs', () => {
   it('has no Save/Cancel on the Server tab, and gets them back elsewhere', async () => {
     await open();
     el('settings-tab-server').click();
-    expect(el('settings-actions').classList.contains('hidden')).toBe(true);
+    expect(el('settings-actions').hidden).toBe(true);
+    expect(el('settings-actions').inert).toBe(true);
     el('settings-tab-sessions').click();
-    expect(el('settings-actions').classList.contains('hidden')).toBe(false);
+    expect(el('settings-actions').hidden).toBe(false);
+    expect(el('settings-actions').inert).toBe(false);
+
+    // Hidden by opacity, keeping its room: removing it shrank the modal on the Server tab.
+    const css = readFileSync(join(process.cwd(), 'src', 'client', 'styles.css'), 'utf8');
+    const rule = css.match(/\.settings-content \.modal-actions\[hidden\]\s*\{([^}]*)\}/);
+    expect(rule?.[1]).toContain('display: flex');
+    expect(rule?.[1]).toContain('opacity: 0');
   });
 
   it('moves between tabs with the arrow keys, wrapping, and Home/End', async () => {

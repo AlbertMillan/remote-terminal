@@ -203,7 +203,13 @@ export class SettingsModal {
         panel.inert = !on;
       }
     }
-    document.getElementById('settings-actions')?.classList.toggle('hidden', tab === 'server');
+    // Hidden like a panel, never removed: dropping the footer shrank the modal on the Server
+    // tab, and re-centring it moved the tab strip under the cursor.
+    const actions = document.getElementById('settings-actions');
+    if (actions) {
+      actions.hidden = tab === 'server';
+      actions.inert = tab === 'server';
+    }
     document.getElementById('settings-panels')?.scrollTo?.({ top: 0 });
     if (focus) this.tabButton(tab)?.focus();
   }
