@@ -134,7 +134,11 @@ export class TerminalManager {
     this.terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
-      convertEol: true,
+      // Never convertEol: ConPTY sends a bare LF to mean "down one row, same column" and
+      // follows it with relative moves (CSI n C). Returning to column 0 there shifts every
+      // later cell, and Claude Code's diff repaints leave stale text when scrolled up.
+      // Replay is joined with \r\n server-side and notices convert their own newlines.
+      convertEol: false,
       fontSize: 14,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.2,
