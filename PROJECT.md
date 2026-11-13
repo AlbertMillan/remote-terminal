@@ -22,6 +22,7 @@ status: active
 - [x] `f-t188v6` P2 Restart and Build & restart from Settings — detached restart-server.vbs, build gate, same-origin + Tailscale check, reload on a new boot id
 - [x] `f-jobirk` P2 Stop a session on demand — park it idle (no PTY) to resume later; stops its started sessions too → project/stop-sessions.md
 - [x] `f-k4w9zd` P2 Drop any file into a session — web drop/paste uploads any type (20 MB), keeps its name under <dataDir>/uploads, pastes every path → project/file-uploads.md
+- [x] `f-slr9eh` P2 Click a file path in the terminal to open it — server-checked links, served in place, the browser or device opens it → project/clickable-file-paths.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries

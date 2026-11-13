@@ -39,6 +39,11 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
 - `cols`/`rows` from **any** message pass `websocket/validation.ts` before reaching a PTY.
 - `handleSessionCreate` calls `detachFromSession()` before `attachToSession()`, or the old
   session's listener leaks and keystrokes arrive twice.
+- Every `/api/*` and `/ws` request passes the Host check (`host-check.ts`, the `onRequest`
+  hook in `app.ts`, added before any route), or a DNS-rebound page reads every answer as the
+  user. A dotted name the user really uses goes in `server.allowedHosts`, never a wildcard.
+- Terminal-path routes (`sessions/session-files.ts`) check containment **lexically before
+  any filesystem call**: a UNC path reaching `realpath` sends the user's NTLM hash to that host.
 
 ## Two authors of change → `docs/change-provenance.md`
 

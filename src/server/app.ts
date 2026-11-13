@@ -41,6 +41,8 @@ import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
 import { registerUploadRoutes, sweepUploads } from './sessions/uploads.js';
+import { registerSessionFileRoutes } from './sessions/session-files.js';
+import { isAllowedHost, isGuardedPath } from './host-check.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
@@ -153,6 +155,17 @@ export async function createApp(): Promise<FastifyInstance> {
   // Register WebSocket plugin
   await app.register(fastifyWebsocket);
 
+  // DNS rebinding: a request to /api/* or /ws must name this server in its Host, or a page on
+  // another domain pointed at our IP reads every answer as the user (host-check.ts). Added
+  // before any route, so every route and plugin scope below inherits it.
+  app.addHook('onRequest', async (request, reply) => {
+    if (!isGuardedPath(request.url)) return;
+    const { hostname, allowedHosts } = getConfig().server;
+    if (isAllowedHost(request.headers.host, [hostname, ...(allowedHosts ?? [])])) return;
+    logger.warn({ host: request.headers.host, url: request.url }, 'Refused a request for an unknown host');
+    return reply.status(421).send({ error: 'Unknown host; add it to server.allowedHosts in config.json' });
+  });
+
   // Determine static files path
   // In dev mode, __dirname is src/server, so we need to go up to project root
   // In production, __dirname is dist/server
@@ -218,6 +231,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerJobRoutes(app);
   // Files dropped, pasted or shared into a session from another device (sessions/uploads.ts).
   registerUploadRoutes(app);
+  // File paths printed in a terminal, opened from the browser (sessions/session-files.ts).
+  registerSessionFileRoutes(app);
   registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
   registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
   registerServerSettingsRoutes(app);

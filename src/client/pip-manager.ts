@@ -1,6 +1,7 @@
 // Picture-in-Picture terminal overlay manager
 // Uses Document Picture-in-Picture API (Chrome/Edge 116+)
 import { TERMINAL_THEME } from './terminal.js';
+import { registerFileLinks } from './file-links.js';
 
 export interface PipSessionInfo {
   id: string;
@@ -135,6 +136,9 @@ export class PipManager {
 
     const webLinksAddon = new pipWin.WebLinksAddon.WebLinksAddon();
     this.terminal.loadAddon(webLinksAddon);
+
+    // The PiP window switches sessions on one terminal, so the id is read at hover time.
+    registerFileLinks(this.terminal, { sessionId: () => this.currentSessionId });
 
     this.terminal.open(termContainer);
 

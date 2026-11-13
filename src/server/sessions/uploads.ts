@@ -39,6 +39,11 @@ export const UPLOAD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  */
 const ROOTS = ['uploads', 'images'] as const;
 
+/** A session id as the server makes them (a UUID); anything else never reaches a path join. */
+export function isSessionId(id: string): boolean {
+  return /^[\w-]+$/.test(id);
+}
+
 export function uploadDirFor(sessionId: string, root: (typeof ROOTS)[number] = 'uploads'): string {
   return join(getConfig().persistence.dataDir, root, sessionId);
 }
@@ -149,7 +154,7 @@ export function sweepUploads(
 
 export function deleteUploads(sessionId: string): void {
   // Ids are server-generated UUIDs, but never let one walk out of its root.
-  if (!/^[\w-]+$/.test(sessionId)) return;
+  if (!isSessionId(sessionId)) return;
   for (const root of ROOTS) {
     try {
       rmSync(uploadDirFor(sessionId, root), { recursive: true, force: true });
@@ -166,7 +171,7 @@ async function receive(
   reply: FastifyReply,
   imagesOnly: boolean
 ): Promise<unknown> {
-  if (!/^[\w-]+$/.test(sessionId) || !getSessionFromDb(sessionId)) return reply.status(404).send({ error: 'Session not found' });
+  if (!isSessionId(sessionId) || !getSessionFromDb(sessionId)) return reply.status(404).send({ error: 'Session not found' });
   if (!Buffer.isBuffer(body) || body.length === 0) return reply.status(400).send({ error: 'Send the file as the body' });
   if (imagesOnly && !sniffImage(body)) return reply.status(415).send({ error: 'Not a PNG, JPEG, GIF or WebP image' });
   const fileName = uploadFileName(name, body);

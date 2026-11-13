@@ -1,4 +1,5 @@
 import { dragHasFiles, filesFromTransfer } from './pasted-file.js';
+import { registerFileLinks, type LinkHost } from './file-links.js';
 import { isFilterShortcut } from './session-list-view.js';
 
 // Terminal management using xterm.js
@@ -87,6 +88,8 @@ export interface TerminalOptions {
   onResize: (cols: number, rows: number) => void;
   /** Files pasted or dropped onto the terminal, in order (pasted-file.ts); text pastes stay xterm's. */
   onFiles?: (files: File[]) => void;
+  /** The session shown, for clickable file paths (file-links.ts); none without it. */
+  sessionId?: string;
 }
 
 export class TerminalManager {
@@ -176,6 +179,11 @@ export class TerminalManager {
 
     const webLinksAddon = new WebLinksAddon.WebLinksAddon();
     this.terminal.loadAddon(webLinksAddon);
+
+    // A terminal is built per attach, so its session never changes; the provider goes
+    // with the terminal on dispose().
+    const sessionId = options.sessionId ?? null;
+    if (sessionId) registerFileLinks(this.terminal as unknown as LinkHost, { sessionId: () => sessionId });
 
     // Open terminal in container
     this.terminal.open(this.container);

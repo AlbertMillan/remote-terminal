@@ -926,6 +926,7 @@ class SessionManager {
         onData: (data: string) => this.sendTerminalData(data),
         onResize: (cols: number, rows: number) => this.sendTerminalResize(cols, rows),
         onFiles: (files: File[]) => void this.pasteFiles(payload.session.id, files),
+        sessionId: payload.session.id,
       });
       this.terminalMgr.setNavigateSessionCallback((dir) => this.navigateToSession(dir));
       this.terminalMgr.setNewSessionCallback(() => this.showNewSessionModal());

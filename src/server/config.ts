@@ -11,6 +11,11 @@ export interface Config {
     port: number;
     host: string;
     hostname?: string; // Tailscale hostname for HTTPS certs
+    /**
+     * Extra dotted names the server may be reached by (e.g. `pc.home.lan`). IP literals,
+     * single-label names, localhost and `*.ts.net` need no entry. → host-check.ts
+     */
+    allowedHosts?: string[];
   };
   tls: {
     enabled: boolean;
