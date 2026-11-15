@@ -43,6 +43,7 @@ data class SessionInfo(
     val account: String,
     val accountWarning: String?,
     val revivable: Boolean,
+    val accountMoveBlocked: String? = null,
 )
 
 @Serializable
@@ -126,6 +127,12 @@ data class SessionStopPayload(val sessionId: String, val force: Boolean? = null)
 
 @Serializable
 data class SessionStoppedPayload(val sessionIds: List<String>)
+
+@Serializable
+data class SessionChangeAccountPayload(val sessionId: String, val account: String, val force: Boolean? = null)
+
+@Serializable
+data class SessionAccountChangedPayload(val sessionId: String, val account: String, val resume: Boolean)
 
 @Serializable
 data class TerminalDataPayload(val sessionId: String, val data: String)
@@ -249,6 +256,7 @@ object ClientType {
     const val SESSION_OPEN = "session.open"
     const val SESSION_REVIVE = "session.revive"
     const val SESSION_STOP = "session.stop"
+    const val SESSION_CHANGE_ACCOUNT = "session.changeAccount"
     const val SESSION_KEEP = "session.keep"
     const val TERMINAL_DATA = "terminal.data"
     const val TERMINAL_RESIZE = "terminal.resize"
@@ -282,6 +290,7 @@ object ServerType {
     const val SESSION_FORKED = "session.forked"
     const val SESSION_KEPT = "session.kept"
     const val SESSION_STOPPED = "session.stopped"
+    const val SESSION_ACCOUNT_CHANGED = "session.accountChanged"
     const val SESSION_CLAUDE_NAMES = "session.claudeNames"
     const val SESSION_ACCOUNT_WARNINGS = "session.accountWarnings"
     const val SESSION_LOGIN_ENDED = "session.loginEnded"
@@ -336,6 +345,7 @@ object Protocol {
         ClientType.SESSION_OPEN to s<SessionOpenPayload>(),
         ClientType.SESSION_REVIVE to s<SessionRevivePayload>(),
         ClientType.SESSION_STOP to s<SessionStopPayload>(),
+        ClientType.SESSION_CHANGE_ACCOUNT to s<SessionChangeAccountPayload>(),
         ClientType.SESSION_KEEP to s<SessionIdPayload>(),
         ClientType.TERMINAL_DATA to s<TerminalDataPayload>(),
         ClientType.TERMINAL_RESIZE to s<TerminalResizePayload>(),
@@ -370,6 +380,7 @@ object Protocol {
         ServerType.SESSION_FORKED to s<SessionPayload>(),
         ServerType.SESSION_KEPT to s<SessionIdPayload>(),
         ServerType.SESSION_STOPPED to s<SessionStoppedPayload>(),
+        ServerType.SESSION_ACCOUNT_CHANGED to s<SessionAccountChangedPayload>(),
         ServerType.SESSION_CLAUDE_NAMES to s<ClaudeNamesPayload>(),
         ServerType.SESSION_ACCOUNT_WARNINGS to s<AccountWarningsPayload>(),
         ServerType.SESSION_LOGIN_ENDED to s<ExitPayload>(),

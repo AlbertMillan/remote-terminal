@@ -125,6 +125,9 @@
       <div id="terminal-header" class="terminal-header hidden">
         <span id="session-name">Session</span>
         <div class="terminal-controls">
+          <!-- The session's Claude account; moves its conversation to another (account-menu.ts). -->
+          <button id="session-account-btn" type="button" class="account-chip hidden" aria-haspopup="menu" aria-expanded="false"></button>
+          <div id="session-account-menu" class="account-menu hidden" role="menu" aria-label="Claude account"></div>
           <button id="keep-session-btn" class="btn-icon hidden" title="Keep this session (won't be deleted on close)">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>

@@ -49,7 +49,8 @@ and the dispatch button and job board say which account jobs run as: jobs can't 
 
 A named account that doesn't exist is refused, never swapped for another. The account is
 stored on the row (`sessions.account`, migration `019_session_account`, which backfilled
-every older row to `personal`). Revive, Fork and history Resume reuse the row's account
+every older row to `personal`). Revive, Fork and history Resume reuse the row's account (changed only by the header's
+account chip, below)
 (`accountForTranscript` for a history entry): a transcript only resumes from the folder it
 lives in.
 
@@ -154,6 +155,35 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
 - **The status line names the account** (`Opus 5.5 · [personal] · 5h 4%`): `statusline.mjs`
   maps its `CLAUDE_CONFIG_DIR` through `scripts/claude-accounts.mjs` (config.json only, so
   it still prints before any server call). A folder no account uses shows no name.
+
+## Moving a conversation to another account
+
+Spec: `project/move-conversation-account.md`. The session header's account chip
+(`account-menu.ts`, shown with two or more accounts) moves the open session:
+`session.changeAccount` → `sessionManager.changeSessionAccount()`.
+
+- **Everything is checked before anything stops** (`changeAccountRefusal()`, the transcript
+  found, the target's `preflight()`): forks, started sessions (they keep their caller's
+  account), parents with running started sessions, no conversation. A preflight refusal
+  opens the Log in / Clean up dialog and retries the move after login.
+- The rules that never change for a row (`moveBlockedReason()`) go out with it as
+  `SessionInfo.accountMoveBlocked`, which disables the chip, as `revivable` drives the
+  play button; running children are counted at move time only (they start and stop
+  without the parent's row being re-sent).
+- From the stop to the end of the move the session is locked (`movingAccount`): revive,
+  Stop and a second move refuse it, or a Resume in that window starts a Claude on a file
+  being renamed. Its session log is written after the move, not at the stop (it would read
+  the transcript mid-rename), under the account the transcript ended up in.
+- A running session is parked as Stop parks it (scrollback saved, viewers detached, the
+  exit awaited so Windows frees the file); the answer's `resume` makes the client send
+  `session.revive`, which resumes under the new account.
+- `moveTranscript()` (`sessions/account-move.ts`) moves `<id>.jsonl` and `<id>/` into the
+  same project folder under the target's `projects/` (copy then delete across volumes, a
+  source that won't delete getting its copy removed), never over an existing file, and only
+  for a plain UUID. A failure puts back what moved (a rollback that fails too names where
+  the file is) and keeps the row's account; `code: 'stopped'` tells the client to revive
+  it where it was, if it is still on screen.
+- No ledger write: the ledger handles the moved file (below). Auto-memory stays per account.
 
 ## Messaging across accounts
 

@@ -1,4 +1,4 @@
-import { sessionManager } from '../../sessions/manager.js';
+import { ChangeAccountError, sessionManager } from '../../sessions/manager.js';
 import { isValidDimension, validateTerminalDimensions } from '../validation.js';
 import {
   createMessage,
@@ -15,6 +15,8 @@ import {
   type SessionRevivePayload,
   type SessionKeepPayload,
   type SessionStopPayload,
+  type SessionChangeAccountPayload,
+  type SessionAccountChangedPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
   type SessionErrorPayload,
@@ -557,6 +559,42 @@ export async function handleSessionStop(connection: ClientConnection, message: C
     }
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to stop session'), message.id));
+  }
+}
+
+/**
+ * Move a session's conversation to another account (project/move-conversation-account.md).
+ * Like Stop, refused with `code: 'viewers'` while another browser views a running session,
+ * unless `force`. The requester gets `session.accountChanged` (with `resume` when it was
+ * running: the client revives it) and every sidebar the row.
+ */
+export async function handleSessionChangeAccount(connection: ClientConnection, message: ClientMessage): Promise<void> {
+  const payload = message.payload as SessionChangeAccountPayload | undefined;
+  try {
+    if (!payload?.sessionId) throw new Error('Session ID required');
+    if (typeof payload.account !== 'string' || !payload.account) throw new Error('Account required');
+    const others = viewersOf([payload.sessionId], connection);
+    if (others > 0 && !payload.force && sessionManager.isRunning(payload.sessionId)) {
+      const error: SessionErrorPayload = {
+        message: `${others === 1 ? 'Another browser is' : `${others} other browsers are`} viewing this session`,
+        code: 'viewers',
+      };
+      connection.ws.send(createMessage('session.error', error, message.id));
+      return;
+    }
+    try {
+      const { resume } = await sessionManager.changeSessionAccount(payload.sessionId, payload.account, {
+        beforeKill: (id) => detachViewers([id]),
+      });
+      const answer: SessionAccountChangedPayload = { sessionId: payload.sessionId, account: payload.account, resume };
+      connection.ws.send(createMessage('session.accountChanged', answer, message.id));
+    } finally {
+      broadcastSessionRow(payload.sessionId);
+    }
+  } catch (error) {
+    const answer = sessionErrorPayload(error, 'Failed to move the session');
+    if (error instanceof ChangeAccountError && error.stopped) answer.code = 'stopped';
+    connection.ws.send(createMessage('session.error', answer, message.id));
   }
 }
 

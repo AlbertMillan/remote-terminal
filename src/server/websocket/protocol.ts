@@ -23,6 +23,7 @@ export const CLIENT_MESSAGE_TYPES = [
   'session.open',
   'session.revive',
   'session.stop',
+  'session.changeAccount',
   'session.keep',
   'terminal.data',
   'terminal.resize',
@@ -58,6 +59,7 @@ export const SERVER_MESSAGE_TYPES = [
   'session.forked',
   'session.kept',
   'session.stopped',
+  'session.accountChanged',
   'session.claudeNames',
   'session.accountWarnings',
   'session.loginEnded',
@@ -221,6 +223,10 @@ export interface SessionInfo {
   /** The sidebar's play button: `reviveRefusal()` (sessions/revivable.ts) found nothing
    *  against reviving it. Computed here so the client never re-derives the server's rules. */
   revivable: boolean;
+  /** Why the header's account chip can't move this session to another account
+   *  (`moveBlockedReason()`, sessions/account-move.ts), or null. Computed here, as
+   *  `revivable` is; running started sessions are refused at move time instead. */
+  accountMoveBlocked: string | null;
 }
 
 /** Every session with a running Claude, by session id → Claude's name; sent on change. */
@@ -257,6 +263,24 @@ export interface SessionStopPayload {
   sessionId: string;
   /** Stop even though another browser is viewing one of the sessions. */
   force?: boolean;
+}
+
+/**
+ * Move a session's conversation to another account (project/move-conversation-account.md).
+ * A running session is stopped for it; refused with `code: 'viewers'` while another browser
+ * views it, unless `force`.
+ */
+export interface SessionChangeAccountPayload {
+  sessionId: string;
+  account: string;
+  force?: boolean;
+}
+
+/** The requester's answer to session.changeAccount; `resume`: it was running, revive it. */
+export interface SessionAccountChangedPayload {
+  sessionId: string;
+  account: string;
+  resume: boolean;
 }
 
 /** The requester's answer to session.stop: every id stopped, children first. */
@@ -441,7 +465,11 @@ export interface SessionLoginEndedPayload {
 /** `session.error`; `refusal` when a launch was refused by preflight (accounts.ts). */
 export interface SessionErrorPayload {
   message: string;
-  /** 'viewers': session.stop refused because another browser is viewing (resend with force). */
+  /**
+   * 'viewers': session.stop or session.changeAccount refused because another browser is
+   * viewing (resend with force). 'stopped': session.changeAccount failed after stopping the
+   * session, which still has its old account (revive it).
+   */
   code?: string;
   refusal?: PreflightRefusal;
 }

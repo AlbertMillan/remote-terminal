@@ -40,6 +40,7 @@ import {
   handleSessionOpen,
   handleSessionRevive,
   handleSessionStop,
+  handleSessionChangeAccount,
   handleSessionKeep,
   handleTerminalData,
   handleTerminalResize,
@@ -274,6 +275,10 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
     case 'session.stop':
       void handleSessionStop(connection, message);
+      break;
+
+    case 'session.changeAccount':
+      void handleSessionChangeAccount(connection, message);
       break;
 
     case 'session.keep':

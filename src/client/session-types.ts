@@ -35,6 +35,8 @@ export interface SessionInfo {
   account?: string;
   /** Why its account no longer holds the expected login, or null. Kept current by `session.accountWarnings`. */
   accountWarning?: string | null;
+  /** Why the header's account chip can't move it (server `moveBlockedReason()`), or null. */
+  accountMoveBlocked?: string | null;
   /** Shows the play button. The server decides (`reviveRefusal()` in sessions/revivable.ts),
    *  so the client never re-derives which rows come back. */
   revivable?: boolean;
@@ -268,6 +270,7 @@ export type ServerMessage =
   | { type: 'session.forked'; id?: string; payload: SessionCreatedPayload }
   | { type: 'session.kept'; id?: string; payload: { sessionId: string } }
   | { type: 'session.stopped'; id?: string; payload: { sessionIds: string[] } }
+  | { type: 'session.accountChanged'; id?: string; payload: SessionAccountChangedPayload }
   | { type: 'session.error'; id?: string; payload: ErrorPayload }
   | { type: 'terminal.data'; id?: string; payload: TerminalDataPayload }
   | { type: 'terminal.exit'; id?: string; payload: TerminalExitPayload }
@@ -286,3 +289,10 @@ export type ServerMessage =
   | { type: 'pong'; id?: string; payload?: undefined };
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+
+/** The answer to session.changeAccount (project/move-conversation-account.md); `resume`: revive it. */
+export interface SessionAccountChangedPayload {
+  sessionId: string;
+  account: string;
+  resume: boolean;
+}

@@ -18,7 +18,9 @@ import {
   logSessionEvent,
   getMaxSessionSortOrder,
   clearForkFlag,
+  setSessionAccount,
 } from '../db/queries.js';
+import { changeAccountRefusal, moveTranscript } from './account-move.js';
 import { assertSessionSlot } from './session-limit.js';
 import {
   createTmuxSession,
@@ -35,7 +37,7 @@ import {
 } from './session-open.js';
 import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './session-env.js';
 import { deletePromptFile } from './prompt-file.js';
-import { assertAccountReady, resolveStartAccount } from '../accounts.js';
+import { assertAccountReady, findTranscript, resolveStartAccount } from '../accounts.js';
 import { projectCwdFor } from '../projects/worktree-owner.js';
 import { createFolder, defaultCwd } from './folder-picker.js';
 
@@ -47,8 +49,22 @@ const IDLE_CHECK_INTERVAL_MS = 60000; // Check for idle sessions every minute
 const DB_UPDATE_DEBOUNCE_MS = 5000; // Debounce database updates for session activity
 const PTY_EXIT_WAIT_MS = 5000; // Longest terminateSession waits for a killed shell to exit (~0.1s measured)
 
+/** A move that failed after its checks; `stopped`: the session was parked for it. */
+export class ChangeAccountError extends Error {
+  constructor(message: string, readonly stopped: boolean) {
+    super(message);
+    this.name = 'ChangeAccountError';
+  }
+}
+
 class SessionManager {
   private activeSessions: Map<string, ActiveSession> = new Map();
+  /**
+   * Sessions whose conversation is moving to another account: stopped, files on the move.
+   * Revive, Stop and a second move refuse them, or a Resume in that window would start a
+   * Claude on the transcript being renamed (project/move-conversation-account.md).
+   */
+  private movingAccount = new Set<string>();
   private dataListeners: Map<string, Set<(data: string) => void>> = new Map();
   private exitListeners: Map<string, Set<(code: number) => void>> = new Map();
   /** Told after any session's shell exits on its own and its row is marked 'terminated'. */
@@ -382,23 +398,81 @@ class SessionManager {
     return stopped;
   }
 
+  /** A live shell (a terminated one stays in memory for its scrollback). */
+  isRunning(id: string): boolean {
+    const s = this.activeSessions.get(id);
+    return !!s && s.status !== 'terminated';
+  }
+
+  /**
+   * Move a session's conversation to `account` (project/move-conversation-account.md): every
+   * refusal and the target's preflight first, so a refused move never stops anything; then a
+   * running session is parked as Stop parks it (its Claude has exited, so Windows frees the
+   * transcript), the transcript moves and the row's account follows. `resume` says the
+   * session was running: the client revives it, which resumes under the new account.
+   *
+   * A failed move throws ChangeAccountError with nothing moved and the account unchanged;
+   * its `stopped` says the session was parked, so the client revives it where it was.
+   */
+  async changeSessionAccount(
+    id: string,
+    account: string,
+    options: { beforeKill?: (id: string) => void } = {}
+  ): Promise<{ resume: boolean }> {
+    if (this.movingAccount.has(id)) throw new Error('This session is already moving to another account');
+    const metadata = getSessionMetadata(id);
+    if (!metadata) throw new Error('Session not found');
+    const children = getAllSessionsFromDb().filter((s) => s.spawnedBy === id && !s.isFork && this.isRunning(s.id)).length;
+    const refusal = changeAccountRefusal(metadata, account, children);
+    if (refusal) throw new Error(refusal);
+    if (!findTranscript(metadata.cwd, metadata.claudeSessionId!, metadata.account)) {
+      throw new Error('The conversation transcript was not found in any account');
+    }
+    assertAccountReady(account);
+    const from = metadata.account;
+
+    // Held from the stop to the end: nothing may revive or stop it while its files move.
+    this.movingAccount.add(id);
+    const running = this.isRunning(id);
+    let moved = false;
+    try {
+      // No session log at the stop: it would read the transcript while it moves. It is
+      // logged once below, from wherever the transcript ends up.
+      if (running) await this.parkSession(id, options.beforeKill, { log: false });
+      try {
+        const result = await moveTranscript(metadata.cwd, metadata.claudeSessionId!, from, account);
+        logger.info({ id, from, to: account, moved: result }, 'Moved a session to another account');
+      } catch (error) {
+        logger.warn({ id, from, to: account, error }, 'Could not move a session to another account');
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new ChangeAccountError(`Could not move the conversation to ${account}: ${reason}`, running);
+      }
+      setSessionAccount(id, account);
+      moved = true;
+      const exited = this.activeSessions.get(id);
+      if (exited) exited.account = account;
+      logSessionEvent(id, 'account_changed', `${from ?? ''} -> ${account}`);
+      return { resume: running };
+    } finally {
+      this.movingAccount.delete(id);
+      if (running) this.maybeLogSession({ ...metadata, account: moved ? account : from });
+    }
+  }
+
   /**
    * What stopSession(id) would stop, children first and `id` last; throws why it would
    * refuse. The handler asks first, to find browsers viewing any of them.
    */
   stopTargets(id: string): string[] {
+    if (this.movingAccount.has(id)) throw new Error('This session is moving to another account');
     const session = this.activeSessions.get(id);
     if (!session) throw new Error('Session is not running');
     if (session.status === 'terminated') throw new Error('Session has already exited');
     if (getSessionMetadata(id)?.isFork) {
       throw new Error('Forked sessions cannot be stopped; they could not be resumed');
     }
-    const running = (sid: string) => {
-      const s = this.activeSessions.get(sid);
-      return !!s && s.status !== 'terminated';
-    };
     const children = getAllSessionsFromDb()
-      .filter((s) => s.spawnedBy === id && !s.isFork && running(s.id))
+      .filter((s) => s.spawnedBy === id && !s.isFork && this.isRunning(s.id))
       .map((s) => s.id);
     return [...children, id];
   }
@@ -407,7 +481,11 @@ class SessionManager {
    * One session's half of stopSession(). False when it was no longer running (a second
    * click, or it exited meanwhile): nothing is done and it is not reported as stopped.
    */
-  private async parkSession(id: string, beforeKill?: (id: string) => void): Promise<boolean> {
+  private async parkSession(
+    id: string,
+    beforeKill?: (id: string) => void,
+    options: { log?: boolean } = {}
+  ): Promise<boolean> {
     const session = this.activeSessions.get(id);
     if (!session || session.status === 'terminated') return false;
     logger.info({ id, name: session.name }, 'Stopping session');
@@ -423,7 +501,7 @@ class SessionManager {
 
     updateSession(id, { status: 'idle', lastAccessedAt: new Date().toISOString() });
     logSessionEvent(id, 'stopped');
-    this.maybeLogSession(metadata);
+    if (options.log !== false) this.maybeLogSession(metadata);
 
     await exited;
     return true;
@@ -750,6 +828,7 @@ class SessionManager {
    * unrevivable after a restart at the limit.
    */
   reviveSession(options: { id: string; cols?: number; rows?: number }): ActiveSession {
+    if (this.movingAccount.has(options.id)) throw new Error('This session is moving to another account; try again in a moment');
     return reviveSessionImpl(this._registry(), killPty, options);
   }
 

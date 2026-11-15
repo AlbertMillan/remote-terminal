@@ -167,6 +167,13 @@ export function getSession(id: string): SessionMetadata | null {
   });
 }
 
+/** The account a session runs under (project/move-conversation-account.md). */
+export function setSessionAccount(sessionId: string, account: string): void {
+  executeStatement('setSessionAccount', 'UPDATE sessions SET account = ? WHERE id = ?', (stmt) =>
+    stmt.run(account, sessionId)
+  );
+}
+
 export function setClaudeSessionId(sessionId: string, claudeSessionId: string, cwd?: string): void {
   if (cwd) {
     executeStatement('setClaudeSessionIdAndCwd',

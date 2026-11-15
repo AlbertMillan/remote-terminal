@@ -27,6 +27,7 @@ import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal, type CreateCwd } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
 import { StopRequests, currentAfterRevive, isLive } from './session-stop.js';
+import { AccountMenu } from './account-menu.js';
 import { SessionListView, isFilterShortcut, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
@@ -35,6 +36,7 @@ import type {
   SessionMovedPayload,
   SessionClaudeNamesPayload,
   SessionAccountWarningsPayload,
+  SessionAccountChangedPayload,
   SessionLoginEndedPayload,
   AccountChangedNotificationPayload,
   AccountRefusal,
@@ -125,6 +127,10 @@ class SessionManager {
   private launchRetries = new Map<string, () => void>();
   /** session.stop requests in flight: a second click waits, a viewers refusal is retried. */
   private stopRequests = new StopRequests();
+  /** The header's account chip (project/move-conversation-account.md); null until bound. */
+  private accountMenu: AccountMenu | null = null;
+  /** session.changeAccount requests in flight, by message id. */
+  private accountMoves = new Map<string, { sessionId: string; account: string }>();
   /** Launches waiting on a Log in session, retried once it exits (`session.loginEnded`). */
   private loginRetries = new LoginRetries();
 
@@ -404,6 +410,18 @@ class SessionManager {
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
     document.getElementById('fork-session-btn')?.addEventListener('click', () => this.forkCurrentSession());
     document.getElementById('keep-session-btn')?.addEventListener('click', () => this.keepCurrentForkSession());
+    const accountChip = document.getElementById('session-account-btn') as HTMLButtonElement | null;
+    const accountMenu = document.getElementById('session-account-menu');
+    if (accountChip && accountMenu) {
+      this.accountMenu = new AccountMenu(
+        {
+          current: () => (this.currentSessionId ? this.sessions.get(this.currentSessionId) : undefined),
+          move: (sessionId, account) => this.changeAccount(sessionId, account),
+        },
+        accountChip,
+        accountMenu
+      );
+    }
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
@@ -544,6 +562,7 @@ class SessionManager {
       this.reconnectAttempts = 0;
       this.updateConnectionStatus('connected');
       void this.sessionListView.refreshAccountOrder();
+      void this.accountMenu?.load();
       this.listSessions();
       this.listCategories();
       this.getNotificationPreferences();
@@ -575,6 +594,12 @@ class SessionManager {
       // No answer is coming for a stop sent before the drop; keeping it would make the
       // next click on that session's Stop wait forever.
       this.stopRequests.clear();
+      // Nor for a move: the menu would show "Moving…" and ignore the chip until a reload. A
+      // move the server finished is in the session list it re-sends; a session it stopped
+      // for the move is Resumed from the sidebar.
+      for (const id of this.accountMoves.keys()) this.launchRetries.delete(id);
+      this.accountMoves.clear();
+      this.accountMenu?.finished();
       // Job states from before the drop go stale silently -- no further push is
       // coming -- so show nothing until the server re-seeds us after auth.
       this.jobOverlay.clear();
@@ -708,6 +733,9 @@ class SessionManager {
       case 'session.stopped':
         this.stopRequests.answered(message.id);
         break;
+      case 'session.accountChanged':
+        this.handleAccountChanged(message.payload, message.id);
+        break;
       case 'session.kept':
         this.handleSessionKept(message.payload);
         break;
@@ -781,6 +809,14 @@ class SessionManager {
   private handleSessionError(payload: ErrorPayload, messageId?: string): void {
     console.error('Session error:', payload.message);
     const retry = messageId ? this.launchRetries.get(messageId) : undefined;
+    const move = messageId ? this.accountMoves.get(messageId) : undefined;
+    if (messageId && move) {
+      this.accountMoves.delete(messageId);
+      this.launchRetries.delete(messageId);
+      this.accountMenu?.finished();
+      this.handleAccountMoveError(payload, move, retry);
+      return;
+    }
     // Another browser is viewing a session this stop would take down: ask, then insist.
     const stopping = this.stopRequests.refused(messageId, payload.code);
     if (stopping) {
@@ -1229,6 +1265,65 @@ class SessionManager {
 
   private renderSessionList(): void {
     this.sessionListView.render();
+    // A row's account, shell or children may have changed: the header chip follows.
+    this.accountMenu?.update();
+  }
+
+  /**
+   * Move a session's conversation to another account. The server stops a running one first;
+   * its answer (handleAccountChanged) says whether to revive it. A preflight refusal is
+   * retried after Log in through launchRetries, like a launch.
+   */
+  changeAccount(sessionId: string, account: string, force = false): void {
+    const id = this.send('session.changeAccount', { sessionId, account, ...(force ? { force: true } : {}) });
+    this.accountMoves.set(id, { sessionId, account });
+    this.launchRetries.set(id, () => this.changeAccount(sessionId, account));
+  }
+
+  private handleAccountChanged(payload: SessionAccountChangedPayload, messageId?: string): void {
+    if (messageId) {
+      this.accountMoves.delete(messageId);
+      this.launchRetries.delete(messageId);
+    }
+    const session = this.sessions.get(payload.sessionId);
+    if (session) session.account = payload.account;
+    this.accountMenu?.finished();
+    this.renderSessionList();
+    const name = session?.name ?? 'The session';
+    // Revive attaches this browser to it: only while it is still the session on screen, or a
+    // move finishing would pull the user back from wherever they went meanwhile.
+    const resumeHere = payload.resume && this.currentSessionId === payload.sessionId;
+    this.showInfoToast(
+      resumeHere
+        ? `${name} now runs under ${payload.account}: resuming the conversation there.`
+        : `${name} now runs under ${payload.account}. Resume opens it there.`
+    );
+    if (resumeHere) this.reviveSession(payload.sessionId);
+  }
+
+  private handleAccountMoveError(
+    payload: ErrorPayload,
+    move: { sessionId: string; account: string },
+    retry: (() => void) | undefined
+  ): void {
+    // Another browser is viewing it: the move would close their terminal too.
+    if (payload.code === 'viewers') {
+      if (confirm(`${payload.message}. Move it to ${move.account} anyway?`)) this.changeAccount(move.sessionId, move.account, true);
+      return;
+    }
+    if (payload.refusal && retry) {
+      this.accountRefusal.show(payload.refusal, retry);
+      return;
+    }
+    // It was stopped for the move and kept its account: bring it back where it was, if it is
+    // still the session on screen (reviving attaches to it).
+    if (payload.code === 'stopped') {
+      const here = this.currentSessionId === move.sessionId;
+      this.showErrorToast(`${payload.message}. Nothing moved; ${here ? 'resuming it where it was' : 'Resume brings it back'}.`);
+      if (here) this.reviveSession(move.sessionId);
+      return;
+    }
+    this.showErrorToast(payload.message);
   }
 
   private showTerminal(session: SessionInfo): void {
@@ -1243,6 +1338,7 @@ class SessionManager {
     if (nameEl) nameEl.textContent = session.name;
 
     this.updateForkControls(session);
+    this.accountMenu?.update();
     this.syncJobOverlay();
   }
 
@@ -1347,11 +1443,24 @@ class SessionManager {
 
   /** A short error under the header (a failed fork, a file that could not be attached). */
   private showErrorToast(message: string): void {
+    this.showHeaderToast(message, false);
+  }
+
+  /** The same line for news that is not an error (a session moved to another account). */
+  private showInfoToast(message: string): void {
+    this.showHeaderToast(message, true);
+  }
+
+  private headerToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private showHeaderToast(message: string, info: boolean): void {
     const toast = document.getElementById('error-toast');
     if (!toast) return;
     toast.textContent = message;
+    toast.classList.toggle('info', info);
     toast.classList.remove('hidden');
-    setTimeout(() => toast.classList.add('hidden'), 6000);
+    if (this.headerToastTimer) clearTimeout(this.headerToastTimer);
+    this.headerToastTimer = setTimeout(() => toast.classList.add('hidden'), 6000);
   }
 
   private keepCurrentForkSession(): void {

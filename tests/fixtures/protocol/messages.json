@@ -22,7 +22,8 @@
       "claudeName": "android-app",
       "account": "work",
       "accountWarning": null,
-      "revivable": false
+      "revivable": false,
+      "accountMoveBlocked": null
     },
     "category": {
       "id": "c-1",
@@ -65,6 +66,7 @@
     { "type": "session.open", "id": "12", "payload": { "claudeSessionId": "0b3c1f7e-5a2d-4c8e-9f10-7d6e5c4b3a21", "cwd": "C:\\projects\\alpha", "mode": "resume", "cols": 80, "rows": 24 } },
     { "type": "session.revive", "id": "13", "payload": { "sessionId": "s-1", "cols": 80, "rows": 24 } },
     { "type": "session.stop", "id": "30", "payload": { "sessionId": "s-1", "force": true } },
+    { "type": "session.changeAccount", "id": "31", "payload": { "sessionId": "s-1", "account": "personal", "force": true } },
     { "type": "session.keep", "id": "14", "payload": { "sessionId": "s-1" } },
     { "type": "terminal.data", "payload": { "sessionId": "s-1", "data": "ls\r" } },
     { "type": "terminal.resize", "payload": { "sessionId": "s-1", "cols": 80, "rows": 24 } },
@@ -97,6 +99,7 @@
     { "type": "session.forked", "id": "11", "payload": { "session": "$session" } },
     { "type": "session.kept", "payload": { "sessionId": "s-1" } },
     { "type": "session.stopped", "id": "7", "payload": { "sessionIds": ["s-2", "s-1"] } },
+    { "type": "session.accountChanged", "id": "31", "payload": { "sessionId": "s-1", "account": "personal", "resume": true } },
     { "type": "session.claudeNames", "payload": { "names": { "s-1": "android-app" } } },
     { "type": "session.accountWarnings", "payload": { "warnings": { "s-1": "Logged in as someone else" } } },
     { "type": "session.loginEnded", "payload": { "sessionId": "s-1", "exitCode": 0 } },

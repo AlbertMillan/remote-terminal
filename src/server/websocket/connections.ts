@@ -17,6 +17,7 @@ import { claudeNameFor } from '../sessions/claude-registry.js';
 import { defaultAccount } from '../accounts.js';
 import { accountWarningFor } from '../sessions/account-watch.js';
 import { reviveRefusal } from '../sessions/revivable.js';
+import { moveBlockedReason } from '../sessions/account-move.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
@@ -220,6 +221,7 @@ export function sessionToInfo(session: { id: string; name: string; shell: string
     // A live session (attachable and not exited) is refused before any transcript lookup,
     // so only exited and stale rows cost a filesystem check.
     revivable: reviveRefusal(session, (session.attachable ?? true) && session.status !== 'terminated') === null,
+    accountMoveBlocked: moveBlockedReason(session),
   };
 }
 

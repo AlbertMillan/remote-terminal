@@ -84,6 +84,9 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
 - A started session runs under its **caller's** account (another is refused, 403), or one
   login's session orchestrates work on another's.
+- A session changes account only through `changeSessionAccount()`, every refusal and the
+  target's `preflight()` **before** it parks the session, or a refused move costs the user
+  a running terminal. → `docs/accounts.md`
 - Cross-account registry copies (`registry-mirror.ts`) replace or delete a file only while
   it holds the manifest's hash, and never run on an isolated boot or under vitest, or they
   overwrite a live Claude's entry or empty the live server's copies. → `docs/accounts.md`
