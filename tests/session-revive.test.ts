@@ -93,7 +93,7 @@ vi.mock('../src/server/db/queries.js', () => ({
   getUnloggedSessionsForLog: vi.fn(() => []),
 }));
 
-const restoreScrollbackRaw = vi.fn(() => '');
+const restoreScrollbackRaw = vi.fn((): string => '');
 const killPty = vi.fn();
 
 vi.mock('../src/server/sessions/persistence.js', () => ({
@@ -135,6 +135,7 @@ vi.mock('../src/server/utils/logger.js', () => ({
 }));
 
 import { createSessionManager } from '../src/server/sessions/manager.js';
+import { SNAPSHOT_MARKER } from '../src/server/sessions/screen-mirror.js';
 
 const STALE_ID = '11111111-1111-4111-8111-111111111111';
 const CLAUDE_ID = '22222222-2222-4222-8222-222222222222';
@@ -276,35 +277,54 @@ describe('reviveSession — the conversation', () => {
   });
 });
 
+/** What an attach would replay: the screen once the mirror has caught up. */
+function scrollbackOf(id: string): Promise<string> {
+  return new Promise((resolve) => manager.withScrollback(id, resolve));
+}
+
 describe('reviveSession — persisted scrollback', () => {
-  it('seeds the fresh buffer so the pre-restart output is not silently dropped', () => {
+  it('seeds the fresh screen so the pre-restart output is not silently dropped', async () => {
     rows.set(STALE_ID, staleRow());
+    // A legacy raw log, from before snapshots: replayed with the CRLF join it always had.
     restoreScrollbackRaw.mockReturnValue('$ npm test\n336 passed');
 
     manager.reviveSession({ id: STALE_ID });
 
-    // _initSessionPty installs an empty buffer and getScrollback() prefers the in-memory one,
+    // _initSessionPty installs an empty screen and getScrollback() prefers the in-memory one,
     // so without the seed this would come back empty.
-    expect(manager.getScrollback(STALE_ID)).toEqual(['$ npm test', '336 passed']);
+    expect(await scrollbackOf(STALE_ID)).toMatch(/\$ npm test\r\n336 passed/);
   });
 
-  it('keeps an unterminated final line, which the buffer would otherwise hold back', () => {
+  it('keeps an unterminated final line', async () => {
     rows.set(STALE_ID, staleRow());
     // No trailing newline: a shell prompt left mid-line is the normal case.
     restoreScrollbackRaw.mockReturnValue('$ npm test\n336 passed\n$ ');
 
     manager.reviveSession({ id: STALE_ID });
 
-    expect(manager.getScrollback(STALE_ID)).toEqual(['$ npm test', '336 passed', '$ ']);
+    expect(await scrollbackOf(STALE_ID)).toMatch(/336 passed\r\n\$/);
   });
 
-  it('survives a hard kill, where nothing was persisted', () => {
+  it('replays a stored snapshot at the size it was drawn at', async () => {
+    rows.set(STALE_ID, staleRow({ cols: 20, rows: 5 }));
+    // \x1b[1;5H moves within rows drawn at 20 columns.
+    restoreScrollbackRaw.mockReturnValue(`${SNAPSHOT_MARKER}abcdefghij\r\nsecond\x1b[1;5HX`);
+
+    manager.reviveSession({ id: STALE_ID, cols: 40, rows: 5 });
+
+    const replay = await scrollbackOf(STALE_ID);
+    expect(replay).toContain('abcdXfghij');
+    expect(replay).toContain('second');
+    expect(replay).not.toContain(SNAPSHOT_MARKER);
+  });
+
+  it('survives a hard kill, where nothing was persisted', async () => {
     rows.set(STALE_ID, staleRow());
     restoreScrollbackRaw.mockReturnValue('');
 
     manager.reviveSession({ id: STALE_ID });
 
-    expect(manager.getScrollback(STALE_ID)).toEqual([]);
+    expect(await scrollbackOf(STALE_ID)).toBe('');
   });
 });
 
@@ -437,15 +457,17 @@ describe('reviveSession — a shell that exited while the server ran', () => {
     expect(rows.get(STALE_ID)?.status).toBe('active');
   });
 
-  it('keeps its in-memory scrollback, which only Windows persists at exit', () => {
+  it('keeps its in-memory scrollback, which only Windows persists at exit', async () => {
     const pty = exitedSession();
     // Output written through the first PTY's onData before it exited.
     const onData = (pty as unknown as { onData: ReturnType<typeof vi.fn> }).onData;
-    onData.mock.calls[0][0]('line from before exit\n');
+    onData.mock.calls[0][0]('line from before exit\r\n');
+    // Let the mirror apply it: revive reads the exited screen synchronously.
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     manager.reviveSession({ id: STALE_ID });
 
-    expect(manager.getScrollback(STALE_ID)).toContain('line from before exit');
+    expect(await scrollbackOf(STALE_ID)).toContain('line from before exit');
     // Read from memory, not the DB: only the first revive (of the stale row) reached for it.
     expect(restoreScrollbackRaw).toHaveBeenCalledTimes(1);
   });

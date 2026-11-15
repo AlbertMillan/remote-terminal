@@ -32,6 +32,7 @@ import {
 } from '../../db/queries.js';
 import {
   type ClientConnection,
+  WS_OPEN,
   attachToSession,
   detachFromSession,
   sessionToInfo,
@@ -240,21 +241,31 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
     detachFromSession(connection);
   }
 
-  attachToSession(connection, payload.sessionId);
-
-  // Send scrollback history
-  const scrollback = sessionManager.getScrollback(payload.sessionId);
-
-  connection.ws.send(
-    createMessage(
-      'session.attached',
-      {
-        session: sessionToInfo({ ...session, ...storedSessionFields(sessionMetadata) }),
-        scrollback: scrollback.join('\r\n'),
-      },
-      message.id
-    )
-  );
+  // Subscribe and ask for the snapshot in the same tick, holding live output until it is
+  // ready: output from before is in the snapshot, output after is held, none of it twice.
+  // `session.attached` goes first, so the client resets its terminal before any of it.
+  const sessionId = payload.sessionId;
+  attachToSession(connection, sessionId);
+  const held: string[] = [];
+  connection.heldData = held;
+  sessionManager.withScrollback(sessionId, (scrollback) => {
+    // A later attach, a detach or a close won while the mirror caught up.
+    if (connection.heldData !== held || connection.ws.readyState !== WS_OPEN) return;
+    connection.heldData = null;
+    // Its current size: the snapshot is drawn at it, and the client replays at these dims.
+    const current = sessionManager.getSession(sessionId) ?? session;
+    connection.ws.send(
+      createMessage(
+        'session.attached',
+        {
+          session: sessionToInfo({ ...current, ...storedSessionFields(sessionMetadata) }),
+          scrollback,
+        },
+        message.id
+      )
+    );
+    for (const data of held) connection.ws.send(createMessage('terminal.data', { sessionId, data }));
+  });
 }
 
 export function handleSessionDetach(connection: ClientConnection, message: ClientMessage): void {

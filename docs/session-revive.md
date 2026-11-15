@@ -13,10 +13,19 @@ was the alternative (reusing `session.open`) and it leaves a dead row behind eve
 - With a `claude_session_id` on the row, `claude --resume` is injected through the same
   `injectCommand()` (as `claude --resume <id>`) the Fork and history-Resume paths use. Without one, reviving just
   respawns the shell — useful on its own, and the button's tooltip says which you get.
-- `_initSessionPty()` installs a **fresh, empty** `ScrollbackBuffer` and `getScrollback()`
-  prefers the in-memory one, so revive explicitly seeds it from `restoreScrollbackRaw(id)`.
-  Without that seed the scrollback persisted at shutdown is silently dropped on first attach.
-  It is empty after a hard kill, since `persistScrollback` only runs on graceful shutdown.
+- `_initSessionPty()` installs a **fresh, empty** `ScreenMirror` and `getScrollback()`
+  prefers the in-memory one, so revive explicitly seeds it from `restoreScrollbackRaw(id)`,
+  at the cols/rows it was drawn at. Without that seed the scrollback persisted at shutdown is
+  silently dropped on first attach. It is empty after a hard kill, since `persistScrollback`
+  only runs on graceful shutdown.
+- **Scrollback is a screen snapshot, never the raw PTY log.** `ScreenMirror`
+  (`screen-mirror.ts`) is a headless xterm.js fed every byte and resize in order; attach sends
+  its serialized screen. A raw log of ConPTY output (absolute moves, relative repaints,
+  whole-screen redraws at whatever size the PTY had then) replayed in one go at the latest
+  size puts bytes in the wrong cells: Claude Code's tables and spinner frames pile up above
+  the last attach. Attach subscribes and queues its snapshot in one tick, holding live output
+  until the snapshot is sent (`heldData`), so no byte is lost or doubled. Rows stored before
+  this format are raw logs; `storedToReplay()` tells them apart by `SNAPSHOT_MARKER`.
 - **No `maxSessions` check for a stale row.** A stale row is already `status != 'terminated'`
   and so counts toward `countActiveSessions()`. Re-checking the cap here would make every
   session unrevivable after a restart at the limit.

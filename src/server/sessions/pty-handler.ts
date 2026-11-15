@@ -2,7 +2,6 @@ import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import { getDefaultShell, getShellArgs, isWindows } from '../utils/platform.js';
 import { createLogger } from '../utils/logger.js';
-import { getConfig } from '../config.js';
 import { withoutInheritedClaudeSession } from '../utils/claude-env.js';
 import { accountEnv } from '../accounts.js';
 
@@ -111,77 +110,5 @@ export function killPty(ptyProcess: IPty): void {
     logger.info({ pid: ptyProcess.pid }, 'PTY process killed');
   } catch (error) {
     logger.error({ error, pid: ptyProcess.pid }, 'Failed to kill PTY');
-  }
-}
-
-/**
- * Circular buffer implementation for terminal scrollback.
- * Uses O(1) operations instead of O(n) array shifts.
- */
-export class ScrollbackBuffer {
-  private buffer: string[];
-  private maxLines: number;
-  private head: number = 0; // Next write position
-  private size: number = 0; // Current number of lines
-  private partialLine: string = '';
-
-  constructor(maxLines?: number) {
-    this.maxLines = maxLines || getConfig().persistence.scrollbackLines;
-    this.buffer = new Array(this.maxLines);
-  }
-
-  push(data: string): void {
-    // Combine with any partial line from previous push
-    const combined = this.partialLine + data;
-    const lines = combined.split(/\r?\n/);
-
-    // Last element might be a partial line (no trailing newline)
-    this.partialLine = lines.pop() || '';
-
-    // Add complete lines to circular buffer
-    for (const line of lines) {
-      this.buffer[this.head] = line;
-      this.head = (this.head + 1) % this.maxLines;
-      if (this.size < this.maxLines) {
-        this.size++;
-      }
-    }
-  }
-
-  getAll(): string[] {
-    if (this.size === 0) {
-      return this.partialLine ? [this.partialLine] : [];
-    }
-
-    const result: string[] = new Array(this.size);
-    // Start reading from the oldest entry
-    const start = this.size < this.maxLines ? 0 : this.head;
-
-    for (let i = 0; i < this.size; i++) {
-      result[i] = this.buffer[(start + i) % this.maxLines];
-    }
-
-    // Include partial line if present
-    if (this.partialLine) {
-      result.push(this.partialLine);
-    }
-    return result;
-  }
-
-  getRecent(count: number): string[] {
-    const all = this.getAll();
-    return all.slice(-count);
-  }
-
-  clear(): void {
-    this.head = 0;
-    this.size = 0;
-    this.partialLine = '';
-    // Clear references to allow GC
-    this.buffer = new Array(this.maxLines);
-  }
-
-  get length(): number {
-    return this.size + (this.partialLine ? 1 : 0);
   }
 }

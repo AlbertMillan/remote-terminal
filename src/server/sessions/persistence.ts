@@ -121,29 +121,16 @@ export async function tmuxSessionExists(sessionName: string): Promise<boolean> {
   return sessions.some((s) => s.name === sessionName);
 }
 
-// Windows persistence - store scrollback and allow reconnection
-export function persistScrollback(sessionId: string, scrollback: string[]): void {
-  const content = scrollback.join('\n');
+// Windows persistence - store scrollback and allow reconnection.  is a
+// ScreenMirror.persistable() snapshot (screen-mirror.ts), not a raw byte log.
+export function persistScrollback(sessionId: string, content: string): void {
   saveScrollback(sessionId, content);
-  logger.debug({ sessionId, lines: scrollback.length }, 'Persisted scrollback');
+  logger.debug({ sessionId, chars: content.length }, 'Persisted scrollback');
 }
 
-/**
- * The stored scrollback as a single blob, for callers that re-parse it anyway.
- * reviveSession() seeds a ScrollbackBuffer, which splits on newlines itself, so going
- * through restoreScrollback() would split here and re-join there for nothing -- two extra
- * full copies of up to `scrollbackLines` lines.
- */
+/** The stored scrollback as saved: a snapshot, or a legacy raw log (see storedToReplay()). */
 export function restoreScrollbackRaw(sessionId: string): string {
   return getScrollback(sessionId) || '';
-}
-
-export function restoreScrollback(sessionId: string): string[] {
-  const content = getScrollback(sessionId);
-  if (!content) return [];
-  const lines = content.split('\n');
-  logger.debug({ sessionId, lines: lines.length }, 'Restored scrollback');
-  return lines;
 }
 
 // Get persistence strategy for current platform

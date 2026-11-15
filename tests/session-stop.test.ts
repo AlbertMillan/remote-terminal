@@ -193,7 +193,7 @@ describe('stopSession', () => {
 
     await manager.stopSession(PARENT);
 
-    expect(persistScrollback).toHaveBeenCalledWith(PARENT, expect.arrayContaining(['$ ']));
+    expect(persistScrollback).toHaveBeenCalledWith(PARENT, expect.stringContaining('$'));
     expect(generateSessionLog).toHaveBeenCalledWith(expect.objectContaining({ sessionId: PARENT }));
   });
 

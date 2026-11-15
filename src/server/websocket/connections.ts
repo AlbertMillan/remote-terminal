@@ -28,6 +28,11 @@ export interface ClientConnection {
   ws: WebSocket;
   identity: TailscaleIdentity | null;
   attachedSession: string | null;
+  /**
+   * Live output held while a `session.attach` waits for its snapshot (handleSessionAttach),
+   * sent right after it; null once live.
+   */
+  heldData?: string[] | null;
   dataUnsubscribe: (() => void) | null;
   exitUnsubscribe: (() => void) | null;
   /** The Android app's install id (`/ws?device=`), for push; absent for a browser. */
@@ -63,6 +68,7 @@ export function isDeviceForeground(deviceId: string, nowMs: number = Date.now())
 export const connections = new Map<string, ClientConnection>();
 
 export function attachToSession(connection: ClientConnection, sessionId: string): void {
+  connection.heldData = null;
   connection.attachedSession = sessionId;
   sessionManager.addClient(sessionId, connection.id);
 
@@ -71,8 +77,11 @@ export function attachToSession(connection: ClientConnection, sessionId: string)
 
   // Subscribe to terminal data
   connection.dataUnsubscribe = sessionManager.onData(sessionId, (data) => {
+    if (connection.heldData) {
+      connection.heldData.push(data);
+      return;
+    }
     if (connection.ws.readyState === WS_OPEN) {
-      // OPEN
       connection.ws.send(createMessage('terminal.data', { sessionId, data }));
     }
   });
@@ -88,6 +97,7 @@ export function attachToSession(connection: ClientConnection, sessionId: string)
 }
 
 export function detachFromSession(connection: ClientConnection): void {
+  connection.heldData = null;
   if (!connection.attachedSession) return;
 
   const sessionId = connection.attachedSession;

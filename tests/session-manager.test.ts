@@ -116,61 +116,8 @@ vi.mock('../src/server/utils/logger.js', () => ({
 }));
 
 // Import modules after mocks
-import { ScrollbackBuffer } from '../src/server/sessions/pty-handler.js';
 import { parseMessage, createMessage } from '../src/server/websocket/protocol.js';
 import { RateLimiter } from '../src/server/utils/rate-limiter.js';
-
-describe('ScrollbackBuffer', () => {
-  it('should store and retrieve lines', () => {
-    const buffer = new ScrollbackBuffer(100);
-    buffer.push('line1\nline2\nline3\n');
-
-    const all = buffer.getAll();
-    expect(all).toContain('line1');
-    expect(all).toContain('line2');
-    expect(all).toContain('line3');
-  });
-
-  it('should handle partial lines correctly', () => {
-    const buffer = new ScrollbackBuffer(100);
-    buffer.push('partial');
-    buffer.push(' line\ncomplete\n');
-
-    const all = buffer.getAll();
-    expect(all).toContain('partial line');
-    expect(all).toContain('complete');
-  });
-
-  it('should respect max lines limit', () => {
-    const buffer = new ScrollbackBuffer(3);
-    buffer.push('line1\nline2\nline3\nline4\nline5\n');
-
-    const all = buffer.getAll();
-    expect(all.length).toBe(3);
-    expect(all).not.toContain('line1');
-    expect(all).not.toContain('line2');
-    expect(all).toContain('line5');
-  });
-
-  it('should clear buffer', () => {
-    const buffer = new ScrollbackBuffer(100);
-    buffer.push('line1\nline2\n');
-    buffer.clear();
-
-    expect(buffer.length).toBe(0);
-    expect(buffer.getAll()).toEqual([]);
-  });
-
-  it('should return recent lines', () => {
-    const buffer = new ScrollbackBuffer(100);
-    buffer.push('line1\nline2\nline3\nline4\n');
-
-    const recent = buffer.getRecent(2);
-    expect(recent.length).toBe(2);
-    expect(recent).toContain('line3');
-    expect(recent).toContain('line4');
-  });
-});
 
 describe('WebSocket Protocol', () => {
   describe('parseMessage', () => {
@@ -493,6 +440,8 @@ describe('SessionManager', () => {
       expect(manager.getRunningSessions()).toEqual([]);
       const statusWrites = mockStmt.run.mock.calls.filter((c) => c.includes('active'));
       expect(statusWrites).toEqual([]);
+      // Shutdown waits for each screen mirror, whose xterm write loop runs on real timers.
+      vi.useRealTimers();
       await manager.shutdown();
     } finally {
       vi.useRealTimers();
@@ -596,15 +545,15 @@ describe('SessionManager', () => {
     await manager.shutdown();
   });
 
-  it('should get scrollback from buffer', async () => {
+  it('should get scrollback from the screen mirror', async () => {
     const manager = createSessionManager();
     const session = await manager.createSession();
 
     // Simulate PTY output
     const dataCallback = (mockPty as any)._dataCallback;
-    dataCallback('line1\nline2\nline3\n');
+    dataCallback('line1\r\nline2\r\nline3\r\n');
 
-    const scrollback = manager.getScrollback(session.id);
+    const scrollback = await new Promise<string>((resolve) => manager.withScrollback(session.id, resolve));
 
     expect(scrollback).toContain('line1');
     expect(scrollback).toContain('line2');
@@ -663,57 +612,6 @@ describe('SessionManager - Session Limits', () => {
       .rejects.toThrow('Maximum session limit (2) reached');
 
     await manager.shutdown();
-  });
-});
-
-describe('ScrollbackBuffer - Circular Buffer Behavior', () => {
-  it('should maintain correct order with circular wrap', () => {
-    const buffer = new ScrollbackBuffer(5);
-
-    // Add more lines than buffer size
-    buffer.push('line1\nline2\nline3\nline4\nline5\nline6\nline7\n');
-
-    const all = buffer.getAll();
-
-    // Should contain only the last 5 lines
-    expect(all.length).toBe(5);
-    expect(all[0]).toBe('line3');
-    expect(all[1]).toBe('line4');
-    expect(all[2]).toBe('line5');
-    expect(all[3]).toBe('line6');
-    expect(all[4]).toBe('line7');
-  });
-
-  it('should handle multiple pushes with wrap-around', () => {
-    const buffer = new ScrollbackBuffer(3);
-
-    buffer.push('a\nb\n');
-    buffer.push('c\nd\n');
-    buffer.push('e\n');
-
-    const all = buffer.getAll();
-
-    expect(all.length).toBe(3);
-    expect(all).toContain('c');
-    expect(all).toContain('d');
-    expect(all).toContain('e');
-  });
-
-  it('should handle empty buffer', () => {
-    const buffer = new ScrollbackBuffer(10);
-
-    expect(buffer.getAll()).toEqual([]);
-    expect(buffer.length).toBe(0);
-  });
-
-  it('should handle only partial line', () => {
-    const buffer = new ScrollbackBuffer(10);
-
-    buffer.push('partial without newline');
-
-    const all = buffer.getAll();
-    expect(all.length).toBe(1);
-    expect(all[0]).toBe('partial without newline');
   });
 });
 

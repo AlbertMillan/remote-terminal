@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { unlinkSync } from 'fs';
-import { createPty, resizePty, writeToPty, killPty, ptyExit, ScrollbackBuffer } from './pty-handler.js';
+import { createPty, resizePty, writeToPty, killPty, ptyExit } from './pty-handler.js';
+import { ScreenMirror, storedToReplay } from './screen-mirror.js';
 import { generateSessionLog } from './project-log.js';
 import type { ActiveSession, SessionCreateOptions, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
@@ -23,7 +24,7 @@ import {
   createTmuxSession,
   killTmuxSession,
   persistScrollback,
-  restoreScrollback,
+  restoreScrollbackRaw,
   isTmuxAvailable,
 } from './persistence.js';
 import {
@@ -52,7 +53,8 @@ class SessionManager {
   private exitListeners: Map<string, Set<(code: number) => void>> = new Map();
   /** Told after any session's shell exits on its own and its row is marked 'terminated'. */
   private anyExitListeners: Set<(id: string) => void> = new Set();
-  private scrollbackBuffers: Map<string, ScrollbackBuffer> = new Map();
+  /** Each session's screen (docs/session-revive.md): what attach replays and shutdown persists. */
+  private screens: Map<string, ScreenMirror> = new Map();
   private touchDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private idleCheckInterval: NodeJS.Timeout | null = null;
   /** createSession calls past the limit check whose row isn't inserted yet. */
@@ -66,11 +68,12 @@ class SessionManager {
   // Called by both createSession and forkSession to avoid duplication.
   private _initSessionPty(session: ActiveSession): void {
     const { id, pty } = session;
-    const scrollbackBuffer = new ScrollbackBuffer();
-    this.scrollbackBuffers.set(id, scrollbackBuffer);
+    this.screens.get(id)?.dispose();
+    const screen = new ScreenMirror(session.cols, session.rows);
+    this.screens.set(id, screen);
 
     pty.onData((data: string) => {
-      scrollbackBuffer.push(data);
+      screen.write(data);
       const listeners = this.dataListeners.get(id);
       if (listeners) {
         for (const listener of listeners) listener(data);
@@ -96,7 +99,7 @@ class SessionManager {
   private _registry(): SessionRegistry {
     return {
       activeSessions: this.activeSessions,
-      scrollbackBuffers: this.scrollbackBuffers,
+      screens: this.screens,
       dataListeners: this.dataListeners,
       exitListeners: this.exitListeners,
       initSessionPty: (session: ActiveSession) => this._initSessionPty(session),
@@ -240,7 +243,7 @@ class SessionManager {
       if (tmuxSession) {
         killTmuxSession(tmuxSession).catch(() => {});
       }
-      this.scrollbackBuffers.delete(id);
+      this.dropScreen(id);
       throw error;
     }
 
@@ -292,8 +295,8 @@ class SessionManager {
     const metadata = getSessionMetadata(id);
 
     // Persist scrollback before terminating (Windows)
-    const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
-    if (isWindows() && scrollback.length > 0) {
+    const scrollback = await this.caughtUpScreen(id);
+    if (isWindows() && scrollback) {
       persistScrollback(id, scrollback);
     }
 
@@ -345,7 +348,7 @@ class SessionManager {
 
     this.dataListeners.delete(id);
     this.exitListeners.delete(id);
-    this.scrollbackBuffers.delete(id);
+    this.dropScreen(id);
     const debounceTimer = this.touchDebounceTimers.get(id);
     if (debounceTimer) {
       clearTimeout(debounceTimer);
@@ -412,8 +415,8 @@ class SessionManager {
 
     // On every platform, as shutdown() does: revive seeds the new shell from it. First, so a
     // failed write leaves the session running and its browsers still attached.
-    const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
-    if (scrollback.length > 0) persistScrollback(id, scrollback);
+    const scrollback = await this.caughtUpScreen(id);
+    if (scrollback) persistScrollback(id, scrollback);
 
     beforeKill?.(id);
     const { exited } = await this.teardownPty(id, session);
@@ -486,6 +489,7 @@ class SessionManager {
     }
 
     resizePty(session.pty, cols, rows);
+    this.screens.get(id)?.resize(cols, rows);
     session.cols = cols;
     session.rows = rows;
     updateSession(id, { cols, rows });
@@ -565,14 +569,47 @@ class SessionManager {
     }
   }
 
-  getScrollback(id: string): string[] {
-    // Get from in-memory buffer first
-    const buffer = this.scrollbackBuffers.get(id);
-    if (buffer) {
-      return buffer.getAll();
+  /**
+   * The session's screen as escape sequences, for a fresh terminal of its current size.
+   * Synchronous, so it can miss output still queued in the mirror: attach uses
+   * withScrollback(), which can't.
+   */
+  getScrollback(id: string): string {
+    const screen = this.screens.get(id);
+    if (screen) return screen.snapshot();
+    return this.storedScrollback(id);
+  }
+
+  /**
+   * Calls `fn` with the session's screen once the mirror holds every byte the PTY sent
+   * before this call. A caller that subscribes to onData in the same tick as this call, and
+   * holds what arrives until `fn` runs, sees every byte exactly once.
+   */
+  withScrollback(id: string, fn: (scrollback: string) => void): void {
+    const screen = this.screens.get(id);
+    if (!screen) {
+      fn(this.storedScrollback(id));
+      return;
     }
-    // Try to restore from database (Windows)
-    return restoreScrollback(id);
+    screen.afterQueued(() => fn(screen.snapshot()));
+  }
+
+  /** A persisted scrollback for a session with no live screen, ready to write as-is. */
+  private storedScrollback(id: string): string {
+    return storedToReplay(restoreScrollbackRaw(id));
+  }
+
+  /** The session's screen for storage, once it holds every byte the PTY has sent. */
+  private async caughtUpScreen(id: string): Promise<string> {
+    const screen = this.screens.get(id);
+    if (!screen) return '';
+    await screen.caughtUp();
+    return screen.persistable();
+  }
+
+  private dropScreen(id: string): void {
+    this.screens.get(id)?.dispose();
+    this.screens.delete(id);
   }
 
   private touchSession(id: string): void {
@@ -627,10 +664,18 @@ class SessionManager {
         }
       }
 
-      // Persist scrollback on Windows
-      const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
-      if (isWindows() && scrollback.length > 0) {
-        persistScrollback(id, scrollback);
+      // Persist scrollback on Windows, once the mirror has the shell's last output.
+      const screen = this.screens.get(id);
+      if (isWindows() && screen) {
+        screen.afterQueued(() => {
+          const scrollback = screen.persistable();
+          if (!scrollback) return;
+          try {
+            persistScrollback(id, scrollback);
+          } catch (error) {
+            logger.warn({ id, error }, 'Failed to persist scrollback of an exited session');
+          }
+        });
       }
 
       // Delete ephemeral fork JSONL on natural exit
@@ -739,8 +784,8 @@ class SessionManager {
         updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
       } else {
         // Persist scrollback
-        const scrollback = this.scrollbackBuffers.get(id)?.getAll() || [];
-        if (scrollback.length > 0) {
+        const scrollback = await this.caughtUpScreen(id);
+        if (scrollback) {
           persistScrollback(id, scrollback);
         }
         // Mark as idle (not terminated, so we can reconnect on restart)
@@ -757,7 +802,8 @@ class SessionManager {
     this.activeSessions.clear();
     this.dataListeners.clear();
     this.exitListeners.clear();
-    this.scrollbackBuffers.clear();
+    for (const screen of this.screens.values()) screen.dispose();
+    this.screens.clear();
   }
 }
 

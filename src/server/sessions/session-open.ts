@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { copyFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { createPty, writeToPty, type ScrollbackBuffer } from './pty-handler.js';
+import { createPty, writeToPty } from './pty-handler.js';
+import type { ScreenMirror } from './screen-mirror.js';
 import { findClaudeProjectDir } from './transcript.js';
 import type { ActiveSession, SessionMetadata } from './types.js';
 import { getConfig } from '../config.js';
@@ -34,7 +35,7 @@ const logger = createLogger('session-manager');
  */
 export interface SessionRegistry {
   activeSessions: Map<string, ActiveSession>;
-  scrollbackBuffers: Map<string, ScrollbackBuffer>;
+  screens: Map<string, ScreenMirror>;
   dataListeners: Map<string, Set<(data: string) => void>>;
   exitListeners: Map<string, Set<(code: number) => void>>;
   initSessionPty(session: ActiveSession): void;
@@ -398,21 +399,22 @@ export function reviveSession(
     connectedClients: exited ? exited.connectedClients : new Set(),
   };
 
-  // An exited session's own buffer holds its scrollback on every platform (handleSessionExit
+  // An exited session's own screen holds its scrollback on every platform (handleSessionExit
   // persists it on Windows only); read it before initSessionPty replaces it.
-  const exitedScrollback = exited ? registry.scrollbackBuffers.get(id)?.getAll().join('\n') : undefined;
+  const exitedScrollback = exited ? registry.screens.get(id)?.persistable() : undefined;
 
   registry.initSessionPty(session);
 
-  // initSessionPty installs a fresh, empty buffer, and getScrollback() prefers the
+  // initSessionPty installs a fresh, empty screen, and getScrollback() prefers the
   // in-memory one -- without this seed the scrollback persisted at shutdown would be
   // silently dropped on the first attach. Empty after a hard kill, since persistScrollback
-  // only runs on a graceful shutdown.
+  // only runs on a graceful shutdown. Seeded at the size it was drawn at (the row's
+  // cols/rows follow every resize), or its rows wrap at the wrong width.
   const persisted = exitedScrollback || restoreScrollbackRaw(id);
   if (persisted) {
-    // The trailing newline matters: ScrollbackBuffer holds an unterminated final line as
-    // `partialLine`, which getAll() drops once the buffer has any complete lines.
-    registry.scrollbackBuffers.get(id)?.push(persisted.endsWith('\n') ? persisted : `${persisted}\n`);
+    const drawnCols = exited?.cols || metadata.cols || cols;
+    const drawnRows = exited?.rows || metadata.rows || rows;
+    registry.screens.get(id)?.seed(persisted, drawnCols, drawnRows);
   }
 
   registry.activeSessions.set(id, session);
@@ -427,7 +429,8 @@ export function reviveSession(
     registry.activeSessions.delete(id);
     registry.dataListeners.delete(id);
     registry.exitListeners.delete(id);
-    registry.scrollbackBuffers.delete(id);
+    registry.screens.get(id)?.dispose();
+    registry.screens.delete(id);
     killPty(ptyProcess);
     throw error;
   }
