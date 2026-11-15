@@ -155,6 +155,29 @@ Each account's `claude` reads only its own folder, so claude-remote's setup goes
   maps its `CLAUDE_CONFIG_DIR` through `scripts/claude-accounts.mjs` (config.json only, so
   it still prints before any server call). A folder no account uses shows no name.
 
+## Messaging across accounts
+
+Spec: `project/cross-account-messaging.md`. `ListAgents`/`SendMessage` find peers only in the
+caller's own `<configDir>/sessions/` (`<pid>.json` + `<pid>.<hash>.key`; the socket is a
+machine-local pipe), so by default a personal and a work session can't see each other.
+Settings → Sessions → **Cross-account messaging** (`sessions.crossAccountMessaging` in `config.json`, `FLAG_SETTINGS`) turns on `sessions/registry-mirror.ts`:
+the registry poll (`claude-registry.ts`, every 5 s) copies each live entry into every
+other account's folder.
+
+- **What it costs.** A message is processed and kept by the account that **receives** it:
+  into a work session, the org's telemetry (events and metrics today; the text too if its
+  remote settings turn on `OTEL_LOG_USER_PROMPTS`) and transcripts; into a personal one,
+  the personal login's data terms. The copies themselves report nothing.
+- **Only our own files.** `<dataDir>/registry-mirrors.json` holds each copy's source and
+  hash. A copy is replaced or deleted only while it still holds what was written; a file
+  we didn't write is never overwritten, and a rewritten copy (a pid the other account's
+  Claude reused) is left to its writer.
+- Copies go when the source file goes, its pid dies, the setting is off (read every
+  poll), or the server shuts down; a crash's leftovers at the next boot's first poll.
+- Name lookups skip copies. Never on an isolated boot or under vitest: both would write
+  into (or, with the setting off, empty) the real folders.
+- A new session reaches the other login within one poll (≤ 5 s).
+
 ## SESSION-LOG records the account
 
 Both accounts commit as the same git user, so the log is the only record of which login

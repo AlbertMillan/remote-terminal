@@ -32,6 +32,13 @@ export interface Config {
      * (sessions/folder-picker.ts).
      */
     defaultCwd?: string;
+    /**
+     * Copy every live Claude registry entry into every other account's folder, so
+     * `ListAgents`/`SendMessage` reach sessions on another login. Off unless `true`: a
+     * message is processed and kept by the account that receives it
+     * (sessions/registry-mirror.ts, docs/accounts.md).
+     */
+    crossAccountMessaging?: boolean;
   };
   auth: {
     enabled: boolean;
@@ -190,13 +197,28 @@ export const LIMIT_SETTINGS = {
 export type LimitKey = keyof typeof LIMIT_SETTINGS;
 type LimitSection = (typeof LIMIT_SETTINGS)[LimitKey]['section'];
 
+/**
+ * The on/off settings Settings edits, beside the limits. Only `true` turns one on: a
+ * hand-written `"yes"` or `1` leaves it off.
+ */
+export const FLAG_SETTINGS = {
+  crossAccountMessaging: { section: 'sessions', label: 'Cross-account messaging' },
+} as const;
+
+export type FlagKey = keyof typeof FLAG_SETTINGS;
+
 /** The settings the Settings modal writes into config.json. */
-export type ServerSettingsPatch = Partial<Record<LimitKey, number>>;
+export type ServerSettingsPatch = Partial<Record<LimitKey, number>> & Partial<Record<FlagKey, boolean>>;
 
 export const MAX_SESSIONS_RANGE = LIMIT_SETTINGS.maxSessions.range;
 export const MAX_PER_PARENT_RANGE = LIMIT_SETTINGS.maxPerParent.range;
 
 const LIMIT_KEYS = Object.keys(LIMIT_SETTINGS) as LimitKey[];
+const FLAG_KEYS = Object.keys(FLAG_SETTINGS) as FlagKey[];
+
+function sectionOf(key: LimitKey | FlagKey): 'sessions' | 'agentSessions' {
+  return key in LIMIT_SETTINGS ? LIMIT_SETTINGS[key as LimitKey].section : FLAG_SETTINGS[key as FlagKey].section;
+}
 
 /** A config section as loaded, with each unusable limit in it replaced by its default. */
 function checkedSection<S extends LimitSection>(section: S, value: unknown, configPath: string): Config[S] {
@@ -225,7 +247,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Change the session limits, effective for the next session opened or started.
+ * Change the session limits (effective for the next session opened or started) and flags
+ * (read where they act: cross-account messaging at the next registry poll).
  *
  * Patches only the given keys in the file as it is on disk rather than writing out the
  * merged config: that would pin every default into the user's file, and a later change to
@@ -242,9 +265,9 @@ export function setServerSettings(patch: ServerSettingsPatch): void {
   // start it afresh.
   // Patched into `next`, not `onDisk`: two limits in one section must both land.
   const next: Record<string, unknown> = { ...onDisk };
-  const changed = LIMIT_KEYS.filter((key) => patch[key] !== undefined);
+  const changed = [...LIMIT_KEYS, ...FLAG_KEYS].filter((key) => patch[key] !== undefined);
   for (const key of changed) {
-    const { section } = LIMIT_SETTINGS[key];
+    const section = sectionOf(key);
     const current = isPlainObject(next[section]) ? next[section] : {};
     next[section] = { ...current, [key]: patch[key] };
   }
@@ -264,11 +287,11 @@ export function setServerSettings(patch: ServerSettingsPatch): void {
   // New objects: a section may still be defaultConfig's own, shared by reference.
   const updated: Record<string, unknown> = { ...currentConfig };
   for (const key of changed) {
-    const { section } = LIMIT_SETTINGS[key];
+    const section = sectionOf(key);
     updated[section] = { ...(updated[section] as object), [key]: patch[key] };
   }
   currentConfig = updated as unknown as Config;
-  logger.info({ path: configPath, ...patch }, 'Saved session limits');
+  logger.info({ path: configPath, ...patch }, 'Saved server settings');
 }
 
 export function getConfig(): Config {

@@ -84,6 +84,9 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
 - A started session runs under its **caller's** account (another is refused, 403), or one
   login's session orchestrates work on another's.
+- Cross-account registry copies (`registry-mirror.ts`) replace or delete a file only while
+  it holds the manifest's hash, and never run on an isolated boot or under vitest, or they
+  overwrite a live Claude's entry or empty the live server's copies. → `docs/accounts.md`
 - Started sessions (`spawned_by`) can't start sessions. Prompt files live under
   `<dataDir>/prompts/<id>/`, never in a worktree, or `commitAll` commits them.
 - Worktrees get a **copy** of `.claude/settings.local.json` (`ensureLocalClaudeSettings`),

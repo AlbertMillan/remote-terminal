@@ -320,6 +320,9 @@ so an agent asked to message "the planner" can't find it. Spec: `project/peer-se
   session regardless of project, so a directory would gate nothing, and typing a message into
   another session's terminal could answer a dialog or run in the shell. A session with no
   Claude running can't be messaged until it is revived.
+- `ListAgents` lists only the sessions of the caller's own login; with
+  `sessions.crossAccountMessaging` on, the server mirrors every login's entries into the
+  others (`docs/accounts.md`, "Messaging across accounts").
 - Renaming a session doesn't rename a running Claude; the new name applies at the next typed
   `claude`; the `@` action copies the name Claude still uses meanwhile.
 

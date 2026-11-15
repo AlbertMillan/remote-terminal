@@ -3,6 +3,8 @@ import {
   getConfig,
   setServerSettings,
   LIMIT_SETTINGS,
+  FLAG_SETTINGS,
+  type FlagKey,
   MAX_SESSIONS_RANGE,
   MAX_PER_PARENT_RANGE,
   type LimitKey,
@@ -21,7 +23,7 @@ export interface ServerSettingsDeps {
   countSessions?: () => number;
 }
 
-/** Settings that live in the server's config file, edited from the Settings modal. */
+/** Settings that live in the server's config file (limits and flags), edited from the Settings modal. */
 export function registerServerSettingsRoutes(app: FastifyInstance, deps: ServerSettingsDeps = {}): void {
   const verify = deps.verify ?? verifyTailscaleConnection;
   const countSessions = deps.countSessions ?? countActiveSessions;
@@ -35,6 +37,8 @@ export function registerServerSettingsRoutes(app: FastifyInstance, deps: ServerS
     // Live started sessions one session may have (docs/session-orchestration.md).
     maxPerParent: getConfig().agentSessions.maxPerParent,
     maxPerParentRange: MAX_PER_PARENT_RANGE,
+    // Copy every login's live Claude entries into the others' (sessions/registry-mirror.ts).
+    crossAccountMessaging: getConfig().sessions.crossAccountMessaging === true,
   });
 
   app.get('/api/server/settings', async () => view());
@@ -62,8 +66,17 @@ export function registerServerSettingsRoutes(app: FastifyInstance, deps: ServerS
       }
       patch[key] = value;
     }
+    for (const key of Object.keys(FLAG_SETTINGS) as FlagKey[]) {
+      if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+      const value = body[key];
+      if (typeof value !== 'boolean') {
+        return reply.status(400).send({ error: `${FLAG_SETTINGS[key].label} must be true or false` });
+      }
+      patch[key] = value;
+    }
     if (Object.keys(patch).length === 0) {
-      return reply.status(400).send({ error: `Nothing to change: send one of ${Object.keys(LIMIT_SETTINGS).join(', ')}` });
+      const keys = [...Object.keys(LIMIT_SETTINGS), ...Object.keys(FLAG_SETTINGS)];
+      return reply.status(400).send({ error: `Nothing to change: send one of ${keys.join(', ')}` });
     }
 
     try {

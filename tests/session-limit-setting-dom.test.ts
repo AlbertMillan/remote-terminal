@@ -203,6 +203,42 @@ describe('SessionLimitSetting: started sessions per session', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1);
   });
 
+  describe('cross-account messaging', () => {
+    const box = () => document.getElementById('setting-cross-account-messaging') as HTMLInputElement;
+    beforeEach(() => {
+      const field = document.createElement('input');
+      field.type = 'checkbox';
+      field.id = 'setting-cross-account-messaging';
+      field.disabled = true;
+      document.querySelector('.modal-content')!.appendChild(field);
+    });
+
+    it('loads the switch and sends it only when changed', async () => {
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+        json({ ...view(30), crossAccountMessaging: init?.method === 'PUT' })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const setting = new SessionLimitSetting();
+      await setting.refresh();
+      expect(box().disabled).toBe(false);
+      expect(box().checked).toBe(false);
+      expect(await setting.save()).toBe(true);
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0);
+      box().checked = true;
+      expect(await setting.save()).toBe(true);
+      const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT');
+      expect(puts).toHaveLength(1);
+      expect(JSON.parse(puts[0][1]!.body as string)).toEqual({ crossAccountMessaging: true });
+    });
+
+    it('stays disabled against a server that does not report it', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => json(view(30))));
+      await new SessionLimitSetting().refresh();
+      expect(box().disabled).toBe(true);
+      expect(box().checked).toBe(false);
+    });
+  });
+
   it('leaves the field disabled against a server that does not report it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ maxSessions: 30, range: { min: 1, max: 100 }, counted: 2 })));
     const setting = new SessionLimitSetting();

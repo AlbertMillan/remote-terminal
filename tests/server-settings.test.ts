@@ -48,6 +48,7 @@ describe('session limit setting', () => {
       counted: 4,
       maxPerParent: 5,
       maxPerParentRange: { min: 0, max: 20 },
+      crossAccountMessaging: false,
     });
   });
 
@@ -204,5 +205,50 @@ describe('maxSessions as loaded from config.json', () => {
   it('falls back to the default session settings when sessions is not an object', () => {
     writeFileSync(configPath, JSON.stringify({ sessions: [1, 2] }));
     expect(loadConfig().sessions).toEqual({ maxSessions: 30, idleTimeoutMinutes: 0, defaultCwd: '~/NodeProjects' });
+  });
+});
+
+describe('cross-account messaging setting', () => {
+  const putBody = async (payload: Record<string, unknown>) =>
+    (await appWith()).inject({ method: 'PUT', url: '/api/server/settings', headers: SAME_ORIGIN, payload });
+
+  it('turns on and off at once, survives a reload and writes only its own key', async () => {
+    writeFileSync(configPath, JSON.stringify({ sessions: { defaultShell: 'pwsh' } }));
+    loadConfig();
+    const on = await putBody({ crossAccountMessaging: true });
+    expect(on.statusCode).toBe(200);
+    expect(on.json().crossAccountMessaging).toBe(true);
+    expect(getConfig().sessions.crossAccountMessaging).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
+      sessions: { defaultShell: 'pwsh', crossAccountMessaging: true },
+    });
+    expect(loadConfig().sessions.crossAccountMessaging).toBe(true);
+    const off = await putBody({ crossAccountMessaging: false });
+    expect(off.json().crossAccountMessaging).toBe(false);
+    expect(getConfig().sessions.crossAccountMessaging).toBe(false);
+  });
+
+  it('saves with a limit in one request', async () => {
+    loadConfig();
+    const res = await putBody({ maxSessions: 25, crossAccountMessaging: true });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8')).sessions).toEqual({ maxSessions: 25, crossAccountMessaging: true });
+  });
+
+  it('refuses anything but true or false, writing nothing', async () => {
+    loadConfig();
+    for (const value of ['yes', 1, null]) {
+      const res = await putBody({ crossAccountMessaging: value, maxSessions: 25 });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/true or false/);
+    }
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  it('reports a hand-written non-boolean as off', async () => {
+    writeFileSync(configPath, JSON.stringify({ sessions: { crossAccountMessaging: 'yes' } }));
+    loadConfig();
+    const res = await (await appWith()).inject({ method: 'GET', url: '/api/server/settings' });
+    expect(res.json().crossAccountMessaging).toBe(false);
   });
 });

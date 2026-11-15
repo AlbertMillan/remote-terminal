@@ -1,6 +1,6 @@
 /**
- * The session limits in the Settings modal: Maximum sessions and Started sessions per
- * session. Unlike the other settings they live in the server's config, not this browser:
+ * The server's settings in the Settings modal: the limits Maximum sessions and Started
+ * sessions per session, and the Cross-account messaging switch. Unlike the other settings they live in the server's config, not this browser:
  * see src/server/server-settings.ts.
  */
 
@@ -13,7 +13,16 @@ interface ServerSettingsView {
   /** Live started sessions one session may have (agentSessions.maxPerParent). */
   maxPerParent: number;
   maxPerParentRange: { min: number; max: number };
+  /** Sessions on every login can message each other (sessions.crossAccountMessaging). */
+  crossAccountMessaging?: boolean;
 }
+
+/** The server's on/off keys (FLAG_SETTINGS in src/server/config.ts), each a checkbox. */
+type FlagKey = 'crossAccountMessaging';
+
+const FLAGS: { key: FlagKey; inputId: string }[] = [
+  { key: 'crossAccountMessaging', inputId: 'setting-cross-account-messaging' },
+];
 
 /** The server's limit keys (LIMIT_SETTINGS in src/server/config.ts). */
 type LimitKey = 'maxSessions' | 'maxPerParent';
@@ -56,6 +65,14 @@ export class SessionLimitSetting {
     });
   }
 
+  /** The checkboxes present on the page. */
+  private flags(): { key: FlagKey; input: HTMLInputElement }[] {
+    return FLAGS.flatMap(({ key, inputId }) => {
+      const input = document.getElementById(inputId) as HTMLInputElement | null;
+      return input ? [{ key, input }] : [];
+    });
+  }
+
   private setStatus(text: string): void {
     const status = document.getElementById('setting-session-limits-status');
     if (status) status.textContent = text;
@@ -70,9 +87,10 @@ export class SessionLimitSetting {
   async refresh(): Promise<void> {
     const id = ++this.loadId;
     const fields = this.inputs();
-    if (fields.length === 0) return;
+    const flags = this.flags();
+    if (fields.length === 0 && flags.length === 0) return;
     this.saved = null;
-    for (const { input } of fields) input.disabled = true;
+    for (const { input } of [...fields, ...flags]) input.disabled = true;
     this.setStatus('');
     this.setCounted(null);
     // Its failure, if any, stays in the status: it is news to whoever reopened.
@@ -95,10 +113,16 @@ export class SessionLimitSetting {
         input.value = String(body[key]);
         input.disabled = false;
       }
+      for (const { key, input } of flags) {
+        // An older server without this flag: leave its box disabled and unticked.
+        input.checked = body[key] === true;
+        input.disabled = typeof body[key] !== 'boolean';
+      }
       this.setCounted(body.counted);
     } catch {
       if (id !== this.loadId) return;
       for (const { input } of fields) input.value = '';
+      for (const { input } of flags) input.checked = false;
       this.setStatus('Could not read the session limits from the server.');
     }
   }
@@ -118,13 +142,16 @@ export class SessionLimitSetting {
     const saved = this.saved;
     // Never loaded: nothing to change, and the other settings can still save.
     if (!saved) return true;
-    const changes: Partial<Record<LimitKey, number | null>> = {};
+    const changes: Partial<Record<LimitKey, number | null> & Record<FlagKey, boolean>> = {};
     for (const { key, input } of this.inputs()) {
       if (input.disabled) continue;
       const value = Number(input.value);
       if (input.value.trim() !== '' && value === saved[key]) continue;
       // An empty or fractional field reaches the server's check, whose message names the range.
       changes[key] = input.value.trim() === '' ? null : value;
+    }
+    for (const { key, input } of this.flags()) {
+      if (!input.disabled && input.checked !== (saved[key] === true)) changes[key] = input.checked;
     }
     if (Object.keys(changes).length === 0) return true;
     this.setStatus('');
