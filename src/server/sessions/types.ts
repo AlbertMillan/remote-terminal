@@ -47,6 +47,11 @@ export interface SessionCreateOptions {
   account?: string;
   /** Only for a Log in session (accounts-routes.ts): it runs so the login can be fixed. */
   skipPreflight?: boolean;
+  /**
+   * Create `cwd` first (sessions/folder-picker.ts), once the session limit and the account
+   * preflight have passed, so a refused launch leaves no folder behind.
+   */
+  createCwd?: { git: boolean; projectDoc: boolean };
 }
 
 export interface SessionMetadata {

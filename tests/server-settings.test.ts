@@ -203,6 +203,6 @@ describe('maxSessions as loaded from config.json', () => {
 
   it('falls back to the default session settings when sessions is not an object', () => {
     writeFileSync(configPath, JSON.stringify({ sessions: [1, 2] }));
-    expect(loadConfig().sessions).toEqual({ maxSessions: 30, idleTimeoutMinutes: 0 });
+    expect(loadConfig().sessions).toEqual({ maxSessions: 30, idleTimeoutMinutes: 0, defaultCwd: '~/NodeProjects' });
   });
 });

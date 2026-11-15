@@ -26,6 +26,12 @@ export interface Config {
     maxSessions: number;
     defaultShell?: string;
     idleTimeoutMinutes: number; // 0 = never
+    /**
+     * Where a session with no folder opens, and what Tab fills in the New Session dialog.
+     * `~`-relative or absolute; a missing folder falls back to the home folder
+     * (sessions/folder-picker.ts).
+     */
+    defaultCwd?: string;
   };
   auth: {
     enabled: boolean;
@@ -90,6 +96,7 @@ const defaultConfig: Config = {
   sessions: {
     maxSessions: 30,
     idleTimeoutMinutes: 0,
+    defaultCwd: '~/NodeProjects',
   },
   auth: {
     enabled: false,

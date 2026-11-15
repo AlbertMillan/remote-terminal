@@ -22,6 +22,7 @@ import {
 import { homedir } from 'os';
 import { AccountRefusedError, cleanupAccount, isAccount } from '../../accounts.js';
 import { injectCommand } from '../../sessions/session-open.js';
+import { resolveCwdInput, type CreateFolderOptions } from '../../sessions/folder-picker.js';
 import type { ActiveSession } from '../../sessions/types.js';
 import {
   updateSessionCategory,
@@ -63,6 +64,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
   cols?: number;
   rows?: number;
   account?: string;
+  createCwd?: CreateFolderOptions;
 } {
   const validated: {
     name?: string;
@@ -71,6 +73,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
     cols?: number;
     rows?: number;
     account?: string;
+    createCwd?: CreateFolderOptions;
   } = {};
 
   // Validate and sanitize name
@@ -104,7 +107,19 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
     if (payload.cwd.includes('..')) {
       throw new Error('Invalid working directory path');
     }
-    validated.cwd = payload.cwd;
+    // As the New Session field means it: `~` is the home folder, a relative path is under
+    // the default folder (sessions/folder-picker.ts).
+    validated.cwd = resolveCwdInput(payload.cwd);
+  }
+
+  // Created by createSession once the launch is admitted; createFolder re-checks the path.
+  if (payload?.createCwd !== undefined) {
+    const c = payload.createCwd as unknown;
+    if (!validated.cwd || typeof c !== 'object' || c === null) {
+      throw new Error('createCwd needs a working directory and an options object');
+    }
+    const { git, projectDoc } = c as Record<string, unknown>;
+    validated.createCwd = { git: git === true, projectDoc: projectDoc === true };
   }
 
   // An unknown name is refused by createSession (resolveStartAccount), never swapped for another.

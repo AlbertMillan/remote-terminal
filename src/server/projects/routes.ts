@@ -3,6 +3,7 @@ import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject, listBoardCwds } from './workspace.js';
 import { getRollup } from './rollup.js';
 import { pathKey } from '../sessions/project-discovery.js';
+import { resolveCwdInput } from '../sessions/folder-picker.js';
 import {
   RegistryUnreadableError,
   loadRegistry,
@@ -373,8 +374,10 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   // idempotent, so the board, the new-session picker and dispatch can all ask.
 
   app.get<{ Querystring: { cwd?: string } }>('/api/projects/tracks', async (request, reply) => {
-    const { cwd } = request.query;
-    if (!cwd) return reply.status(400).send({ error: 'cwd required' });
+    const typed = request.query.cwd;
+    if (!typed) return reply.status(400).send({ error: 'cwd required' });
+    // As the New Session field means it: `~` and folders relative to the default one.
+    const cwd = resolveCwdInput(typed);
     // One board build serves both the membership check and the answer: an
     // unregistered project otherwise builds it twice per keystroke-debounce.
     const allProjects = getWorkspaceBoard();

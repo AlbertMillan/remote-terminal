@@ -52,7 +52,7 @@
   },
   "client": [
     { "type": "auth", "id": "1", "payload": {} },
-    { "type": "session.create", "id": "2", "payload": { "name": "shell", "cwd": "C:\\projects\\alpha", "cols": 80, "rows": 24 } },
+    { "type": "session.create", "id": "2", "payload": { "name": "shell", "cwd": "C:\\projects\\alpha", "cols": 80, "rows": 24, "createCwd": { "git": true, "projectDoc": false } } },
     { "type": "session.attach", "id": "3", "payload": { "sessionId": "s-1" } },
     { "type": "session.detach", "id": "4", "payload": { "sessionId": "s-1" } },
     { "type": "session.terminate", "id": "5", "payload": { "sessionId": "s-1" } },

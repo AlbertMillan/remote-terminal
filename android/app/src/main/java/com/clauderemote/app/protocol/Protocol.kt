@@ -87,7 +87,12 @@ data class SessionCreatePayload(
     val account: String? = null,
     val login: Boolean? = null,
     val cleanup: Boolean? = null,
+    val createCwd: CreateCwd? = null,
 )
+
+/** `session.create`'s folder to make first (the web dialog's; the app never sends it). */
+@Serializable
+data class CreateCwd(val git: Boolean, val projectDoc: Boolean)
 
 @Serializable
 data class SessionIdPayload(val sessionId: String)

@@ -30,6 +30,7 @@ import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases 
 import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
 import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
+import { completeFolder, resolveCwdInput } from './sessions/folder-picker.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { migrateBranchedPlans } from './projects/track-branches.js';
 import { projectCwdFor } from './projects/worktree-owner.js';
@@ -215,7 +216,7 @@ export async function createApp(): Promise<FastifyInstance> {
   // What "Default" means for a new session in `cwd`: its project's account, else the
   // configured one. A name only, like the route above.
   app.get<{ Querystring: { cwd?: string } }>('/api/accounts/resolve', async (request) => {
-    const fromProject = projectDefaultAccount(projectCwdFor(request.query?.cwd || undefined));
+    const fromProject = projectDefaultAccount(projectCwdFor(request.query?.cwd ? resolveCwdInput(request.query.cwd) : undefined));
     return fromProject
       ? { account: fromProject, source: 'project' as const }
       : { account: defaultAccount(), source: 'default' as const };
@@ -223,6 +224,13 @@ export async function createApp(): Promise<FastifyInstance> {
 
   app.get('/api/recent-paths', async () => {
     return { paths: getRecentPaths().map((p) => p.cwd) };
+  });
+
+  // The New Session folder field: completions, project search and the verdict on what is
+  // typed. Read-only; creating happens in session.create (sessions/folder-picker.ts).
+  app.get<{ Querystring: { q?: string } }>('/api/paths/complete', async (request) => {
+    const q = typeof request.query?.q === 'string' ? request.query.q : '';
+    return completeFolder(q);
   });
 
   // Project workspace: canonical PROJECT.md board, registry and feature edits.

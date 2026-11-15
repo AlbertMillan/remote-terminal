@@ -99,6 +99,12 @@ vi.mock('../src/server/sessions/persistence.js', () => ({
   restoreScrollback: vi.fn(() => []),
 }));
 
+// The folder picker's own rules are tested in folder-picker.test.ts; here only when it runs.
+vi.mock('../src/server/sessions/folder-picker.js', () => ({
+  defaultCwd: vi.fn(() => '/home/test/NodeProjects'),
+  createFolder: vi.fn(async (path: string) => path),
+}));
+
 // Mock logger
 vi.mock('../src/server/utils/logger.js', () => ({
   createLogger: vi.fn(() => ({
@@ -898,5 +904,68 @@ describe('Tmux Session Name Validation', () => {
     expect(VALID_SESSION_NAME_PATTERN.test('session\nname')).toBe(false);
     expect(VALID_SESSION_NAME_PATTERN.test('')).toBe(false);
     expect(VALID_SESSION_NAME_PATTERN.test('session"name')).toBe(false);
+  });
+});
+
+describe('SessionManager - creating the folder (createCwd)', () => {
+  // project/new-session-folder-picker.md: a refused launch must leave no folder behind.
+  let createSessionManager: () => any;
+  let createFolder: MockInstance;
+  let assertAccountReady: MockInstance;
+  let spawn: MockInstance;
+  const createCwd = { git: true, projectDoc: true };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockStmt.get.mockReturnValue({ count: 0 });
+    mockStmt.all.mockReturnValue([]);
+    createFolder = (await import('../src/server/sessions/folder-picker.js')).createFolder as unknown as MockInstance;
+    assertAccountReady = (await import('../src/server/accounts.js')).assertAccountReady as unknown as MockInstance;
+    spawn = (await import('node-pty')).spawn as unknown as MockInstance;
+    createSessionManager = (await import('../src/server/sessions/manager.js')).createSessionManager;
+  });
+
+  it('creates the folder after the account preflight and before the PTY, and opens the result', async () => {
+    createFolder.mockResolvedValueOnce('/home/test/NodeProjects/made');
+    const manager = createSessionManager();
+    const session = await manager.createSession({ cwd: '/home/test/NodeProjects/made', createCwd });
+    expect(createFolder).toHaveBeenCalledWith('/home/test/NodeProjects/made', createCwd);
+    expect(assertAccountReady.mock.invocationCallOrder[0]).toBeLessThan(createFolder.mock.invocationCallOrder[0]);
+    expect(createFolder.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+    expect(session.cwd).toBe('/home/test/NodeProjects/made');
+    await manager.shutdown();
+  });
+
+  it('creates nothing when the account preflight refuses', async () => {
+    assertAccountReady.mockImplementationOnce(() => {
+      throw new Error('not logged in');
+    });
+    const manager = createSessionManager();
+    await expect(manager.createSession({ cwd: '/home/test/NodeProjects/x', createCwd })).rejects.toThrow('not logged in');
+    expect(createFolder).not.toHaveBeenCalled();
+    await manager.shutdown();
+  });
+
+  it('creates nothing when the session limit refuses', async () => {
+    mockStmt.get.mockReturnValue({ count: 10 });
+    const manager = createSessionManager();
+    await expect(manager.createSession({ cwd: '/home/test/NodeProjects/x', createCwd })).rejects.toThrow(/limit/);
+    expect(createFolder).not.toHaveBeenCalled();
+    await manager.shutdown();
+  });
+
+  it('starts no PTY when the folder is refused', async () => {
+    createFolder.mockRejectedValueOnce(new Error('outside your user folder'));
+    const manager = createSessionManager();
+    await expect(manager.createSession({ cwd: '/elsewhere/x', createCwd })).rejects.toThrow('outside');
+    expect(spawn).not.toHaveBeenCalled();
+    await manager.shutdown();
+  });
+
+  it('never creates a folder without createCwd', async () => {
+    const manager = createSessionManager();
+    await manager.createSession({ cwd: '/home/test/NodeProjects/existing' });
+    expect(createFolder).not.toHaveBeenCalled();
+    await manager.shutdown();
   });
 });

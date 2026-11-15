@@ -36,6 +36,7 @@ import { revokeAllSessionTokens, revokeSessionToken, sessionEnv } from './sessio
 import { deletePromptFile } from './prompt-file.js';
 import { assertAccountReady, resolveStartAccount } from '../accounts.js';
 import { projectCwdFor } from '../projects/worktree-owner.js';
+import { createFolder, defaultCwd } from './folder-picker.js';
 
 const logger = createLogger('session-manager');
 
@@ -139,7 +140,8 @@ class SessionManager {
     const id = randomUUID();
     const name = options.name || `Session ${activeCount + 1}`;
     const shell = options.shell || config.sessions.defaultShell || getDefaultShell();
-    const cwd = options.cwd || process.cwd();
+    // No folder: the configured default (~/NodeProjects), never the server's own checkout.
+    let cwd = options.cwd || defaultCwd();
     const cols = options.cols || 80;
     const rows = options.rows || 24;
     const now = new Date();
@@ -147,6 +149,9 @@ class SessionManager {
     // Before anything exists: a refused start leaves no row and no PTY. A Log in session
     // skips it — it is how the login gets there.
     if (!options.skipPreflight) assertAccountReady(account);
+    // Only once the slot and the login are settled: a refused launch must leave no folder.
+    // createFolder re-checks the path itself; the dialog's check is advisory.
+    if (options.createCwd && options.cwd) cwd = await createFolder(cwd, options.createCwd);
 
     logger.info({ id, name, shell, cwd, account }, 'Creating new session');
 

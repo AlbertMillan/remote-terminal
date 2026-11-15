@@ -24,7 +24,7 @@ import {
   showPromptMissing,
 } from './land-result.js';
 import { ProjectLogView } from './project-log-view.js';
-import { NewSessionModal } from './new-session-modal.js';
+import { NewSessionModal, type CreateCwd } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
 import { StopRequests, currentAfterRevive, isLive } from './session-stop.js';
 import { SessionListView, isFilterShortcut, openMobileSidebar } from './session-list-view.js';
@@ -114,7 +114,7 @@ class SessionManager {
 
   /** The "New Session" modal: name/cwd fields, recent-path suggestions, the Track picker. */
   private newSessionModal = new NewSessionModal({
-    createSession: (name, cwd, notice, account) => this.createSession(name, cwd, notice, account),
+    createSession: (name, cwd, notice, account, createCwd) => this.createSession(name, cwd, notice, account, createCwd),
   });
 
   /** A launch the account preflight refused: Log in / Clean up (docs/accounts.md). */
@@ -357,8 +357,8 @@ class SessionManager {
     });
     const cwdInput = document.getElementById('session-cwd-input') as HTMLInputElement | null;
     cwdInput?.addEventListener('keydown', (e) => this.newSessionModal.handleCwdInputKeydown(e));
-    cwdInput?.addEventListener('input', () => {
-      this.newSessionModal.renderCwdSuggestions();
+    cwdInput?.addEventListener('input', (e) => {
+      this.newSessionModal.onCwdInput(e);
       this.newSessionModal.trackPicker.schedule();
       this.newSessionModal.scheduleDefaultAccount();
     });
@@ -372,12 +372,7 @@ class SessionManager {
     cwdInput?.addEventListener('blur', () => {
       setTimeout(() => this.newSessionModal.hideCwdSuggestions(), 150);
     });
-    document.getElementById('cwd-toggle')?.addEventListener('mousedown', (e) => {
-      // mousedown + preventDefault so the input doesn't blur (which would race
-      // with the toggle and immediately re-hide the list).
-      e.preventDefault();
-      this.newSessionModal.toggleCwdSuggestions();
-    });
+    document.getElementById('session-cwd-verdict')?.addEventListener('change', (e) => this.newSessionModal.onVerdictChange(e));
 
     // Rename modal
     document.getElementById('rename-cancel')?.addEventListener('click', () => this.hideRenameModal());
@@ -1375,10 +1370,16 @@ class SessionManager {
    * locally and never sent to the PTY: a track session whose dependency
    * install failed opens anyway and says so where the user is looking.
    */
-  createSession(name?: string, cwd?: string, notice?: string, account?: string): void {
+  createSession(name?: string, cwd?: string, notice?: string, account?: string, createCwd?: CreateCwd): void {
     this.createNotice = notice && cwd ? { cwd, text: notice } : null;
-    const id = this.send('session.create', { name, cwd, ...(account ? { account } : {}) });
-    this.launchRetries.set(id, () => this.createSession(name, cwd, notice, account));
+    const id = this.send('session.create', {
+      name,
+      cwd,
+      ...(account ? { account } : {}),
+      ...(createCwd ? { createCwd } : {}),
+    });
+    // A retry may create again: the folder exists by then, and is simply opened.
+    this.launchRetries.set(id, () => this.createSession(name, cwd, notice, account, createCwd));
   }
 
   /**

@@ -1665,40 +1665,6 @@ body {
   position: relative;
 }
 
-.cwd-field input[type="text"] {
-  padding-right: 40px;
-}
-
-.cwd-toggle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
-  width: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 0 10px 10px 0;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color var(--transition-fast);
-}
-
-.cwd-toggle:hover {
-  color: var(--accent);
-}
-
-.cwd-toggle svg {
-  transition: transform var(--transition-fast);
-}
-
-.cwd-toggle.open svg {
-  transform: rotate(180deg);
-}
-
 .cwd-suggestions {
   position: absolute;
   top: calc(100% + 6px);
@@ -1737,15 +1703,46 @@ body {
   color: var(--text-muted);
 }
 
-.cwd-suggestion .cwd-suggestion-path {
+.cwd-item-text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cwd-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cwd-item-name strong { font-weight: 700; }
+
+.cwd-item-path {
+  font-size: 11px;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Truncate from the LEFT so the meaningful tail (project folder) stays
-     visible; the &lrm; in the markup keeps the path reading left-to-right. */
+  /* Truncate from the LEFT so the project folder stays visible; the &lrm; in the
+     markup keeps the path reading left-to-right. */
   direction: rtl;
+  text-align: left;
+}
+
+.cwd-tag {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.cwd-tag-doc {
+  color: var(--success);
+  border-color: rgba(158, 206, 106, 0.45);
 }
 
 .cwd-suggestion:hover,
@@ -1754,8 +1751,145 @@ body {
 }
 
 .cwd-suggestion:hover svg,
-.cwd-suggestion.active svg {
+.cwd-suggestion.active svg,
+.cwd-new-folder svg {
   color: var(--accent);
+}
+
+.cwd-group {
+  padding: 6px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.cwd-keys {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+  padding: 8px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cwd-field kbd,
+.cwd-verdict-slot kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 5px;
+  background: var(--bg-tertiary);
+}
+
+/* The rest of the top match, drawn after the typed text; Tab accepts it. */
+.cwd-ghost {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
+}
+
+.cwd-ghost-typed { visibility: hidden; }
+.cwd-ghost-rest { color: var(--text-muted); }
+
+/* What Create will do with the typed folder. */
+.cwd-verdict-slot code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.cwd-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.cwd-hint-ok svg { color: var(--success); flex-shrink: 0; }
+.cwd-hint strong { color: var(--text-primary); }
+
+.cwd-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cwd-verdict-new {
+  background: rgba(122, 162, 247, 0.1);
+  border: 1px solid rgba(122, 162, 247, 0.35);
+}
+
+.cwd-verdict-refused {
+  background: rgba(224, 175, 104, 0.1);
+  border: 1px solid rgba(224, 175, 104, 0.35);
+}
+
+.cwd-verdict-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cwd-verdict-new .cwd-verdict-title svg { color: var(--accent); }
+.cwd-verdict-refused .cwd-verdict-title svg { color: var(--warning); }
+
+.cwd-verdict-path {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary) !important;
+}
+
+.cwd-new-part {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.cwd-verdict-reason { line-height: 1.6; }
+
+/* Plain-case labels: .form-group label is the uppercase field caption. */
+.form-group label.cwd-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.cwd-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .modal-actions {

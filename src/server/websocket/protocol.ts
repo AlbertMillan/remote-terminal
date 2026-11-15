@@ -113,6 +113,11 @@ export interface SessionCreatePayload {
   login?: boolean;
   /** With `login`: first delete the org-pushed `remote-settings*.json` in that folder. */
   cleanup?: boolean;
+  /**
+   * Create `cwd` first (only inside the user folder; sessions/folder-picker.ts), with
+   * `git init` and a starter PROJECT.md as asked. An existing folder is opened as it is.
+   */
+  createCwd?: { git: boolean; projectDoc: boolean };
 }
 
 export interface SessionAttachPayload {
