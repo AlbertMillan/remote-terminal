@@ -10,6 +10,19 @@ export function isInside(root: string, p: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+/**
+ * The cwd the claude-session hook may record for a session, or undefined to keep `stored`.
+ * A folder **below** the stored one is refused: older hooks send `$PWD`, which is wherever
+ * Claude last `cd`'d, and recording it moves the session into a subfolder, where its relative
+ * file links stop resolving and Resume looks for the transcript under the wrong project.
+ * Any other folder (a project moved, a session that never had one) is recorded.
+ */
+export function hookCwdToStore(stored: string | null | undefined, reported: string | undefined): string | undefined {
+  if (!reported) return undefined;
+  if (stored && isInside(stored, reported) && pathKey(stored) !== pathKey(reported)) return undefined;
+  return reported;
+}
+
 /** Normalize a path for case/separator-insensitive dedup keys (Windows-friendly). */
 export function pathKey(p: string): string {
   return p.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();

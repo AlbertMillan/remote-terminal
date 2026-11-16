@@ -29,7 +29,7 @@ export { pathKey };
  * real working directory on each transcript line). Returns null if none found in
  * the first chunk. Reads only the head of the file to stay cheap on big logs.
  */
-function readTranscriptCwd(file: string): string | null {
+export function readTranscriptCwd(file: string): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(file, 'r');

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findPathCandidates, readLogicalLine, registerFileLinks, type LinkHost } from '../src/client/file-links.js';
+import { fileOpenUrl, findPathCandidates, readLogicalLine, registerFileLinks, type LinkHost } from '../src/client/file-links.js';
 
 /** Paths in terminal text become links only when the server says they are files. */
 
@@ -145,5 +145,17 @@ describe('registerFileLinks', () => {
     const { host, linksAt } = hostFor([{ text: 'a.md' }]);
     registerFileLinks(host, { sessionId: () => 's1', check: async () => Promise.reject(new Error('down')) });
     expect(await linksAt(1)).toBeUndefined();
+  });
+});
+
+describe('fileOpenUrl', () => {
+  it('opens a page on the view route, its path in the URL path so relative links resolve', () => {
+    expect(fileOpenUrl('s1', 'render/out/A3 zone/index.html')).toBe('/api/sessions/s1/files/view/render/out/A3%20zone/index.html');
+    expect(fileOpenUrl('s1', String.raw`C:\work\site\page.HTM:12`)).toBe('/api/sessions/s1/files/view/C%3A/work/site/page.HTM');
+    expect(fileOpenUrl('s1', '/home/me/page.html')).toBe('/api/sessions/s1/files/view/%2Fhome/me/page.html');
+  });
+
+  it('opens anything else on the open route', () => {
+    expect(fileOpenUrl('s1', 'render/README.md')).toBe('/api/sessions/s1/files/open?path=render%2FREADME.md');
   });
 });

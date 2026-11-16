@@ -142,8 +142,19 @@ async function checkOnServer(sessionId: string, paths: string[]): Promise<string
   return Array.isArray(body.found) ? body.found.filter((p): p is string => typeof p === 'string') : [];
 }
 
+/**
+ * Where a click on `path` goes. A page (`.html`) opens on the view route, with the path in the
+ * URL's own path so its relative images and scripts resolve beside it (the server shows it
+ * sandboxed); everything else on the open route.
+ */
 export function fileOpenUrl(sessionId: string, path: string): string {
-  return `/api/sessions/${encodeURIComponent(sessionId)}/files/open?path=${encodeURIComponent(path)}`;
+  const session = encodeURIComponent(sessionId);
+  const file = path.replace(/:\d+(?::\d+)?$/, '');
+  if (/\.html?$/i.test(file)) {
+    const segments = file.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/');
+    return `/api/sessions/${session}/files/view/${segments.replace(/^\//, '%2F')}`;
+  }
+  return `/api/sessions/${session}/files/open?path=${encodeURIComponent(path)}`;
 }
 
 function openInTab(sessionId: string, path: string): void {

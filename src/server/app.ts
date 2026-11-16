@@ -48,6 +48,7 @@ import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
 import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
+import { hookCwdToStore } from './utils/paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -346,12 +347,9 @@ export async function createApp(): Promise<FastifyInstance> {
     }
 
     // C2: Validate session exists to prevent arbitrary ID poisoning
-    const activeSession = sessionManager.getSession(sessionId);
-    if (!activeSession) {
-      const dbSession = getSessionFromDb(sessionId);
-      if (!dbSession) {
-        return reply.status(404).send({ error: 'Session not found' });
-      }
+    const dbSession = getSessionFromDb(sessionId);
+    if (!sessionManager.getSession(sessionId) && !dbSession) {
+      return reply.status(404).send({ error: 'Session not found' });
     }
 
     let cwd = typeof body?.cwd === 'string' && body.cwd.length > 0 ? body.cwd : undefined;
@@ -362,7 +360,8 @@ export async function createApp(): Promise<FastifyInstance> {
     if (cwd && process.platform === 'win32') {
       cwd = cwd.replace(/^\/([a-zA-Z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, '\\');
     }
-    setClaudeSessionId(sessionId, claudeSessionId, cwd);
+    // A subfolder of the stored cwd is Claude's `cd`, not a new project (hookCwdToStore).
+    setClaudeSessionId(sessionId, claudeSessionId, hookCwdToStore(dbSession?.cwd, cwd));
     // A Claude just started or stopped here, possibly right after a `/login`.
     recheckAccounts();
     return { success: true };

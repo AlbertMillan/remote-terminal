@@ -9,6 +9,7 @@ import {
   registerSessionFileRoutes,
   resolveSessionFile,
   servingFor,
+  viewUrlPath,
 } from '../src/server/sessions/session-files.js';
 
 // A spy on realpath, to prove an outside path never reaches the filesystem.
@@ -232,5 +233,112 @@ describe('routes', () => {
     expect(missing.statusCode).toBe(404);
     expect(escaped.statusCode).toBe(404);
     expect(escaped.body).toBe(missing.body);
+  });
+});
+
+describe('a session whose cwd drifted below its project', () => {
+  // An old `$PWD` claude-session hook recorded the folder Claude last `cd`'d into, while
+  // Claude keeps printing paths relative to the folder its conversation started in.
+  async function driftedApp(projectDir: string | null = cwd) {
+    const sub = join(cwd, 'refs');
+    writeFileSync(join(sub, 'local.md'), 'here');
+    const app = Fastify();
+    registerSessionFileRoutes(app, {
+      verify: async () => ({ userId: 'me' }),
+      getSession: () => ({ cwd: sub, claudeSessionId: 'c1' }),
+      projectDirOf: () => projectDir,
+    });
+    await app.ready();
+    return app;
+  }
+  const check = async (app: Awaited<ReturnType<typeof driftedApp>>, paths: string[]) =>
+    (await app.inject({ method: 'POST', url: '/api/sessions/s1/files/check', payload: { paths } })).json();
+
+  it('links paths relative to the project folder, and still to the cwd', async () => {
+    const app = await driftedApp();
+    expect(await check(app, ['refs/brief/Reinhardt.png', 'NUANCES.md', 'local.md', 'brief/Reinhardt.png'])).toEqual({
+      found: ['refs/brief/Reinhardt.png', 'NUANCES.md', 'local.md', 'brief/Reinhardt.png'],
+    });
+    const open = await app.inject({ method: 'GET', url: '/api/sessions/s1/files/open?path=NUANCES.md' });
+    expect(open.statusCode).toBe(200);
+    expect(open.body).toBe('# nuances');
+  });
+
+  it('opens nothing outside either folder', async () => {
+    const app = await driftedApp();
+    expect(await check(app, ['../secret/key.txt', '../../secret/key.txt', join(outside, 'key.txt')])).toEqual({ found: [] });
+  });
+
+  it('without a known project folder, resolves against the cwd alone', async () => {
+    const app = await driftedApp(null);
+    expect(await check(app, ['NUANCES.md', 'local.md'])).toEqual({ found: ['local.md'] });
+  });
+});
+
+describe('the view route: a page shown in place, sandboxed', () => {
+  const host = 'pc.tailnet.ts.net:4220';
+  async function viewApp(verify: (ip: string) => Promise<unknown> = async () => ({ userId: 'me' })) {
+    mkdirSync(join(cwd, 'site', 'light_oak'), { recursive: true });
+    writeFileSync(join(cwd, 'site', 'index.html'), '<img src="light_oak/living.png"><script>1</script>');
+    writeFileSync(join(cwd, 'site', 'light_oak', 'living.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(join(cwd, 'site', 'app.js'), 'console.log(1)');
+    const app = Fastify();
+    registerSessionFileRoutes(app, { verify, getSession: (id) => (id === 's1' ? { cwd } : null) });
+    await app.ready();
+    return app;
+  }
+  const get = (app: Awaited<ReturnType<typeof viewApp>>, url: string) =>
+    app.inject({ method: 'GET', url, headers: { host } });
+
+  it('redirects a relative page to its absolute path, so siblings resolve beside it', async () => {
+    const app = await viewApp();
+    const res = await get(app, '/api/sessions/s1/files/view/site/index.html');
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(viewUrlPath('s1', join(cwd, 'site', 'index.html')));
+  });
+
+  it('shows the page inline as an opaque origin, its fetches confined to the view tree', async () => {
+    const app = await viewApp();
+    const res = await get(app, viewUrlPath('s1', join(cwd, 'site', 'index.html')));
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/^text\/html/);
+    expect(res.headers['content-disposition']).toMatch(/^inline/);
+    const csp = String(res.headers['content-security-policy']);
+    expect(csp).toMatch(/^sandbox allow-scripts;/);
+    expect(csp).not.toMatch(/allow-same-origin|allow-forms|allow-popups|allow-top-navigation/);
+    expect(csp).toContain(`connect-src ${host}/api/sessions/s1/files/view/;`);
+    expect(csp).toContain("default-src 'none'");
+  });
+
+  it("serves the page's relative image and script, each sandboxed too", async () => {
+    const app = await viewApp();
+    const page = viewUrlPath('s1', join(cwd, 'site', 'index.html'));
+    const img = await get(app, new URL('light_oak/living.png', `http://x${page}`).pathname);
+    expect(img.statusCode).toBe(200);
+    expect(img.headers['content-type']).toBe('image/png');
+    const js = await get(app, new URL('app.js', `http://x${page}`).pathname);
+    expect(js.headers['content-type']).toMatch(/^text\/javascript/);
+    expect(js.headers['content-security-policy']).toMatch(/^sandbox allow-scripts;/);
+  });
+
+  it('opens nothing outside the session folders', async () => {
+    const app = await viewApp();
+    expect((await get(app, viewUrlPath('s1', join(outside, 'key.txt')))).statusCode).toBe(404);
+    expect((await get(app, '/api/sessions/s1/files/view/..%2Fsecret%2Fkey.txt')).statusCode).toBe(404);
+    expect((await get(app, '/api/sessions/s1/files/view/%2F%2Fevil.example%2Fshare%2Fx.html')).statusCode).toBe(404);
+  });
+
+  it('refuses an unverified caller, and a host unfit for the policy', async () => {
+    const page = viewUrlPath('s1', join(cwd, 'site', 'index.html'));
+    expect((await get(await viewApp(async () => null), page)).statusCode).toBe(403);
+    const app = await viewApp();
+    const bad = await app.inject({ method: 'GET', url: page, headers: { host: "x; script-src *" } });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it('still downloads html from the open route', async () => {
+    const app = await viewApp();
+    const res = await get(app, '/api/sessions/s1/files/open?path=site/index.html');
+    expect(res.headers['content-disposition']).toMatch(/^attachment/);
   });
 });
