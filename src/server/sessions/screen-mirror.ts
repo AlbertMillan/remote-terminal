@@ -1,6 +1,7 @@
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
 import { getConfig } from '../config.js';
+import { resetWrapOnLineStart } from '../../client/wrap-reset.js';
 
 /**
  * Marks a stored scrollback as a ScreenMirror snapshot. An OSC with an unknown number is
@@ -43,6 +44,8 @@ export class ScreenMirror {
       // Same as the browser terminal: ConPTY's bare LF means "down one row, same column".
       convertEol: false,
     });
+    // As the browser terminal does, or the snapshot carries the same glued rows.
+    resetWrapOnLineStart(this.terminal);
     this.serializer = new serialize.SerializeAddon();
     this.terminal.loadAddon(this.serializer);
   }

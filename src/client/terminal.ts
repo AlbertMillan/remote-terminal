@@ -1,6 +1,7 @@
 import { dragHasFiles, filesFromTransfer } from './pasted-file.js';
 import { registerFileLinks, type LinkHost } from './file-links.js';
 import { isFilterShortcut } from './session-list-view.js';
+import { resetWrapOnLineStart } from './wrap-reset.js';
 
 // Terminal management using xterm.js
 
@@ -31,6 +32,9 @@ interface ITerminal {
   onResize(callback: (size: { cols: number; rows: number }) => void): void;
   loadAddon(addon: ITerminalAddon): void;
   attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean): void;
+  parser: {
+    registerCsiHandler(id: { final: string }, handler: (params: (number | number[])[]) => boolean): unknown;
+  };
 }
 
 interface ITerminalAddon {
@@ -147,6 +151,8 @@ export class TerminalManager {
       lineHeight: 1.2,
       theme: TERMINAL_THEME,
     });
+    // Or a resize glues a repainted row onto the line above it (see wrap-reset.ts).
+    resetWrapOnLineStart(this.terminal);
 
     // Intercept Ctrl+Q / Ctrl+E for session navigation (prevent sending to PTY)
     this.terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {

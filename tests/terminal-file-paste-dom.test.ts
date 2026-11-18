@@ -52,6 +52,7 @@ describe('terminal file paste and drop', () => {
         onResize() {}
         loadAddon() {}
         attachCustomKeyEventHandler() {}
+        parser = { registerCsiHandler() {} };
       }
     );
     vi.stubGlobal('FitAddon', { FitAddon: class { fit() {} } });
