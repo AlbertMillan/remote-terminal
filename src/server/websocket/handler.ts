@@ -7,6 +7,8 @@ import { deviceIdFromUrl } from './validation.js';
 import {
   parseMessage,
   createMessage,
+  type ClientMessage,
+  type ClientMessageType,
   type NotificationPayload,
   type JobsSummaryPayload,
   type AppStatePayload,
@@ -210,6 +212,51 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
   });
 }
 
+type MessageHandler = (connection: ClientConnection, message: ClientMessage) => void | Promise<void>;
+
+/**
+ * One handler per client message type. Typed over ClientMessageType, so a type added to
+ * protocol.ts without a handler here fails to compile. `auth` has none: identity comes from
+ * the caller's IP when the socket opens, never from a message.
+ */
+const HANDLERS: Record<Exclude<ClientMessageType, 'auth'>, MessageHandler> = {
+  ping: (connection, message) => connection.ws.send(createMessage('pong', undefined, message.id)),
+  'session.list': handleSessionList,
+  'session.create': handleSessionCreate,
+  'session.attach': handleSessionAttach,
+  'session.detach': handleSessionDetach,
+  'session.terminate': handleSessionTerminate,
+  'session.delete': handleSessionDelete,
+  'session.rename': handleSessionRename,
+  'session.move': handleSessionMove,
+  'session.reorder': handleSessionReorder,
+  'session.fork': handleSessionFork,
+  'session.open': handleSessionOpen,
+  'session.revive': handleSessionRevive,
+  'session.stop': handleSessionStop,
+  'session.changeAccount': handleSessionChangeAccount,
+  'session.keep': handleSessionKeep,
+  'category.create': handleCategoryCreate,
+  'category.rename': handleCategoryRename,
+  'category.delete': handleCategoryDelete,
+  'category.reorder': handleCategoryReorder,
+  'category.toggle': handleCategoryToggle,
+  'category.list': handleCategoryList,
+  'notification.preferences.get': handleNotificationPreferencesGet,
+  'notification.preferences.set': handleNotificationPreferencesSet,
+  'notification.dismiss': handleNotificationDismiss,
+  'terminal.data': handleTerminalData,
+  'terminal.resize': handleTerminalResize,
+  'app.state': (connection, message) => {
+    const payload = message.payload as AppStatePayload | undefined;
+    connection.foreground = payload?.foreground === true;
+  },
+};
+
+export function handlerFor(type: string): MessageHandler | undefined {
+  return Object.prototype.hasOwnProperty.call(HANDLERS, type) ? HANDLERS[type as keyof typeof HANDLERS] : undefined;
+}
+
 function handleMessage(connection: ClientConnection, data: string): void {
   const message = parseMessage(data);
 
@@ -220,125 +267,15 @@ function handleMessage(connection: ClientConnection, data: string): void {
 
   logger.debug({ clientId: connection.id, type: message.type }, 'Received message');
 
-  switch (message.type) {
-    case 'ping':
-      connection.ws.send(createMessage('pong', undefined, message.id));
-      break;
-
-    case 'session.list':
-      handleSessionList(connection, message);
-      break;
-
-    case 'session.create':
-      handleSessionCreate(connection, message);
-      break;
-
-    case 'session.attach':
-      handleSessionAttach(connection, message);
-      break;
-
-    case 'session.detach':
-      handleSessionDetach(connection, message);
-      break;
-
-    case 'session.terminate':
-      handleSessionTerminate(connection, message);
-      break;
-
-    case 'session.delete':
-      handleSessionDelete(connection, message);
-      break;
-
-    case 'session.rename':
-      handleSessionRename(connection, message);
-      break;
-
-    case 'session.move':
-      handleSessionMove(connection, message);
-      break;
-
-    case 'session.reorder':
-      handleSessionReorder(connection, message);
-      break;
-
-    case 'session.fork':
-      handleSessionFork(connection, message);
-      break;
-
-    case 'session.open':
-      handleSessionOpen(connection, message);
-      break;
-
-    case 'session.revive':
-      handleSessionRevive(connection, message);
-      break;
-
-    case 'session.stop':
-      void handleSessionStop(connection, message);
-      break;
-
-    case 'session.changeAccount':
-      void handleSessionChangeAccount(connection, message);
-      break;
-
-    case 'session.keep':
-      handleSessionKeep(connection, message);
-      break;
-
-    case 'category.create':
-      handleCategoryCreate(connection, message);
-      break;
-
-    case 'category.rename':
-      handleCategoryRename(connection, message);
-      break;
-
-    case 'category.delete':
-      handleCategoryDelete(connection, message);
-      break;
-
-    case 'category.reorder':
-      handleCategoryReorder(connection, message);
-      break;
-
-    case 'category.toggle':
-      handleCategoryToggle(connection, message);
-      break;
-
-    case 'category.list':
-      handleCategoryList(connection, message);
-      break;
-
-    case 'notification.preferences.get':
-      handleNotificationPreferencesGet(connection, message);
-      break;
-
-    case 'notification.preferences.set':
-      handleNotificationPreferencesSet(connection, message);
-      break;
-
-    case 'notification.dismiss':
-      handleNotificationDismiss(connection, message);
-      break;
-
-    case 'terminal.data':
-      handleTerminalData(connection, message);
-      break;
-
-    case 'terminal.resize':
-      handleTerminalResize(connection, message);
-      break;
-
-    case 'app.state': {
-      const payload = message.payload as AppStatePayload | undefined;
-      connection.foreground = payload?.foreground === true;
-      break;
-    }
-
-    default:
-      connection.ws.send(
-        createMessage('error', { message: `Unknown message type: ${message.type}` }, message.id)
-      );
+  const handler = handlerFor(message.type);
+  if (!handler) {
+    connection.ws.send(createMessage('error', { message: `Unknown message type: ${message.type}` }, message.id));
+    return;
+  }
+  // An async handler's failure is logged, never left as an unhandled rejection.
+  const result = handler(connection, message);
+  if (result instanceof Promise) {
+    result.catch((error: unknown) => logger.error({ clientId: connection.id, type: message.type, error }, 'Message handler failed'));
   }
 }
 

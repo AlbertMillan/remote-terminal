@@ -207,14 +207,7 @@ export async function handleSessionCreate(connection: ClientConnection, message:
       )
     );
 
-    // Detach from current session before auto-attaching to new one
-    // Without this, the old session's data listener leaks (never unsubscribed),
-    // causing duplicate terminal output when switching back to it
-    if (connection.attachedSession) {
-      detachFromSession(connection);
-    }
-
-    // Auto-attach to the new session
+    // Auto-attach to the new session (attachToSession detaches from the old one first).
     attachToSession(connection, session.id);
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to create session'), message.id));
@@ -238,22 +231,15 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
   // Get session metadata from database to include categoryId
   const sessionMetadata = getSessionFromDb(payload.sessionId);
 
-  // Detach from current session if any
-  if (connection.attachedSession) {
-    detachFromSession(connection);
-  }
-
   // Subscribe and ask for the snapshot in the same tick, holding live output until it is
   // ready: output from before is in the snapshot, output after is held, none of it twice.
   // `session.attached` goes first, so the client resets its terminal before any of it.
   const sessionId = payload.sessionId;
-  attachToSession(connection, sessionId);
-  const held: string[] = [];
-  connection.heldData = held;
+  const output = attachToSession(connection, sessionId);
+  output.hold();
   sessionManager.withScrollback(sessionId, (scrollback) => {
     // A later attach, a detach or a close won while the mirror caught up.
-    if (connection.heldData !== held || connection.ws.readyState !== WS_OPEN) return;
-    connection.heldData = null;
+    if (connection.output !== output || connection.ws.readyState !== WS_OPEN) return;
     // Its current size: the snapshot is drawn at it, and the client replays at these dims.
     const current = sessionManager.getSession(sessionId) ?? session;
     connection.ws.send(
@@ -266,7 +252,7 @@ export function handleSessionAttach(connection: ClientConnection, message: Clien
         message.id
       )
     );
-    for (const data of held) connection.ws.send(createMessage('terminal.data', { sessionId, data }));
+    output.release();
   });
 }
 
@@ -416,10 +402,7 @@ export async function handleSessionFork(connection: ClientConnection, message: C
       )
     );
 
-    // Detach from source, auto-attach to fork
-    if (connection.attachedSession) {
-      detachFromSession(connection);
-    }
+    // Auto-attach to the fork (attachToSession detaches from the source first).
     attachToSession(connection, forkedSession.id);
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to fork session'), message.id));
@@ -473,9 +456,6 @@ export async function handleSessionOpen(connection: ClientConnection, message: C
       )
     );
 
-    if (connection.attachedSession) {
-      detachFromSession(connection);
-    }
     attachToSession(connection, session.id);
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to open session'), message.id));
@@ -513,11 +493,6 @@ export function handleSessionRevive(connection: ClientConnection, message: Clien
       )
     );
 
-    // Same detach-before-attach order handleSessionCreate needs: attaching without detaching
-    // first leaks the previous session's data listener onto this connection.
-    if (connection.attachedSession) {
-      detachFromSession(connection);
-    }
     attachToSession(connection, session.id);
   } catch (error) {
     connection.ws.send(createMessage('session.error', sessionErrorPayload(error, 'Failed to revive session'), message.id));

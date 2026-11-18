@@ -2,17 +2,9 @@ import type { RegistryProject } from './registry.js';
 import { withProjectLock } from './project-lock.js';
 import { buildProject, type BuildResult } from './project-build.js';
 import { isServerRoot, recheckBuildState, restartHint } from '../server-restart.js';
-import {
-  TrackBranchError,
-  behindMain,
-  getActiveTrackBranch,
-  landPreflight,
-  landTrack,
-  updateTrackFromMain,
-  type LandDeps,
-  type LandResult,
-  type UpdateResult,
-} from './track-branches.js';
+import { TrackBranchError, getActiveTrackBranch } from './track-branches.js';
+import { behindMain, updateTrackFromMain, type UpdateResult } from './track-update.js';
+import { landPreflight, landTrack, type LandDeps, type LandResult } from './track-land-core.js';
 import { installDependencies, needsInstall, type InstallResult } from './project-deps.js';
 import { broadcastProjectsChanged } from '../websocket/connections.js';
 import { mergeTrapAdvice, nameFiles } from './track-plan.js';

@@ -37,11 +37,15 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
 ## WebSocket (`/ws`; message types in `protocol.ts`)
 
 - `cols`/`rows` from **any** message pass `websocket/validation.ts` before reaching a PTY.
-- `handleSessionCreate` calls `detachFromSession()` before `attachToSession()`, or the old
-  session's listener leaks and keystrokes arrive twice.
-- Every `/api/*` and `/ws` request passes the Host check (`host-check.ts`, the `onRequest`
-  hook in `app.ts`, added before any route), or a DNS-rebound page reads every answer as the
-  user. A dotted name the user really uses goes in `server.allowedHosts`, never a wildcard.
+- `attachToSession()` detaches first; keep it there, or the old session's listener leaks
+  and keystrokes arrive twice. Output goes only through the connection's `TerminalOutput`
+  (`terminal-output.ts`), never a bare `ws.send`, or a slow client buffers without limit.
+- Every `/api/*` and `/ws` request passes the access gate (`auth/access-gate.ts`, registered
+  before any route): Host, Origin on writes, then loopback or a Tailscale identity. It judges
+  the **matched route**, never the raw URL (`/%61pi/…` runs `/api/…`). Without it the LAN
+  gets a shell. `auth.enabled` defaults on; a missing `tailscale` refuses, never admits.
+  A dotted name the user really uses goes in `server.allowedHosts`, never a wildcard.
+  → `docs/auth.md`
 - Terminal-path routes (`sessions/session-files.ts`) check containment **lexically before
   any filesystem call**: a UNC path reaching `realpath` sends the user's NTLM hash to that host.
 
@@ -80,8 +84,8 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   Claude Code path goes through `accounts.ts`, never `join(homedir(), '.claude', …)`.
   → `docs/accounts.md`
 - `/api/agent/*` needs loopback **and** a session token (`authenticate()`, the one guard);
-  the rest of `/api/*` is unauthenticated on `0.0.0.0`, so dropping either lets the tailnet
-  run commands. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
+  the gate admits every tailnet caller to the rest of `/api/*`, so dropping either lets any
+  tailnet device act as a session. Tokens live only in `session-env.ts`'s Map, never the DB, logs or scrollback.
 - A started session runs under its **caller's** account (another is refused, 403), or one
   login's session orchestrates work on another's.
 - A session changes account only through `changeSessionAccount()`, every refusal and the

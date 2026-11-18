@@ -21,17 +21,39 @@ export interface TailscaleIdentity {
   tailnet: string;
 }
 
+/** A found binary stays found; a missing one is looked for again after this long. */
+const AVAILABILITY_RETRY_MS = 60_000;
+let tailscaleFound = false;
+let tailscaleMissingAt = 0;
+
+/** Whether the `tailscale` CLI is on PATH. Cached: every identity check asks. */
 export async function isTailscaleAvailable(): Promise<boolean> {
+  if (tailscaleFound) return true;
+  if (tailscaleMissingAt && Date.now() - tailscaleMissingAt < AVAILABILITY_RETRY_MS) return false;
   try {
     const cmd = isWindows() ? 'where tailscale' : 'which tailscale';
     await execAsync(cmd);
+    tailscaleFound = true;
     return true;
   } catch {
+    tailscaleMissingAt = Date.now();
     return false;
   }
 }
 
-export async function getTailscaleStatus(): Promise<{ running: boolean; hostname?: string; tailnet?: string }> {
+type TailscaleStatus = { running: boolean; hostname?: string; tailnet?: string };
+/** `/health` is open to anyone who passes the Host check; it must not spawn a process per call. */
+const STATUS_CACHE_MS = 30_000;
+let statusCache: { at: number; value: Promise<TailscaleStatus> } | null = null;
+
+export function getTailscaleStatus(): Promise<TailscaleStatus> {
+  if (statusCache && Date.now() - statusCache.at < STATUS_CACHE_MS) return statusCache.value;
+  const value = readTailscaleStatus();
+  statusCache = { at: Date.now(), value };
+  return value;
+}
+
+async function readTailscaleStatus(): Promise<TailscaleStatus> {
   try {
     const { stdout } = await execAsync('tailscale status --json');
     const status = JSON.parse(stdout);
@@ -75,58 +97,95 @@ export async function whois(ipAddress: string): Promise<TailscaleIdentity | null
   }
 }
 
-export async function verifyTailscaleConnection(ipAddress: string): Promise<TailscaleIdentity | null> {
-  const config = getConfig();
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
-  // If auth is disabled, return a dummy identity
-  if (!config.auth.enabled) {
-    return {
-      userId: 'anonymous',
-      loginName: 'anonymous',
-      displayName: 'Anonymous User',
-      node: 'unknown',
-      nodeIp: ipAddress,
-      tailnet: 'local',
-    };
-  }
+/** A caller on this machine: the statusline, hooks, `cr-session` and a browser on localhost. */
+export function isLoopback(ipAddress: string): boolean {
+  return LOOPBACK.has(ipAddress);
+}
 
-  // Check if Tailscale is available
-  if (!(await isTailscaleAvailable())) {
-    logger.warn('Tailscale not available, allowing connection without verification');
-    return {
-      userId: 'local',
-      loginName: 'local',
-      displayName: 'Local User',
-      node: 'localhost',
-      nodeIp: ipAddress,
-      tailnet: 'local',
-    };
-  }
+export interface IdentityDeps {
+  auth: () => { enabled: boolean; allowedUsers: string[] };
+  available: () => Promise<boolean>;
+  whois: (ip: string) => Promise<TailscaleIdentity | null>;
+  now?: () => number;
+}
 
-  // Get identity from Tailscale
-  const identity = await whois(ipAddress);
-  if (!identity) {
-    logger.warn({ ipAddress }, 'Could not resolve Tailscale identity');
-    return null;
-  }
+/** Answers are cached (refusals too): a refused LAN host retrying must not spawn `whois` per request. */
+const IDENTITY_CACHE_MS = 60_000;
+const REFUSAL_CACHE_MS = 10_000;
+const IDENTITY_CACHE_MAX = 256;
 
-  // Check if user is in allowed list
-  if (config.auth.allowedUsers.length > 0) {
-    const isAllowed = config.auth.allowedUsers.some(
-      (allowed) =>
-        allowed === identity.loginName ||
-        allowed === identity.userId ||
-        allowed === '*'
-    );
+/**
+ * Who may use this server (docs/auth.md): with auth on, a caller on loopback, or one
+ * `tailscale whois` names (and `allowedUsers` admits). Everyone else is refused, including
+ * when the `tailscale` CLI can't be found: the server listens on 0.0.0.0, and admitting
+ * every caller then would hand the LAN a shell.
+ */
+export function createIdentityVerifier(deps: IdentityDeps): (ip: string) => Promise<TailscaleIdentity | null> {
+  const now = deps.now ?? Date.now;
+  const cache = new Map<string, { until: number; identity: TailscaleIdentity | null }>();
 
-    if (!isAllowed) {
-      logger.warn({ identity }, 'User not in allowed list');
+  async function resolve(ipAddress: string): Promise<TailscaleIdentity | null> {
+    if (!(await deps.available())) {
+      logger.warn({ ipAddress }, 'Tailscale not available: refusing a non-loopback caller');
       return null;
     }
+    const identity = await deps.whois(ipAddress);
+    if (!identity) {
+      logger.warn({ ipAddress }, 'Could not resolve Tailscale identity');
+      return null;
+    }
+    const { allowedUsers } = deps.auth();
+    if (allowedUsers.length > 0) {
+      const isAllowed = allowedUsers.some(
+        (allowed) => allowed === identity.loginName || allowed === identity.userId || allowed === '*'
+      );
+      if (!isAllowed) {
+        logger.warn({ identity }, 'User not in allowed list');
+        return null;
+      }
+    }
+    return identity;
   }
 
-  return identity;
+  return async (ipAddress: string) => {
+    if (!deps.auth().enabled) {
+      return {
+        userId: 'anonymous',
+        loginName: 'anonymous',
+        displayName: 'Anonymous User',
+        node: 'unknown',
+        nodeIp: ipAddress,
+        tailnet: 'local',
+      };
+    }
+    if (isLoopback(ipAddress)) {
+      return {
+        userId: 'local',
+        loginName: 'local',
+        displayName: 'Local User',
+        node: 'localhost',
+        nodeIp: ipAddress,
+        tailnet: 'local',
+      };
+    }
+    const hit = cache.get(ipAddress);
+    if (hit && hit.until > now()) return hit.identity;
+    const identity = await resolve(ipAddress);
+    for (const [ip, entry] of cache) if (entry.until <= now()) cache.delete(ip);
+    if (cache.size >= IDENTITY_CACHE_MAX) cache.clear();
+    // A refusal is kept briefly: a phone refused while Tailscale restarts gets back in soon.
+    cache.set(ipAddress, { until: now() + (identity ? IDENTITY_CACHE_MS : REFUSAL_CACHE_MS), identity });
+    return identity;
+  };
 }
+
+export const verifyTailscaleConnection = createIdentityVerifier({
+  auth: () => getConfig().auth,
+  available: isTailscaleAvailable,
+  whois,
+});
 
 export async function getTailscaleCertPaths(): Promise<{ certPath: string; keyPath: string } | null> {
   const status = await getTailscaleStatus();
@@ -166,7 +225,8 @@ export async function getTailscaleCertPaths(): Promise<{ certPath: string; keyPa
 export function extractIpFromRequest(request: { socket?: { remoteAddress?: string } }): string {
   // Only trust the socket's remote address to prevent IP spoofing via X-Forwarded-For.
   // This application is designed for direct Tailscale access, not reverse proxy deployments.
-  const remoteAddress = request.socket?.remoteAddress || '127.0.0.1';
+  // No address (a socket already gone) must never read as loopback, which is trusted.
+  const remoteAddress = request.socket?.remoteAddress || '';
 
   // Remove IPv6 prefix if present (e.g., ::ffff:192.168.1.1 -> 192.168.1.1)
   if (remoteAddress.startsWith('::ffff:')) {

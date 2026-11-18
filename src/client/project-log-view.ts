@@ -1,8 +1,9 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { escapeHtml, html, joinHtml, raw, setHtml, type SafeHtml } from './html-utils.js';
 import type { ProjectWorkspace } from './project-workspace.js';
 import type { JobBoard } from './job-board.js';
 import type { RollupView } from './rollup-view.js';
 import type { ParsedLogEntry, PhaseGroup, ProjectBoardItem } from './session-types.js';
+import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 
 /**
  * The narrow surface ProjectLogView needs from SessionManager. `workspace`,
@@ -18,6 +19,8 @@ export interface ProjectLogViewHost {
   detachCurrentSession(): void;
   syncJobOverlay(): void;
   showNewSessionModal(prefillCwd?: string): void;
+  /** Resume or fork a logged conversation in a new terminal. */
+  openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork', account?: string): void;
 }
 
 /**
@@ -43,6 +46,58 @@ export class ProjectLogView {
   private failedBackfills = new Set<string>();
 
   constructor(private readonly host: ProjectLogViewHost) {}
+
+  /**
+   * The history entries' buttons, delegated on their container: backfill, open (resume or
+   * fork), delete, copy a session id, and folding a phase group.
+   */
+  attachEntries(container: HTMLElement): void {
+    container.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const backfillBtn = target.closest('[data-backfill-cwd]') as HTMLButtonElement | null;
+      if (backfillBtn) {
+        void this.backfillProject(backfillBtn.getAttribute('data-backfill-cwd') || '', backfillBtn);
+        return;
+      }
+      const openBtn = target.closest('[data-open-session]') as HTMLElement | null;
+      if (openBtn) {
+        const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
+        const cwd = openBtn.getAttribute('data-open-cwd') || '';
+        const mode = openBtn.getAttribute('data-open-mode') === 'fork' ? 'fork' : 'resume';
+        const account = openBtn.getAttribute('data-open-account') || undefined;
+        if (claudeSessionId && cwd) this.host.openHistorySession(claudeSessionId, cwd, mode, account);
+        return;
+      }
+      const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
+      if (delBtn) {
+        this.showDeleteEntryModal({
+          cwd: delBtn.getAttribute('data-delete-cwd') || '',
+          entryIndex: Number(delBtn.getAttribute('data-delete-entry')),
+          claudeSessionId: delBtn.getAttribute('data-delete-session') || null,
+          siblingCount: Number(delBtn.getAttribute('data-delete-siblings')) || 0,
+        });
+        return;
+      }
+      const copyBtn = target.closest('[data-copy]') as HTMLElement | null;
+      if (copyBtn) {
+        const sid = copyBtn.getAttribute('data-copy') || '';
+        navigator.clipboard?.writeText(sid);
+        copyBtn.classList.add('copied');
+        setTimeout(() => copyBtn.classList.remove('copied'), 1000);
+        return;
+      }
+      const head = target.closest('.phase-group-head') as HTMLElement | null;
+      if (head) togglePhaseGroup(head);
+    });
+    container.addEventListener('keydown', (e) => {
+      if (!isPhaseGroupActivation(e.key)) return;
+      const head = (e.target as HTMLElement).closest('.phase-group-head') as HTMLElement | null;
+      if (head) {
+        e.preventDefault();
+        togglePhaseGroup(head);
+      }
+    });
+  }
 
   /** Whether the Projects tab (not Sessions) is the one currently showing. */
   isProjectsTabActive(): boolean {
@@ -176,7 +231,7 @@ export class ProjectLogView {
     const pathEl = document.getElementById('project-log-path');
     if (pathEl) pathEl.textContent = wsProject.cwd;
     const badgesEl = document.getElementById('project-badges-row');
-    if (badgesEl) badgesEl.innerHTML = this.host.workspace.renderHeaderBadges(wsProject);
+    if (badgesEl) setHtml(badgesEl, this.host.workspace.renderHeaderBadges(wsProject));
     document.getElementById('project-flash')?.classList.add('hidden');
 
     // Re-sync only makes sense against an existing session log.
@@ -190,71 +245,65 @@ export class ProjectLogView {
 
     const entriesEl = document.getElementById('project-log-entries');
     if (entriesEl) {
-      entriesEl.innerHTML = logProject
-        ? this.renderPhaseGroups(logProject.phaseGroups) + this.renderHistorySection(logProject)
-        : '';
+      setHtml(
+        entriesEl,
+        logProject
+          ? joinHtml([this.renderPhaseGroups(logProject.phaseGroups), this.renderHistorySection(logProject)])
+          : html``
+      );
     }
     this.renderProjectList(); // refresh active highlight
   }
 
   /** The SESSION-LOG.md history section of the detail view. */
-  private renderHistorySection(project: ProjectBoardItem): string {
+  private renderHistorySection(project: ProjectBoardItem): SafeHtml {
     if (!project.hasLog) {
-      return `<div class="project-history-empty">
+      return html`<div class="project-history-empty">
           <h3 class="project-log-subhead">Session history</h3>
           <p class="pw-hint">No session log for this project yet.</p>
-          <button class="btn-secondary project-generate-btn" data-backfill-cwd="${escapeAttr(
-            project.cwd
-          )}">Generate session log</button>
+          <button class="btn-secondary project-generate-btn" data-backfill-cwd="${project.cwd}">Generate session log</button>
         </div>`;
     }
     if (project.entries.length === 0) {
-      return '<h3 class="project-log-subhead">Session history</h3><div class="project-empty">No entries yet.</div>';
+      return html`<h3 class="project-log-subhead">Session history</h3><div class="project-empty">No entries yet.</div>`;
     }
-    return (
-      '<h3 class="project-log-subhead">Session history</h3>' +
-      project.entries
-        .map((e, i) => this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e)))
-        .join('')
-    );
+    return html`<h3 class="project-log-subhead">Session history</h3>${project.entries.map((e, i) =>
+      this.renderLogEntry(e, project.cwd, i, this.countSiblingEntries(project, e))
+    )}`;
   }
 
-  private renderPhaseGroups(groups: PhaseGroup[]): string {
-    if (!groups || groups.length === 0) return '';
+  private renderPhaseGroups(groups: PhaseGroup[]): SafeHtml {
+    if (!groups || groups.length === 0) return html``;
     const icon = (s: string): string =>
       s === 'done' ? '✓' : s === 'in_progress' ? '◷' : '○';
-    const sidChip = (sid: string): string => {
-      if (!sid || sid === 'backfill' || sid === 'unknown') return '';
-      const short = escapeHtml(sid.slice(0, 8));
-      return `<button class="sid-chip" data-copy="${escapeAttr(sid)}" title="Copy session id ${escapeAttr(sid)}">${short}<span class="sid-copy">⧉</span></button>`;
+    const sidChip = (sid: string): SafeHtml => {
+      if (!sid || sid === 'backfill' || sid === 'unknown') return html``;
+      const short = sid.slice(0, 8);
+      return html`<button class="sid-chip" data-copy="${sid}" title="Copy session id ${sid}">${short}<span class="sid-copy">⧉</span></button>`;
     };
-    const renderGroup = (g: PhaseGroup): string => {
+    const renderGroup = (g: PhaseGroup): SafeHtml => {
       const done = g.items.filter((i) => i.status === 'done').length;
-      const rows = g.items
-        .map(
-          (it) => `
+      const rows = g.items.map(
+        (it) => html`
         <li class="phase-item">
           <span class="phase-status ${it.status}" title="${it.status}">${icon(it.status)}</span>
-          ${it.id ? `<span class="phase-id">${escapeHtml(it.id)}</span>` : ''}
-          <span class="phase-title">${escapeHtml(it.title)}</span>
-          <span class="phase-sessions">${it.sessionIds.map(sidChip).join('')}</span>
+          ${it.id && html`<span class="phase-id">${it.id}</span>`}
+          <span class="phase-title">${it.title}</span>
+          <span class="phase-sessions">${it.sessionIds.map(sidChip)}</span>
         </li>`
-        )
-        .join('');
-      return `
+      );
+      return html`
         <div class="phase-group">
           <div class="phase-group-head" role="button" tabindex="0" aria-expanded="true">
             <span class="phase-chevron" aria-hidden="true">▾</span>
-            <span class="phase-group-name">${escapeHtml(g.group)}</span>
-            ${g.source ? `<span class="phase-group-src">${escapeHtml(g.source)}</span>` : ''}
+            <span class="phase-group-name">${g.group}</span>
+            ${g.source && html`<span class="phase-group-src">${g.source}</span>`}
             <span class="phase-progress">${done}/${g.items.length}</span>
           </div>
           <ul class="phase-list">${rows}</ul>
         </div>`;
     };
-    return `<div class="phase-groups"><h3 class="project-log-subhead">Plan progress</h3>${groups
-      .map(renderGroup)
-      .join('')}</div>`;
+    return html`<div class="phase-groups"><h3 class="project-log-subhead">Plan progress</h3>${groups.map(renderGroup)}</div>`;
   }
 
   /**
@@ -269,7 +318,7 @@ export class ProjectLogView {
     return project.entries.filter((e) => e.meta?.claudeSessionId === sid).length - 1;
   }
 
-  private renderLogEntry(entry: ParsedLogEntry, cwd: string, index: number, siblingCount: number): string {
+  private renderLogEntry(entry: ParsedLogEntry, cwd: string, index: number, siblingCount: number): SafeHtml {
     const meta = entry.meta;
     const date = meta?.date ? new Date(meta.date) : null;
     const dateStr = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
@@ -280,39 +329,41 @@ export class ProjectLogView {
     const sid = meta?.claudeSessionId;
     const hasSid = !!sid && sid !== 'backfill' && sid !== 'unknown';
     const openButtons = hasSid
-      ? `<button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="resume" data-open-account="${escapeAttr(meta?.account ?? '')}" title="Resume this Claude session">Resume</button>
-          <button class="log-entry-open" data-open-session="${escapeAttr(sid as string)}" data-open-cwd="${escapeAttr(cwd)}" data-open-mode="fork" data-open-account="${escapeAttr(meta?.account ?? '')}" title="Fork this Claude session into a new branch">Fork</button>`
+      ? html`<button class="log-entry-open" data-open-session="${sid as string}" data-open-cwd="${cwd}" data-open-mode="resume" data-open-account="${meta?.account ?? ''}" title="Resume this Claude session">Resume</button>
+          <button class="log-entry-open" data-open-session="${sid as string}" data-open-cwd="${cwd}" data-open-mode="fork" data-open-account="${meta?.account ?? ''}" title="Fork this Claude session into a new branch">Fork</button>`
       : '';
     // Delete is offered for every entry, including ones with no usable session id
     // (those are log-only removals — there's no transcript to find).
-    const actions = `<span class="log-entry-actions">
+    const actions = html`<span class="log-entry-actions">
           ${openButtons}
-          <button class="log-entry-open log-entry-delete" data-delete-entry="${index}" data-delete-cwd="${escapeAttr(cwd)}" data-delete-session="${escapeAttr(hasSid ? (sid as string) : '')}" data-delete-siblings="${siblingCount}" title="Delete this entry and its local conversation">Delete</button>
+          <button class="log-entry-open log-entry-delete" data-delete-entry="${index}" data-delete-cwd="${cwd}" data-delete-session="${hasSid ? (sid as string) : ''}" data-delete-siblings="${siblingCount}" title="Delete this entry and its local conversation">Delete</button>
         </span>`;
-    const head = `
+    const head = html`
       <div class="log-entry-head">
-        ${dateStr ? `<span class="log-entry-date">${escapeHtml(dateStr)}</span>` : ''}
-        ${meta?.session ? `<span class="log-entry-session">${escapeHtml(meta.session)}</span>` : ''}
-        ${meta?.branch ? `<span class="log-entry-branch">${escapeHtml(meta.branch)}</span>` : ''}
-        ${meta?.account ? `<span class="log-entry-branch log-entry-account" title="Claude account">${escapeHtml(meta.account)}</span>` : ''}
+        ${dateStr && html`<span class="log-entry-date">${dateStr}</span>`}
+        ${meta?.session && html`<span class="log-entry-session">${meta.session}</span>`}
+        ${meta?.branch && html`<span class="log-entry-branch">${meta.branch}</span>`}
+        ${meta?.account && html`<span class="log-entry-branch log-entry-account" title="Claude account">${meta.account}</span>`}
         ${actions}
       </div>`;
-    return `<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;
+    return html`<div class="log-entry">${head}<div class="log-entry-body">${this.renderMarkdownInline(bodyLines.join('\n'))}</div></div>`;
   }
 
   /** Minimal, safe markdown: escape first, then bold + inline code + paragraphs. */
-  private renderMarkdownInline(md: string): string {
+  private renderMarkdownInline(md: string): SafeHtml {
     const escaped = escapeHtml(md);
-    return escaped
-      .split(/\n{2,}/)
-      .map((para) => {
-        const withInline = para
-          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-          .replace(/`([^`]+)`/g, '<code>$1</code>')
-          .replace(/\n/g, '<br>');
-        return `<p>${withInline}</p>`;
-      })
-      .join('');
+    return raw(
+      escaped
+        .split(/\n{2,}/)
+        .map((para) => {
+          const withInline = para
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\n/g, '<br>');
+          return `<p>${withInline}</p>`;
+        })
+        .join('')
+    );
   }
 
   /**
@@ -332,22 +383,16 @@ export class ProjectLogView {
 
     const { claudeSessionId: sid, siblingCount } = target;
     const shortSid = sid ? sid.slice(0, 8) : '';
-    let summary: string;
+    let summary: SafeHtml;
     if (!sid) {
-      summary =
-        'Remove this entry from <code>SESSION-LOG.md</code>. It carries no Claude session id, so there is no local conversation to delete.';
+      summary = html`Remove this entry from <code>SESSION-LOG.md</code>. It carries no Claude session id, so there is no local conversation to delete.`;
     } else if (siblingCount > 0) {
-      summary =
-        `Remove this entry from <code>SESSION-LOG.md</code>. ${siblingCount} other ` +
-        `${siblingCount === 1 ? 'entry' : 'entries'} also came from conversation <code>${escapeHtml(shortSid)}</code>, ` +
-        `so its local transcript is kept unless you delete ${siblingCount === 1 ? 'both' : 'all of them'}.`;
+      summary = html`Remove this entry from <code>SESSION-LOG.md</code>. ${siblingCount} other ${siblingCount === 1 ? 'entry' : 'entries'} also came from conversation <code>${shortSid}</code>, so its local transcript is kept unless you delete ${siblingCount === 1 ? 'both' : 'all of them'}.`;
     } else {
-      summary =
-        `Remove this entry from <code>SESSION-LOG.md</code> and permanently delete the local ` +
-        `conversation <code>${escapeHtml(shortSid)}.jsonl</code>. It can no longer be resumed or forked. This cannot be undone.`;
+      summary = html`Remove this entry from <code>SESSION-LOG.md</code> and permanently delete the local conversation <code>${shortSid}.jsonl</code>. It can no longer be resumed or forked. This cannot be undone.`;
     }
     const summaryEl = document.getElementById('delete-entry-summary');
-    if (summaryEl) summaryEl.innerHTML = summary;
+    if (summaryEl) setHtml(summaryEl, summary);
 
     const allRow = document.getElementById('delete-entry-all-row');
     const allBox = document.getElementById('delete-entry-all') as HTMLInputElement | null;

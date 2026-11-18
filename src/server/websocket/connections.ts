@@ -21,6 +21,7 @@ import { moveBlockedReason } from '../sessions/account-move.js';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
 import type { TailscaleIdentity } from '../auth/tailscale.js';
+import { TerminalOutput } from './terminal-output.js';
 
 export const logger = createLogger('websocket');
 
@@ -29,11 +30,8 @@ export interface ClientConnection {
   ws: WebSocket;
   identity: TailscaleIdentity | null;
   attachedSession: string | null;
-  /**
-   * Live output held while a `session.attach` waits for its snapshot (handleSessionAttach),
-   * sent right after it; null once live.
-   */
-  heldData?: string[] | null;
+  /** The attached session's output to this socket (terminal-output.ts); null when detached. */
+  output?: TerminalOutput | null;
   dataUnsubscribe: (() => void) | null;
   exitUnsubscribe: (() => void) | null;
   /** The Android app's install id (`/ws?device=`), for push; absent for a browser. */
@@ -68,37 +66,45 @@ export function isDeviceForeground(deviceId: string, nowMs: number = Date.now())
 
 export const connections = new Map<string, ClientConnection>();
 
-export function attachToSession(connection: ClientConnection, sessionId: string): void {
-  connection.heldData = null;
+/**
+ * Subscribes the connection to a session's output and exit. Detaches it from whatever it was
+ * attached to first, here rather than in each caller: a listener left on the old session
+ * sends its output to this socket too, and keystrokes then arrive twice.
+ *
+ * Returns the connection's output, so an attach can `hold()` it while its snapshot is made.
+ */
+export function attachToSession(connection: ClientConnection, sessionId: string): TerminalOutput {
+  detachFromSession(connection);
   connection.attachedSession = sessionId;
   sessionManager.addClient(sessionId, connection.id);
 
   // Clear any pending notification for this session when user attaches
   notificationService.clearSessionNotification(sessionId);
 
-  // Subscribe to terminal data
-  connection.dataUnsubscribe = sessionManager.onData(sessionId, (data) => {
-    if (connection.heldData) {
-      connection.heldData.push(data);
-      return;
-    }
-    if (connection.ws.readyState === WS_OPEN) {
-      connection.ws.send(createMessage('terminal.data', { sessionId, data }));
-    }
+  const output = new TerminalOutput({
+    socket: connection.ws,
+    openState: WS_OPEN,
+    encode: (data) => createMessage('terminal.data', { sessionId, data }),
+    snapshot: (fn) => sessionManager.withScrollback(sessionId, fn),
   });
+  connection.output = output;
+  connection.dataUnsubscribe = sessionManager.onData(sessionId, (data) => output.push(data));
 
-  // Subscribe to exit events
   connection.exitUnsubscribe = sessionManager.onExit(sessionId, (exitCode) => {
+    // The shell's last output goes before the exit.
+    output.flush();
     if (connection.ws.readyState === WS_OPEN) {
       connection.ws.send(createMessage('terminal.exit', { sessionId, exitCode }));
     }
   });
 
   logger.debug({ clientId: connection.id, sessionId }, 'Client attached to session');
+  return output;
 }
 
 export function detachFromSession(connection: ClientConnection): void {
-  connection.heldData = null;
+  connection.output?.close();
+  connection.output = null;
   if (!connection.attachedSession) return;
 
   const sessionId = connection.attachedSession;

@@ -22,6 +22,7 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        setImmediate: 'readonly',
         NodeJS: 'readonly',
         AbortController: 'readonly',
         AbortSignal: 'readonly',
@@ -63,6 +64,8 @@ export default [
         AbortController: 'readonly',
         AbortSignal: 'readonly',
         WebSocket: 'readonly',
+        Element: 'readonly',
+        InsertPosition: 'readonly',
         HTMLElement: 'readonly',
         HTMLInputElement: 'readonly',
         HTMLButtonElement: 'readonly',
@@ -95,6 +98,19 @@ export default [
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
       'no-unused-vars': 'off',
+      // Markup goes through html-utils.ts (`html`, `setHtml`), which escapes by default: a
+      // hand-built string missing one escape is script running next to a shell.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "AssignmentExpression[left.property.name=/^(innerHTML|outerHTML)$/]:not([right.type='Literal'])",
+          message: 'Use setHtml(el, html`…`) from html-utils.ts (an empty or constant string literal is fine).',
+        },
+        {
+          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+          message: 'Use insertHtml(el, position, html`…`) from html-utils.ts.',
+        },
+      ],
     },
   },
   {

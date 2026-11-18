@@ -35,8 +35,12 @@ export class RateLimiter {
 
       if (tokensToAdd > 0) {
         const currentTokens = this.tokens.get(clientId) || 0;
-        this.tokens.set(clientId, Math.min(this.maxTokens, currentTokens + tokensToAdd));
-        this.lastRefill.set(clientId, now);
+        const refilled = Math.min(this.maxTokens, currentTokens + tokensToAdd);
+        this.tokens.set(clientId, refilled);
+        // Advance by the time those tokens took, keeping the remainder: resetting to `now`
+        // drops up to one refill interval each time and can halve the real rate. A full
+        // bucket keeps nothing, or idle time would bank tokens past the cap.
+        this.lastRefill.set(clientId, refilled === this.maxTokens ? now : lastRefill + tokensToAdd * this.refillRateMs);
       }
     }
 

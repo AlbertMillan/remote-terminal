@@ -55,7 +55,12 @@ vi.mock('../src/server/agent/claude-run.js', async (importActual) => ({
 
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
-const tracks = await import('../src/server/projects/track-branches.js');
+// Track branches, Land's git half and Update from main: one namespace, as before the split.
+const tracks = {
+  ...(await import('../src/server/projects/track-branches.js')),
+  ...(await import('../src/server/projects/track-land-core.js')),
+  ...(await import('../src/server/projects/track-update.js')),
+};
 const { peerNotesDirFor } = await import('../src/server/sessions/prompt-file.js');
 /** Land with no running sessions anywhere. */
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };

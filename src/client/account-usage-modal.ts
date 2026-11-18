@@ -1,4 +1,4 @@
-import { escapeAttr, escapeHtml } from './html-utils.js';
+import { html, setHtml, type SafeHtml } from './html-utils.js';
 import {
   accountColourClass,
   clock,
@@ -40,96 +40,70 @@ export const HELD_REASONS: Record<string, string> = {
   'unverified-legacy': 'saved before readings were verified',
 };
 
-function bigWindow(label: string, reading: WindowReading | null, now: number): string {
+function bigWindow(label: string, reading: WindowReading | null, now: number): SafeHtml {
   if (!reading) {
-    return `<div class="au-window"><div class="au-window-label">${label}</div><div class="au-window-pct unknown">?</div><div class="pu-detail">no verified reading</div></div>`;
+    return html`<div class="au-window"><div class="au-window-label">${label}</div><div class="au-window-pct unknown">?</div><div class="pu-detail">no verified reading</div></div>`;
   }
   const resetsMs = reading.resetsAt * 1000;
   const reset = resetsMs <= now;
   const level = reset ? 'ok' : levelOf(reading.usedPercentage);
   const detail = reset ? `reset at ${clock(resetsMs, true)}` : `resets in ${formatCountdown(resetsMs - now)} (${clock(resetsMs, true)})`;
   const pct = reset ? 0 : Math.min(100, Math.max(0, reading.usedPercentage));
-  return (
-    `<div class="au-window"><div class="au-window-label">${label}</div>` +
-    `<div class="au-window-pct ${level}">${reset ? '—' : `${Math.round(reading.usedPercentage)}%`}</div>` +
-    `<div class="pu-bar"><div class="pu-fill ${level}" style="width: ${pct}%"></div></div>` +
-    `<div class="pu-detail">${escapeHtml(detail)}</div></div>`
-  );
+  return html`<div class="au-window"><div class="au-window-label">${label}</div><div class="au-window-pct ${level}">${reset ? '—' : `${Math.round(reading.usedPercentage)}%`}</div><div class="pu-bar"><div class="pu-fill ${level}" style="width: ${pct}%"></div></div><div class="pu-detail">${detail}</div></div>`;
 }
 
 /** The token table: this 5-hour window and this week (or since login), side by side. */
-function tokenTable(five: WindowTokens | null | undefined, week: WindowTokens | null | undefined): string {
-  if (!five && !week) return '<p class="pu-detail">No ledger usage for an open window.</p>';
+function tokenTable(five: WindowTokens | null | undefined, week: WindowTokens | null | undefined): SafeHtml {
+  if (!five && !week) return html`<p class="pu-detail">No ledger usage for an open window.</p>`;
   const weekLabel = week?.sinceLogin ? 'Since login' : 'This week';
-  const cell = (t: WindowTokens | null | undefined, pick: (t: WindowTokens) => string) => `<td>${t ? escapeHtml(pick(t)) : '—'}</td>`;
-  const row = (label: string, pick: (t: WindowTokens) => string) => `<tr><th>${label}</th>${cell(five, pick)}${cell(week, pick)}</tr>`;
-  return (
-    '<div class="account-usage-scroll"><table class="account-usage-table au-tokens">' +
-    `<thead><tr><th></th><th>This 5h window</th><th>${weekLabel}</th></tr></thead><tbody>` +
-    row('Messages', (t) => String(t.messages)) +
-    row('Input', (t) => formatTokens(t.inputTokens)) +
-    row('Output', (t) => formatTokens(t.outputTokens)) +
-    row('Cache read', (t) => formatTokens(t.cacheReadTokens)) +
-    row('Cache write', (t) => formatTokens(t.cacheWriteTokens)) +
-    row('Est. cost', (t) => `$${t.costUsd.toFixed(2)}${t.unpriced ? '+' : ''}`) +
-    row('Sessions', (t) => String(t.sessions)) +
-    row('Job runs', (t) => String(t.jobRuns)) +
-    '</tbody></table></div>' +
-    '<p class="pu-detail">Est. at API list price; from the transcripts of projects with a PROJECT.md.</p>'
-  );
+  const cell = (t: WindowTokens | null | undefined, pick: (t: WindowTokens) => string) => html`<td>${t ? pick(t) : '—'}</td>`;
+  const row = (label: string, pick: (t: WindowTokens) => string) => html`<tr><th>${label}</th>${cell(five, pick)}${cell(week, pick)}</tr>`;
+  return html`<div class="account-usage-scroll"><table class="account-usage-table au-tokens"><thead><tr><th></th><th>This 5h window</th><th>${weekLabel}</th></tr></thead><tbody>${[
+    row('Messages', (t) => String(t.messages)),
+    row('Input', (t) => formatTokens(t.inputTokens)),
+    row('Output', (t) => formatTokens(t.outputTokens)),
+    row('Cache read', (t) => formatTokens(t.cacheReadTokens)),
+    row('Cache write', (t) => formatTokens(t.cacheWriteTokens)),
+    row('Est. cost', (t) => `$${t.costUsd.toFixed(2)}${t.unpriced ? '+' : ''}`),
+    row('Sessions', (t) => String(t.sessions)),
+    row('Job runs', (t) => String(t.jobRuns)),
+  ]}</tbody></table></div><p class="pu-detail">Est. at API list price; from the transcripts of projects with a PROJECT.md.</p>`;
 }
 
-function card(a: AccountPlanUsage, index: number, attached: string | undefined, now: number): string {
+function card(a: AccountPlanUsage, index: number, attached: string | undefined, now: number): SafeHtml {
   const tags = [
-    a.plan ? `<span class="pu-plan">${escapeHtml(a.plan)}</span>` : '',
+    a.plan && html`<span class="pu-plan">${a.plan}</span>`,
     a.verified === false
-      ? '<span class="pu-tag warn">login not verified</span>'
+      ? html`<span class="pu-tag warn">login not verified</span>`
       : a.verified
-        ? '<span class="pu-tag ok">verified</span>'
+        ? html`<span class="pu-tag ok">verified</span>`
         : '',
-    a.account === attached ? '<span class="pu-tag">attached</span>' : '',
-    a.jobs ? '<span class="pu-tag">jobs run here</span>' : '',
-  ].join('');
+    a.account === attached ? html`<span class="pu-tag">attached</span>` : '',
+    a.jobs ? html`<span class="pu-tag">jobs run here</span>` : '',
+  ];
   const week = a.tokens?.sevenDay;
   const moved =
     week && week.elsewhere > 0
-      ? `<p class="pu-detail">${week.elsewhere} of ${week.messages} messages ${week.sinceLogin ? 'since login' : 'this week'} sit in another account's folder (moved transcripts).</p>`
+      ? html`<p class="pu-detail">${week.elsewhere} of ${week.messages} messages ${week.sinceLogin ? 'since login' : 'this week'} sit in another account's folder (moved transcripts).</p>`
       : '';
   const running = a.running ?? 0;
-  return (
-    `<article class="au-card" data-account="${escapeAttr(a.account)}">` +
-    `<div class="pu-section-head"><span class="pu-acct ${accountColourClass(index)}">${escapeHtml(a.account)}</span>${tags}</div>` +
-    `<div class="au-windows">${bigWindow('5-hour window', a.snapshot?.fiveHour ?? null, now)}${bigWindow('Weekly', a.snapshot?.sevenDay ?? null, now)}</div>` +
-    tokenTable(a.tokens?.fiveHour, week) +
-    moved +
-    `<p class="pu-detail">${running} running session${running === 1 ? '' : 's'}</p>` +
-    '</article>'
-  );
+  return html`<article class="au-card" data-account="${a.account}"><div class="pu-section-head"><span class="pu-acct ${accountColourClass(index)}">${a.account}</span>${tags}</div><div class="au-windows">${bigWindow('5-hour window', a.snapshot?.fiveHour ?? null, now)}${bigWindow('Weekly', a.snapshot?.sevenDay ?? null, now)}</div>${tokenTable(a.tokens?.fiveHour, week)}${moved}<p class="pu-detail">${running} running session${running === 1 ? '' : 's'}</p></article>`;
 }
 
 /** Every account's card. Pure, for tests. */
-export function renderAccountCards(data: PlanUsage, now: number): string {
-  if (data.accounts.length === 0) return '<p class="pu-detail">No accounts are configured.</p>';
-  return data.accounts.map((a, i) => card(a, i, data.attached, now)).join('');
+export function renderAccountCards(data: PlanUsage, now: number): SafeHtml {
+  if (data.accounts.length === 0) return html`<p class="pu-detail">No accounts are configured.</p>`;
+  return html`${data.accounts.map((a, i) => card(a, i, data.attached, now))}`;
 }
 
 /** The held-back table's rows. Pure, for tests. */
-export function renderHeldRows(held: HeldReading[]): string {
-  return held
-    .map((h) => {
-      const window = h.window === 'fiveHour' ? '5h' : 'wk';
-      const reset = clock(h.resetsAt * 1000, true);
-      const arrived = Date.parse(h.arrivedAt);
-      return (
-        `<tr><td>${escapeHtml(Number.isNaN(arrived) ? '?' : clock(arrived, true))}</td>` +
-        `<td>${h.account ? escapeHtml(h.account) : '<span class="pu-muted">no account</span>'}</td>` +
-        `<td>${escapeHtml(`${window} → ${reset}`)}</td>` +
-        `<td>${Math.round(h.usedPercentage)}%</td>` +
-        `<td>${escapeHtml(HELD_REASONS[h.reason] ?? h.reason)}</td>` +
-        `<td><button type="button" class="btn-secondary au-discard" data-held-id="${escapeAttr(h.id)}">Discard</button></td></tr>`
-      );
-    })
-    .join('');
+export function renderHeldRows(held: HeldReading[]): SafeHtml {
+  return html`${held.map((h) => {
+    const window = h.window === 'fiveHour' ? '5h' : 'wk';
+    const reset = clock(h.resetsAt * 1000, true);
+    const arrived = Date.parse(h.arrivedAt);
+    return html`<tr><td>${Number.isNaN(arrived) ? '?' : clock(arrived, true)}</td><td>${h.account ? h.account : html`<span class="pu-muted">no account</span>`}</td><td>${`${window} → ${reset}`}</td><td>${Math.round(h.usedPercentage)}%</td><td>${HELD_REASONS[h.reason] ?? h.reason}</td><td><button type="button" class="btn-secondary au-discard" data-held-id="${h.id}">Discard</button></td></tr>`;
+  })}`;
 }
 
 export class AccountUsageModal {
@@ -228,12 +202,12 @@ export class AccountUsageModal {
     this.renderCards(now);
     const section = root.querySelector('.account-usage-held') as HTMLElement | null;
     const body = root.querySelector('.account-usage-held tbody');
-    if (body) body.innerHTML = renderHeldRows(this.held);
+    if (body) setHtml(body, renderHeldRows(this.held));
     if (section) section.hidden = this.held.length === 0;
   }
 
   private renderCards(now: number): void {
     const cards = this.root?.querySelector('.account-usage-cards');
-    if (cards) cards.innerHTML = this.data ? renderAccountCards(this.data, now) : '<p class="pu-detail">Loading…</p>';
+    if (cards) setHtml(cards, this.data ? renderAccountCards(this.data, now) : html`<p class="pu-detail">Loading…</p>`);
   }
 }

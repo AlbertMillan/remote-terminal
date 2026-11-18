@@ -2,6 +2,7 @@
 // Uses Document Picture-in-Picture API (Chrome/Edge 116+)
 import { TERMINAL_THEME } from './terminal.js';
 import { registerFileLinks } from './file-links.js';
+import { html, setHtml } from './html-utils.js';
 
 export interface PipSessionInfo {
   id: string;
@@ -375,11 +376,11 @@ export class PipManager {
     const closeBtn = doc.createElement('button');
     closeBtn.className = 'pip-close-btn';
     closeBtn.title = 'Close PiP';
-    closeBtn.innerHTML = `
+    setHtml(closeBtn, html`
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="18" y1="6" x2="6" y2="18"></line>
         <line x1="6" y1="6" x2="18" y2="18"></line>
-      </svg>`;
+      </svg>`);
     closeBtn.addEventListener('click', () => this.close());
     this.headerEl.appendChild(closeBtn);
   }

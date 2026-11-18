@@ -25,8 +25,8 @@ function render(track: WorkspaceTrack): HTMLElement {
 
 describe('renderBehind', () => {
   it('shows nothing when level with the base, or unbranched', () => {
-    expect(renderBehind(project, branched({ behind: 0, wouldConflict: [] }))).toBe('');
-    expect(renderBehind(project, branched({ behind: 2, branch: null }))).toBe('');
+    expect(renderBehind(project, branched({ behind: 0, wouldConflict: [] })).value).toBe('');
+    expect(renderBehind(project, branched({ behind: 2, branch: null })).value).toBe('');
   });
 
   it('shows the count and Update when behind with no conflicts', () => {

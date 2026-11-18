@@ -1,4 +1,4 @@
-import { escapeAttr, escapeHtml } from './html-utils.js';
+import { html, setHtml, type SafeHtml } from './html-utils.js';
 import type { SessionInfo } from './session-types.js';
 
 /**
@@ -125,13 +125,10 @@ export class AccountMenu {
     }
     const blocked = session.accountMoveBlocked ?? null;
     const order = this.accounts.map((a) => a.name);
-    const html =
-      `<span class="session-account-dot${accountColourClass(order, session.account)}" aria-hidden="true"></span>` +
-      `<span>${escapeHtml(session.account ?? '')}</span>` +
-      (blocked ? '' : '<span class="account-chip-caret" aria-hidden="true">▾</span>');
-    if (html !== this.chipHtml) {
-      this.chipHtml = html;
-      this.chip.innerHTML = html;
+    const chip = html`<span class="session-account-dot${accountColourClass(order, session.account)}" aria-hidden="true"></span><span>${session.account ?? ''}</span>${!blocked && html`<span class="account-chip-caret" aria-hidden="true">▾</span>`}`;
+    if (chip.value !== this.chipHtml) {
+      this.chipHtml = chip.value;
+      setHtml(this.chip, chip);
     }
     this.chip.disabled = !!blocked;
     this.chip.title = blocked ? `${session.account}: ${blocked}` : 'Claude account: move this conversation to another';
@@ -163,43 +160,37 @@ export class AccountMenu {
 
   private render(): void {
     const session = this.host.current();
-    const html = this.phase.kind === 'closed' || !session ? '' : this.menuBody(session);
-    if (html === this.menuHtml) return;
-    this.menuHtml = html;
-    this.menu.classList.toggle('hidden', !html);
-    this.menu.innerHTML = html;
+    const body = this.phase.kind === 'closed' || !session ? html`` : this.menuBody(session);
+    if (body.value === this.menuHtml) return;
+    this.menuHtml = body.value;
+    this.menu.classList.toggle('hidden', !body.value);
+    setHtml(this.menu, body);
   }
 
-  private menuBody(session: SessionInfo): string {
+  private menuBody(session: SessionInfo): SafeHtml {
     const order = this.accounts.map((a) => a.name);
-    const dot = (name: string) => `<span class="session-account-dot${accountColourClass(order, name)}" aria-hidden="true"></span>`;
+    const dot = (name: string) => html`<span class="session-account-dot${accountColourClass(order, name)}" aria-hidden="true"></span>`;
     const running = isRunningSession(session);
-    let body = '';
+    let body = html``;
     if (this.phase.kind === 'list') {
-      body = this.accounts
-        .map((a) => {
-          if (a.name === session.account) {
-            return `<div class="account-menu-item current" role="menuitemradio" aria-checked="true" aria-disabled="true">${dot(a.name)}<span class="account-menu-name">${escapeHtml(a.name)}</span><span class="account-menu-note">current</span></div>`;
-          }
-          const note = a.ready ? 'logged in' : 'not logged in';
-          return `<button type="button" class="account-menu-item" role="menuitemradio" aria-checked="false" data-action="pick" data-account="${escapeAttr(a.name)}">${dot(a.name)}<span class="account-menu-name">Move to ${escapeHtml(a.name)}</span><span class="account-menu-note${a.ready ? ' ready' : ''}">${note}</span></button>`;
-        })
-        .join('');
-      body += '<p class="account-menu-hint">The conversation goes with it: same session, same history, the other login.</p>';
+      const items = this.accounts.map((a) => {
+        if (a.name === session.account) {
+          return html`<div class="account-menu-item current" role="menuitemradio" aria-checked="true" aria-disabled="true">${dot(a.name)}<span class="account-menu-name">${a.name}</span><span class="account-menu-note">current</span></div>`;
+        }
+        const note = a.ready ? 'logged in' : 'not logged in';
+        return html`<button type="button" class="account-menu-item" role="menuitemradio" aria-checked="false" data-action="pick" data-account="${a.name}">${dot(a.name)}<span class="account-menu-name">Move to ${a.name}</span><span class="account-menu-note${a.ready ? ' ready' : ''}">${note}</span></button>`;
+      });
+      body = html`${items}<p class="account-menu-hint">The conversation goes with it: same session, same history, the other login.</p>`;
     } else if (this.phase.kind === 'confirm') {
-      const t = escapeHtml(this.phase.target);
+      const t = this.phase.target;
       const explain = running
-        ? `The terminal stops, the transcript moves into ${t}’s folder, and the session resumes in place with <code>claude --resume</code>.`
-        : `The transcript moves into ${t}’s folder. The session stays stopped; Resume opens it under ${t}.`;
-      body =
-        `<div class="account-menu-confirm"><strong>Move to ${t}?</strong><p>${explain}</p>` +
-        (running ? '<p class="account-menu-warn">If Claude is in the middle of a turn, that turn is cut off.</p>' : '') +
-        `<div class="account-menu-actions"><button type="button" class="btn btn-secondary" data-action="back">Back</button>` +
-        `<button type="button" class="btn btn-primary" data-action="confirm">${running ? 'Move and resume' : 'Move'}</button></div></div>`;
+        ? html`The terminal stops, the transcript moves into ${t}’s folder, and the session resumes in place with <code>claude --resume</code>.`
+        : html`The transcript moves into ${t}’s folder. The session stays stopped; Resume opens it under ${t}.`;
+      body = html`<div class="account-menu-confirm"><strong>Move to ${t}?</strong><p>${explain}</p>${running && html`<p class="account-menu-warn">If Claude is in the middle of a turn, that turn is cut off.</p>`}<div class="account-menu-actions"><button type="button" class="btn btn-secondary" data-action="back">Back</button><button type="button" class="btn btn-primary" data-action="confirm">${running ? 'Move and resume' : 'Move'}</button></div></div>`;
     } else if (this.phase.kind === 'moving') {
-      const t = escapeHtml(this.phase.target);
-      body = `<div class="account-menu-moving" role="status"><span class="account-menu-spinner" aria-hidden="true"></span>${running ? `Stopping, moving to ${t} and resuming…` : `Moving to ${t}…`}</div>`;
+      const t = this.phase.target;
+      body = html`<div class="account-menu-moving" role="status"><span class="account-menu-spinner" aria-hidden="true"></span>${running ? `Stopping, moving to ${t} and resuming…` : `Moving to ${t}…`}</div>`;
     }
-    return `<div class="account-menu-title">Claude account</div>${body}`;
+    return html`<div class="account-menu-title">Claude account</div>${body}`;
   }
 }

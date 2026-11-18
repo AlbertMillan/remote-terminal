@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 
 /**
  * Cross-project overview: what is in flight and what is waiting on you.
@@ -117,24 +117,26 @@ export class RollupView {
     const el = document.getElementById('rollup-body');
     if (!el) return;
     if (!this.data) {
-      el.innerHTML = '<div class="project-empty">Couldn\'t load the overview.</div>';
+      setHtml(el, html`<div class="project-empty">Couldn't load the overview.</div>`);
       return;
     }
-    el.innerHTML =
-      this.renderTotals(this.data) +
-      this.renderAttention(this.data) +
-      this.renderInFlight(this.data) +
-      this.renderProjects(this.data);
+    setHtml(
+      el,
+      joinHtml([
+        this.renderTotals(this.data),
+        this.renderAttention(this.data),
+        this.renderInFlight(this.data),
+        this.renderProjects(this.data),
+      ])
+    );
   }
 
-  private renderTotals(data: Rollup): string {
+  private renderTotals(data: Rollup): SafeHtml {
     const t = data.totals;
-    const tile = (value: string | number, label: string, cls = ''): string =>
-      `<div class="rv-tile ${cls}"><div class="rv-tile-value">${escapeHtml(
-        String(value)
-      )}</div><div class="rv-tile-label">${escapeHtml(label)}</div></div>`;
+    const tile = (value: string | number, label: string, cls = ''): SafeHtml =>
+      html`<div class="rv-tile ${cls}"><div class="rv-tile-value">${String(value)}</div><div class="rv-tile-label">${label}</div></div>`;
 
-    return `
+    return html`
       <div class="rv-tiles">
         ${tile(t.attention, t.attention === 1 ? 'needs you' : 'need you', t.attention ? 'warn' : '')}
         ${tile(t.running, 'running', t.running ? 'active' : '')}
@@ -145,57 +147,53 @@ export class RollupView {
       </div>`;
   }
 
-  private renderAttention(data: Rollup): string {
+  private renderAttention(data: Rollup): SafeHtml {
     if (data.attention.length === 0) {
-      return `
+      return html`
         <section class="rv-section">
           <h3 class="project-log-subhead">Needs you</h3>
           <div class="project-empty">Nothing is waiting on you.</div>
         </section>`;
     }
 
-    const rows = data.attention
-      .map(
-        (item) => `
-        <li class="rv-item ${item.kind}" data-cwd="${escapeAttr(item.projectCwd)}">
-          <span class="rv-kind ${item.kind}">${escapeHtml(KIND_LABEL[item.kind])}</span>
+    const rows = data.attention.map(
+      (item) => html`
+        <li class="rv-item ${item.kind}" data-cwd="${item.projectCwd}">
+          <span class="rv-kind ${item.kind}">${KIND_LABEL[item.kind]}</span>
           <div class="rv-item-body">
-            <div class="rv-item-title">${escapeHtml(item.title)}</div>
-            ${item.detail ? `<div class="rv-item-detail">${escapeHtml(item.detail)}</div>` : ''}
+            <div class="rv-item-title">${item.title}</div>
+            ${item.detail && html`<div class="rv-item-detail">${item.detail}</div>`}
           </div>
-          <span class="rv-item-project">${escapeHtml(item.projectName)}</span>
-          <span class="rv-item-age">${escapeHtml(this.age(item.since))}</span>
+          <span class="rv-item-project">${item.projectName}</span>
+          <span class="rv-item-age">${this.age(item.since)}</span>
         </li>`
-      )
-      .join('');
+    );
 
-    return `
+    return html`
       <section class="rv-section">
         <h3 class="project-log-subhead">Needs you</h3>
         <ul class="rv-list">${rows}</ul>
       </section>`;
   }
 
-  private renderInFlight(data: Rollup): string {
-    if (data.inFlight.length === 0) return '';
-    const rows = data.inFlight
-      .map(
-        (j) => `
+  private renderInFlight(data: Rollup): SafeHtml {
+    if (data.inFlight.length === 0) return html``;
+    const rows = data.inFlight.map(
+      (j) => html`
         <li class="rv-item running">
-          <span class="rv-kind running">${escapeHtml(j.stage || 'running')}</span>
-          <div class="rv-item-body"><div class="rv-item-title">${escapeHtml(j.title)}</div></div>
-          <span class="rv-item-project">${escapeHtml(j.projectName)}</span>
+          <span class="rv-kind running">${j.stage || 'running'}</span>
+          <div class="rv-item-body"><div class="rv-item-title">${j.title}</div></div>
+          <span class="rv-item-project">${j.projectName}</span>
         </li>`
-      )
-      .join('');
-    return `
+    );
+    return html`
       <section class="rv-section">
         <h3 class="project-log-subhead">In flight</h3>
         <ul class="rv-list">${rows}</ul>
       </section>`;
   }
 
-  private renderProjects(data: Rollup): string {
+  private renderProjects(data: Rollup): SafeHtml {
     // Projects with an index first: they are the ones this board can actually
     // say something about.
     const sorted = [...data.projects].sort((a, b) => {
@@ -205,31 +203,29 @@ export class RollupView {
       return br.localeCompare(ar);
     });
 
-    const rows = sorted
-      .map((p) => {
+    const rows = sorted.map((p) => {
         const pct = p.counts.total > 0 ? Math.round((p.counts.done / p.counts.total) * 100) : 0;
-        const badges: string[] = [];
-        if (p.runningJobs) badges.push(`<span class="rv-badge active">${p.runningJobs} running</span>`);
-        if (p.waitingJobs) badges.push(`<span class="rv-badge warn">${p.waitingJobs} waiting</span>`);
-        if (p.counts.blocked) badges.push(`<span class="rv-badge danger">${p.counts.blocked} blocked</span>`);
-        if (!p.canDispatch) badges.push(`<span class="rv-badge">${escapeHtml(p.vcsKind)}</span>`);
+        const badges: SafeHtml[] = [];
+        if (p.runningJobs) badges.push(html`<span class="rv-badge active">${p.runningJobs} running</span>`);
+        if (p.waitingJobs) badges.push(html`<span class="rv-badge warn">${p.waitingJobs} waiting</span>`);
+        if (p.counts.blocked) badges.push(html`<span class="rv-badge danger">${p.counts.blocked} blocked</span>`);
+        if (!p.canDispatch) badges.push(html`<span class="rv-badge">${p.vcsKind}</span>`);
 
-        return `
-        <li class="rv-project" data-cwd="${escapeAttr(p.cwd)}">
-          <div class="rv-project-name">${escapeHtml(p.name)}</div>
-          ${p.status ? `<span class="rv-status">${escapeHtml(p.status)}</span>` : ''}
+        return html`
+        <li class="rv-project" data-cwd="${p.cwd}">
+          <div class="rv-project-name">${p.name}</div>
+          ${p.status && html`<span class="rv-status">${p.status}</span>`}
           <div class="rv-project-bar" title="${p.counts.done}/${p.counts.total} done">
             <span style="width:${pct}%"></span>
           </div>
           <div class="rv-project-counts">${
             p.hasDoc ? `${p.counts.done}/${p.counts.total}` : 'no index'
           }</div>
-          <div class="rv-project-badges">${badges.join('')}</div>
+          <div class="rv-project-badges">${badges}</div>
         </li>`;
-      })
-      .join('');
+    });
 
-    return `
+    return html`
       <section class="rv-section">
         <h3 class="project-log-subhead">All projects</h3>
         <ul class="rv-projects">${rows}</ul>

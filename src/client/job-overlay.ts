@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import type { JobStatus, StageName, StageStatus } from './job-board.js';
 import { parseDecision, stripMarks } from './decision-format.js';
 
@@ -308,16 +308,16 @@ export class JobOverlay {
 
     const counts = countJobs(jobs);
 
-    const parts: string[] = [];
-    if (counts.waiting) parts.push(`<span class="jo-count waiting">${counts.waiting} waiting</span>`);
+    const parts: SafeHtml[] = [];
+    if (counts.waiting) parts.push(html`<span class="jo-count waiting">${counts.waiting} waiting</span>`);
     if (counts.running) {
       parts.push(
-        `<span class="jo-count running"><span class="jo-pulse"></span>${counts.running} running</span>`
+        html`<span class="jo-count running"><span class="jo-pulse"></span>${counts.running} running</span>`
       );
     }
-    if (counts.failed) parts.push(`<span class="jo-count failed">${counts.failed} failed</span>`);
-    if (parts.length === 0) parts.push(`<span class="jo-count done">${jobs.length} finished</span>`);
-    el.innerHTML = parts.join('');
+    if (counts.failed) parts.push(html`<span class="jo-count failed">${counts.failed} failed</span>`);
+    if (parts.length === 0) parts.push(html`<span class="jo-count done">${jobs.length} finished</span>`);
+    setHtml(el, joinHtml(parts));
   }
 
   /**
@@ -335,7 +335,7 @@ export class JobOverlay {
     const focused = document.activeElement as HTMLElement | null;
     const focusedJobId = el.contains(focused) ? focused?.dataset.jobId : undefined;
 
-    el.innerHTML = jobs.map((job) => this.renderCard(job)).join('');
+    setHtml(el, joinHtml(jobs.map((job) => this.renderCard(job))));
 
     el.scrollTop = scrollTop;
     if (focusedJobId) {
@@ -346,10 +346,8 @@ export class JobOverlay {
     }
   }
 
-  private renderCard(job: JobSummary): string {
-    const strip = job.stages
-      .map((stage) => `<span class="jo-seg ${stage.status}"></span>`)
-      .join('');
+  private renderCard(job: JobSummary): SafeHtml {
+    const strip = job.stages.map((stage) => html`<span class="jo-seg ${stage.status}"></span>`);
 
     // A job can be parked before any stage has been recorded against it, and
     // then there is no position to report. Repeating the status here would just
@@ -361,36 +359,36 @@ export class JobOverlay {
         ? 'queued'
         : '';
 
-    let chip = '';
+    let chip: SafeHtml | string = '';
     if (job.status === 'parked') {
       const label = PARK_LABEL[job.parkReason || ''] || 'waiting for you';
-      chip = `<span class="jo-chip ${escapeAttr(job.parkReason || 'gate')}">${escapeHtml(label)}</span>`;
+      chip = html`<span class="jo-chip ${job.parkReason || 'gate'}">${label}</span>`;
     } else if (job.status === 'failed') {
-      chip = '<span class="jo-chip failed">failed</span>';
+      chip = html`<span class="jo-chip failed">failed</span>`;
     } else if (job.status === 'done') {
-      chip = '<span class="jo-chip done">finished</span>';
+      chip = html`<span class="jo-chip done">finished</span>`;
     } else if (job.status === 'cancelled') {
-      chip = '<span class="jo-chip cancelled">cancelled</span>';
+      chip = html`<span class="jo-chip cancelled">cancelled</span>`;
     }
 
     const finished = isTerminal(job.status);
     const detail = this.detailFor(job);
-    return `
-      <button class="jo-card ${escapeAttr(job.status)}${finished ? ' fading' : ''}"
-              data-job-id="${escapeAttr(job.id)}"
-              title="Open ${escapeAttr(job.projectName)} and show this job">
+    return html`
+      <button class="jo-card ${job.status}${finished ? ' fading' : ''}"
+              data-job-id="${job.id}"
+              title="Open ${job.projectName} and show this job">
         <span class="jo-card-top">
-          <span class="jo-project">${escapeHtml(job.projectName)}</span>
-          <span class="jo-age">${escapeHtml(this.age(job.createdAt))}</span>
+          <span class="jo-project">${job.projectName}</span>
+          <span class="jo-age">${this.age(job.createdAt)}</span>
         </span>
-        <span class="jo-title">${escapeHtml(job.title)}</span>
+        <span class="jo-title">${job.title}</span>
         <span class="jo-strip">${strip}</span>
         <span class="jo-foot">
-          ${stageLabel ? `<span class="jo-stage">${escapeHtml(stageLabel)}</span>` : ''}
+          ${stageLabel ? html`<span class="jo-stage">${stageLabel}</span>` : ''}
           ${chip}
           <span class="jo-cost">${this.cost(job.costUsd)}</span>
         </span>
-        ${detail ? `<span class="jo-detail">${escapeHtml(detail)}</span>` : ''}
+        ${detail ? html`<span class="jo-detail">${detail}</span>` : ''}
       </button>`;
   }
 

@@ -44,3 +44,19 @@ export function hostName(hostHeader: string | undefined): string | null {
 export function isGuardedPath(url: string): boolean {
   return url.startsWith('/api/') || url === '/ws' || url.startsWith('/ws?');
 }
+
+/**
+ * Whether a request reaches a guarded route. Judged on the route the router **matched**
+ * (`routePattern`) as well as the URL decoded, never on the raw URL alone: the router
+ * percent-decodes before matching, so `/%61pi/jobs` runs `/api/jobs` and `/w%73` opens the
+ * socket while the raw URL starts with neither. A path that doesn't decode is guarded.
+ */
+export function isGuardedRequest(rawUrl: string, routePattern: string | undefined): boolean {
+  if (routePattern !== undefined && isGuardedPath(routePattern)) return true;
+  const path = rawUrl.split('?')[0];
+  try {
+    return isGuardedPath(decodeURIComponent(path)) || isGuardedPath(rawUrl);
+  } catch {
+    return true;
+  }
+}

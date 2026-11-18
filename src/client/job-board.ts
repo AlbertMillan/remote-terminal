@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import {
   hasSpend,
   formatUsageCost,
@@ -298,23 +298,24 @@ export class JobBoard {
       container.innerHTML = '';
       return;
     }
-    container.innerHTML = `
+    setHtml(
+      container,
+      html`
       <div class="jb-section">
         <h3 class="project-log-subhead">Jobs${this.renderRunAs()}</h3>
-        ${this.jobs.map((job) => this.renderJob(job)).join('')}
-      </div>`;
+        ${this.jobs.map((job) => this.renderJob(job))}
+      </div>`
+    );
     this.applyPendingFocus(container);
     this.applyPendingAnchor(container);
     this.applyRefocusDocsHead(container);
   }
 
   /** "run as <account>": a job can't pick its account, so the board says which it gets. */
-  private renderRunAs(): string {
+  private renderRunAs(): SafeHtml | '' {
     const account = this.cwd ? this.accountFor(this.cwd) : null;
     if (!account) return '';
-    return `<span class="jb-run-as" title="Every stage runs under this project's account; change it in the header">run as ${escapeHtml(
-      account
-    )}</span>`;
+    return html`<span class="jb-run-as" title="Every stage runs under this project's account; change it in the header">run as ${account}</span>`;
   }
 
   /** Put focus back on the fold control that its own render just destroyed. */
@@ -328,16 +329,16 @@ export class JobBoard {
     head?.focus();
   }
 
-  private renderJob(job: Job): string {
+  private renderJob(job: Job): SafeHtml {
     const open = this.expanded.has(job.id);
-    return `
-      <div class="jb-job ${job.status}" data-job="${escapeAttr(job.id)}">
-        <div class="jb-head" data-toggle="${escapeAttr(job.id)}">
+    return html`
+      <div class="jb-job ${job.status}" data-job="${job.id}">
+        <div class="jb-head" data-toggle="${job.id}">
           <span class="jb-state ${job.status}">${this.stateLabel(job)}</span>
-          <span class="jb-title">${escapeHtml(job.title)}</span>
+          <span class="jb-title">${job.title}</span>
           ${this.qaChip(job)}
           ${this.usageChip(job)}
-          ${job.branch ? `<code class="jb-branch">${escapeHtml(job.branch)}</code>` : ''}
+          ${job.branch ? html`<code class="jb-branch">${job.branch}</code>` : ''}
           <span class="jb-chevron">${open ? '▾' : '▸'}</span>
         </div>
         ${this.renderPipeline(job)}
@@ -347,21 +348,19 @@ export class JobBoard {
   }
 
   /** A short warning chip for the collapsed row when checks did not run. */
-  private qaChip(job: Job): string {
+  private qaChip(job: Job): SafeHtml | '' {
     const qa = job.stages.find((s) => s.name === 'qa');
     if (!qa) return '';
-    if (qa.status === 'failed') return '<span class="jb-qa-chip failed">QA failed</span>';
-    if (qa.status === 'skipped') return '<span class="jb-qa-chip skipped">QA not run</span>';
+    if (qa.status === 'failed') return html`<span class="jb-qa-chip failed">QA failed</span>`;
+    if (qa.status === 'skipped') return html`<span class="jb-qa-chip skipped">QA not run</span>`;
     return '';
   }
 
   /** What this job has cost so far, Take over included. Absent until it spent anything. */
-  private usageChip(job: Job): string {
+  private usageChip(job: Job): SafeHtml | '' {
     const usage = usageOf(job);
     if (!hasSpend(usage)) return '';
-    return `<span class="jb-usage" title="${escapeAttr(usageTooltip(usage))}">${escapeHtml(
-      formatUsageCost(usage)
-    )}</span>`;
+    return html`<span class="jb-usage" title="${usageTooltip(usage)}">${formatUsageCost(usage)}</span>`;
   }
 
   private stateLabel(job: Job): string {
@@ -381,8 +380,8 @@ export class JobBoard {
     return job.status;
   }
 
-  private renderPipeline(job: Job): string {
-    return `
+  private renderPipeline(job: Job): SafeHtml {
+    return html`
       <div class="jb-pipeline">
         ${job.stages
           .map((s) => {
@@ -390,23 +389,22 @@ export class JobBoard {
             const what = queued
               ? `waiting for another run in this project to finish (${elapsedSince(s.startedAt)})`
               : `${s.status}${s.detail ? ` — ${s.detail}` : ''}`;
-            return `<span class="jb-stage ${queued ? 'queued' : s.status}" title="${escapeAttr(
+            return html`<span class="jb-stage ${queued ? 'queued' : s.status}" title="${
               `${s.name}: ${what}` +
                 (hasSpend(usageOf(s)) ? `
 ${usageTooltip(usageOf(s))}` : '')
-            )}">${queued ? '⋯' : STAGE_ICON[s.status]} ${escapeHtml(s.name)}</span>`;
-          })
-          .join('')}
+            }">${queued ? '⋯' : STAGE_ICON[s.status]} ${s.name}</span>`;
+          })}
       </div>`;
   }
 
-  private renderBody(job: Job): string {
-    const parts: string[] = [];
+  private renderBody(job: Job): SafeHtml {
+    const parts: SafeHtml[] = [];
 
     if (job.parkReason === 'question' && job.detail) {
       parts.push(renderDecision(job, this.answerDrafts, this.docs));
     } else if (job.detail) {
-      parts.push(`<div class="jb-detail">${escapeHtml(job.detail)}</div>`);
+      parts.push(html`<div class="jb-detail">${job.detail}</div>`);
     }
 
     const docs = this.docs.get(job.id);
@@ -418,15 +416,10 @@ ${usageTooltip(usageOf(s))}` : '')
     if (notRun.length > 0) {
       // Skips must be visible before the merge gate, not buried in a tooltip:
       // approving a merge means knowing which checks did not actually run.
-      parts.push(`
+      parts.push(html`
         <div class="jb-skips">
           <div class="jb-skips-label">Not verified</div>
-          <ul>${notRun
-            .map(
-              (st) =>
-                `<li><code>${escapeHtml(st.name)}</code> ${escapeHtml(st.detail as string)}</li>`
-            )
-            .join('')}</ul>
+          <ul>${notRun.map((st) => html`<li><code>${st.name}</code> ${st.detail as string}</li>`)}</ul>
         </div>`);
     }
 
@@ -442,13 +435,13 @@ ${usageTooltip(usageOf(s))}` : '')
         : '';
       parts.push(
         diff.diff
-          ? `<div class="jb-diff-head">${escapeHtml(stat)}${
+          ? html`<div class="jb-diff-head">${stat}${
               diff.truncated ? ' · truncated' : ''
             }</div><pre class="jb-diff">${highlightDiff(diff.diff)}</pre>`
-          : '<div class="pw-hint">No changes on this branch yet.</div>'
+          : html`<div class="pw-hint">No changes on this branch yet.</div>`
       );
     }
-    return parts.join('');
+    return joinHtml(parts);
   }
 
   /**
@@ -499,19 +492,19 @@ ${usageTooltip(usageOf(s))}` : '')
     }
   }
 
-  private renderActions(job: Job): string {
-    const id = escapeAttr(job.id);
-    const buttons: string[] = [];
+  private renderActions(job: Job): SafeHtml | '' {
+    const id = job.id;
+    const buttons: SafeHtml[] = [];
 
     if (job.status === 'parked' && job.parkReason === 'gate') {
       // Spell out what approving the merge gate actually sets in motion.
       const label =
         job.gate === 'merge'
-          ? 'Approve &amp; merge'
+          ? 'Approve & merge'
           : job.gate === 'review'
             ? this.approveReviewLabel(job)
             : 'Approve';
-      buttons.push(`<button class="btn-primary jb-approve" data-job="${id}">${label}</button>`);
+      buttons.push(html`<button class="btn-primary jb-approve" data-job="${id}">${label}</button>`);
     }
     // The spec is a row in the document pane, so this is a shortcut to it
     // rather than a second viewer — two surfaces on one file drift apart the
@@ -521,8 +514,8 @@ ${usageTooltip(usageOf(s))}` : '')
     if (specPath) {
       const shown = this.openDoc.get(job.id)?.path === specPath;
       buttons.push(
-        `<button class="btn-secondary jb-spec-btn" data-job="${id}"
-                 data-path="${escapeAttr(specPath)}">${shown ? 'Hide spec' : 'View spec'}</button>`
+        html`<button class="btn-secondary jb-spec-btn" data-job="${id}"
+                 data-path="${specPath}">${shown ? 'Hide spec' : 'View spec'}</button>`
       );
     }
     if (job.worktreePath) {
@@ -530,7 +523,7 @@ ${usageTooltip(usageOf(s))}` : '')
       // has a diff worth reading, and it is the one thing that says what it
       // changed.
       buttons.push(
-        `<button class="btn-secondary jb-diff-btn" data-job="${id}">${
+        html`<button class="btn-secondary jb-diff-btn" data-job="${id}">${
           this.diffs.has(job.id) ? 'Hide diff' : 'View diff'
         }</button>`
       );
@@ -541,7 +534,7 @@ ${usageTooltip(usageOf(s))}` : '')
       // either way.
       const shown = this.docs.has(job.id) && !this.docsCollapsed.has(job.id);
       buttons.push(
-        `<button class="btn-secondary jb-docs-btn" data-job="${id}">${
+        html`<button class="btn-secondary jb-docs-btn" data-job="${id}">${
           shown ? 'Hide documents' : 'View documents'
         }</button>`
       );
@@ -550,22 +543,22 @@ ${usageTooltip(usageOf(s))}` : '')
     // is the escape hatch whenever the pipeline can't finish something itself.
     if (job.claudeSessionId && job.worktreePath) {
       buttons.push(
-        `<button class="btn-secondary jb-takeover" data-job="${id}"
+        html`<button class="btn-secondary jb-takeover" data-job="${id}"
                  title="Continue this run's conversation in a terminal">Take over</button>`
       );
     }
     if (job.status === 'failed') {
-      buttons.push(`<button class="btn-primary jb-retry" data-job="${id}">Retry stage</button>`);
+      buttons.push(html`<button class="btn-primary jb-retry" data-job="${id}">Retry stage</button>`);
     }
     // Cancel stops a live job; Discard cleans up one that has already stopped.
     // The split matters: the server refuses each verb on the other's statuses, so
     // offering Cancel on a finished job (as this once did) only ever produced a 409.
     if (job.status === 'queued' || job.status === 'running' || job.status === 'parked') {
-      buttons.push(`<button class="btn-secondary jb-cancel" data-job="${id}">Cancel</button>`);
+      buttons.push(html`<button class="btn-secondary jb-cancel" data-job="${id}">Cancel</button>`);
     } else {
-      buttons.push(`<button class="btn-secondary jb-discard" data-job="${id}">Discard</button>`);
+      buttons.push(html`<button class="btn-secondary jb-discard" data-job="${id}">Discard</button>`);
     }
-    return buttons.length ? `<div class="jb-actions">${buttons.join('')}</div>` : '';
+    return buttons.length ? html`<div class="jb-actions">${buttons}</div>` : '';
   }
 
   // --- Actions -----------------------------------------------------------
@@ -769,7 +762,7 @@ ${usageTooltip(usageOf(s))}` : '')
   /** Say whether approving will apply fixes or move straight on. */
   private approveReviewLabel(job: Job): string {
     const chosen = (this.findings.get(job.id) || []).filter((f) => f.selected).length;
-    return chosen > 0 ? `Fix ${chosen} &amp; continue` : 'Skip all &amp; continue';
+    return chosen > 0 ? `Fix ${chosen} & continue` : 'Skip all & continue';
   }
 
   private async toggleDiff(jobId: string): Promise<void> {

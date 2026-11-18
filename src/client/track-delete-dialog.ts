@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 
 /**
  * The Delete track confirm dialog.
@@ -50,25 +50,28 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 /** The dialog body for a plan. Pure, so it can be tested without a server. */
-export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
-  const removed: string[] = [];
+export function renderTrackDeletePlan(plan: TrackDeletePlan): SafeHtml {
+  const removed: SafeHtml[] = [];
   if (plan.inDoc) {
     removed.push(
-      `${plural(plan.mainLines ?? plan.features.length, 'feature line')} and the <code>## Track:</code> heading from PROJECT.md`
+      html`${plural(plan.mainLines ?? plan.features.length, 'feature line')} and the <code>## Track:</code> heading from PROJECT.md`
     );
   }
   if (plan.cancel.length > 0) {
     removed.push(
-      `Cancel ${plural(plan.cancel.length, 'active job')}: ${plan.cancel.map((j) => escapeHtml(j.title)).join(', ')}`
+      html`Cancel ${plural(plan.cancel.length, 'active job')}: ${joinHtml(
+        plan.cancel.map((j) => j.title),
+        ', '
+      )}`
     );
   }
   if (plan.discard.length > 0) {
-    removed.push(`Discard ${plural(plan.discard.length, 'job')} and their worktrees`);
+    removed.push(html`Discard ${plural(plan.discard.length, 'job')} and their worktrees`);
   }
   if (plan.branch) {
     const lost =
       plan.branch.uncommittedFiles > 0
-        ? ` — <strong>${plural(plan.branch.uncommittedFiles, 'uncommitted file')} lost</strong>`
+        ? html` — <strong>${plural(plan.branch.uncommittedFiles, 'uncommitted file')} lost</strong>`
         : '';
     const closes =
       plan.branch.sessionsToClose > 0
@@ -78,82 +81,72 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
       plan.features.length > (plan.mainLines ?? plan.features.length)
         ? ', with the track’s plan (its feature lines and specs live on the branch)'
         : '';
-    removed.push(`Branch <code>${escapeHtml(plan.branch.name)}</code> and its worktree${lines}${lost}${closes}`);
+    removed.push(html`Branch <code>${plan.branch.name}</code> and its worktree${lines}${lost}${closes}`);
   }
-  if (plan.sessionLogGroup) removed.push('Its phase group in SESSION-LOG.md');
+  if (plan.sessionLogGroup) removed.push(html`Its phase group in SESSION-LOG.md`);
 
   const merges = plan.merges.length
-    ? `<section class="td-section">
-        <h4>Revert on ${escapeHtml(plan.currentBranch ?? 'the current branch')}</h4>
-        ${plan.merges
-          .map(
-            (m) => `
+    ? html`<section class="td-section">
+        <h4>Revert on ${plan.currentBranch ?? 'the current branch'}</h4>
+        ${plan.merges.map(
+          (m) => html`
           <label class="td-check">
-            <input type="checkbox" class="td-revert" value="${escapeAttr(m.sha)}" checked>
-            <span><code>${escapeHtml(m.sha.slice(0, 8))}</code> ${escapeHtml(m.subject)}
+            <input type="checkbox" class="td-revert" value="${m.sha}" checked>
+            <span><code>${m.sha.slice(0, 8)}</code> ${m.subject}
               <span class="td-muted">(${VIA_LABEL[m.via]})</span></span>
           </label>`
-          )
-          .join('')}
+        )}
       </section>`
     : '';
 
   const unresolved = plan.unresolved.length
-    ? `<section class="td-section">
+    ? html`<section class="td-section">
         <h4>Revert by hand</h4>
-        <ul>${plan.unresolved
-          .map((u) => `<li>${escapeHtml(u.title)} — <span class="td-muted">${escapeHtml(u.reason)}</span></li>`)
-          .join('')}</ul>
+        <ul>${plan.unresolved.map((u) => html`<li>${u.title} — <span class="td-muted">${u.reason}</span></li>`)}</ul>
       </section>`
     : '';
 
   const specs = plan.specs.length
-    ? `<section class="td-section">
+    ? html`<section class="td-section">
         <h4>Specs</h4>
-        ${plan.specs
-          .map(
-            (s) => `
+        ${plan.specs.map(
+          (s) => html`
           <label class="td-check${s.offered ? '' : ' disabled'}">
-            <input type="checkbox" class="td-spec" value="${escapeAttr(s.path)}"
+            <input type="checkbox" class="td-spec" value="${s.path}"
                    ${s.defaultDelete ? 'checked' : ''} ${s.offered ? '' : 'disabled'}>
-            <span>Delete <code>${escapeHtml(s.path)}</code>
-              <span class="td-muted">— ${escapeHtml(s.note)}</span></span>
+            <span>Delete <code>${s.path}</code>
+              <span class="td-muted">— ${s.note}</span></span>
           </label>`
-          )
-          .join('')}
+        )}
       </section>`
     : '';
 
   const guessed =
     plan.guessedFiles.length || plan.guessedCommits.length
-      ? `<section class="td-section">
+      ? html`<section class="td-section">
         <h4>Guessed from this track’s sessions — unticked</h4>
         <p class="td-note">These look like this track’s work on main, going by what its sessions
           wrote. Tick only what you recognise.</p>
-        ${plan.guessedFiles
-          .map(
-            (f) => `
+        ${plan.guessedFiles.map(
+          (f) => html`
           <label class="td-check">
-            <input type="checkbox" class="td-restore" value="${escapeAttr(f.path)}">
-            <span>Discard uncommitted <code>${escapeHtml(f.path)}</code>
-              <span class="td-muted">(${escapeHtml(f.status)})</span></span>
+            <input type="checkbox" class="td-restore" value="${f.path}">
+            <span>Discard uncommitted <code>${f.path}</code>
+              <span class="td-muted">(${f.status})</span></span>
           </label>`
-          )
-          .join('')}
-        ${plan.guessedCommits
-          .map(
-            (c) => `
+        )}
+        ${plan.guessedCommits.map(
+          (c) => html`
           <label class="td-check">
-            <input type="checkbox" class="td-revert-guess" value="${escapeAttr(c.sha)}">
-            <span>Revert <code>${escapeHtml(c.sha.slice(0, 8))}</code> ${escapeHtml(c.subject)}</span>
+            <input type="checkbox" class="td-revert-guess" value="${c.sha}">
+            <span>Revert <code>${c.sha.slice(0, 8)}</code> ${c.subject}</span>
           </label>`
-          )
-          .join('')}
+        )}
       </section>`
       : '';
 
   const unattributed = plan.unattributed
-    ? `<p class="td-note">This track never had a branch, so ${
+    ? html`<p class="td-note">This track never had a branch, so ${
         plan.guessedFiles.length || plan.guessedCommits.length
           ? 'apart from the guesses above, code written for it on main'
           : 'code written for it on main'
@@ -164,10 +157,10 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): string {
         }</p>`
     : '';
 
-  return `
+  return html`
     <section class="td-section">
       <h4>Removed</h4>
-      <ul>${removed.map((r) => `<li>${r}</li>`).join('') || '<li>Nothing but the record of it</li>'}</ul>
+      <ul>${removed.length ? removed.map((r) => html`<li>${r}</li>`) : html`<li>Nothing but the record of it</li>`}</ul>
     </section>
     ${merges}${unresolved}${specs}${guessed}${unattributed}
     <p class="td-commit"></p>
@@ -232,15 +225,18 @@ export async function openTrackDeleteDialog(
 
   const modal = document.createElement('div');
   modal.className = 'modal td-modal';
-  modal.innerHTML = `
+  setHtml(
+    modal,
+    html`
     <div class="modal-content td-content" role="dialog" aria-modal="true" aria-labelledby="td-title">
-      <h3 id="td-title">Delete track “${escapeHtml(track)}”?</h3>
+      <h3 id="td-title">Delete track “${track}”?</h3>
       <div class="td-body">${renderTrackDeletePlan(plan)}</div>
       <div class="modal-actions">
         <button class="btn-secondary td-cancel">Cancel</button>
         <button class="btn-danger td-confirm">Delete track</button>
       </div>
-    </div>`;
+    </div>`
+  );
   document.body.appendChild(modal);
 
   const confirmBtn = modal.querySelector('.td-confirm') as HTMLButtonElement;

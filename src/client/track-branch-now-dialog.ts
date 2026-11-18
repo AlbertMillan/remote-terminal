@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, setHtml, type SafeHtml } from './html-utils.js';
 
 /**
  * Branch now: move a track's uncommitted work off main into a new track branch.
@@ -14,22 +14,20 @@ export interface GuessedFile {
   status: string;
 }
 
-export function renderBranchNowBody(files: GuessedFile[], commits: number): string {
-  const rows = files
-    .map(
-      (f) => `
+export function renderBranchNowBody(files: GuessedFile[], commits: number): SafeHtml {
+  const rows = files.map(
+    (f) => html`
       <label class="td-check">
-        <input type="checkbox" class="bn-file" value="${escapeAttr(f.path)}" checked>
-        <span><code>${escapeHtml(f.path)}</code> <span class="td-muted">(${escapeHtml(f.status)})</span></span>
+        <input type="checkbox" class="bn-file" value="${f.path}" checked>
+        <span><code>${f.path}</code> <span class="td-muted">(${f.status})</span></span>
       </label>`
-    )
-    .join('');
+  );
   const commitNote =
     commits > 0
-      ? `<p class="td-note">${commits === 1 ? '1 commit' : `${commits} commits`} on main also look like this
+      ? html`<p class="td-note">${commits === 1 ? '1 commit' : `${commits} commits`} on main also look like this
          track’s. They stay where they are — Delete track offers them, unticked.</p>`
       : '';
-  return `
+  return html`
     <p class="td-note">Guessed from the files this track’s sessions wrote in the main checkout.
       Untick anything that isn’t this track’s. The ticked files move into a new track worktree
       and are restored on main.</p>
@@ -47,15 +45,18 @@ export function openBranchNowDialog(
 ): Promise<string | null> {
   const modal = document.createElement('div');
   modal.className = 'modal td-modal bn-modal';
-  modal.innerHTML = `
+  setHtml(
+    modal,
+    html`
     <div class="modal-content td-content" role="dialog" aria-modal="true" aria-labelledby="bn-title">
-      <h3 id="bn-title">Move “${escapeHtml(track)}” off main?</h3>
+      <h3 id="bn-title">Move “${track}” off main?</h3>
       <div class="td-body">${renderBranchNowBody(files, commits)}</div>
       <div class="modal-actions">
         <button class="btn-secondary bn-cancel">Cancel</button>
         <button class="btn-primary bn-confirm">Move to a track branch</button>
       </div>
-    </div>`;
+    </div>`
+  );
   document.body.appendChild(modal);
 
   const confirmBtn = modal.querySelector('.bn-confirm') as HTMLButtonElement;

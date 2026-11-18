@@ -1,4 +1,4 @@
-import { escapeHtml } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { SHORTCUT_GROUPS } from './shortcuts.js';
 
 /**
@@ -11,9 +11,9 @@ export class ShortcutsModal {
   private shortcutsPreviousFocus: HTMLElement | null = null;
 
   /** Render key tokens as <kbd> elements joined by a "+" separator. */
-  private renderKeys(keys: string[], plusClass = ''): string {
-    const plus = plusClass ? `<span class="${plusClass}">+</span>` : '<span>+</span>';
-    return keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join(plus);
+  private renderKeys(keys: string[], plusClass = ''): SafeHtml {
+    const plus = plusClass ? html`<span class="${plusClass}">+</span>` : html`<span>+</span>`;
+    return joinHtml(keys.map((k) => html`<kbd>${k}</kbd>`), plus);
   }
 
   private renderShortcutsModal(): void {
@@ -22,21 +22,24 @@ export class ShortcutsModal {
     const container = document.getElementById('shortcuts-list');
     if (!container) return;
 
-    container.innerHTML = SHORTCUT_GROUPS.map(
-      (group) => `
+    setHtml(
+      container,
+      joinHtml(
+        SHORTCUT_GROUPS.map(
+      (group) => html`
         <div class="shortcuts-group">
-          <div class="shortcuts-group-title">${escapeHtml(group.title)}</div>
-          ${group.shortcuts
-            .map(
-              (s) => `
+          <div class="shortcuts-group-title">${group.title}</div>
+          ${group.shortcuts.map(
+              (s) => html`
             <div class="shortcuts-row">
               <span class="shortcuts-keys">${this.renderKeys(s.keys, 'shortcuts-plus')}</span>
-              <span class="shortcuts-desc">${escapeHtml(s.label)}</span>
+              <span class="shortcuts-desc">${s.label}</span>
             </div>`
-            )
-            .join('')}
+            )}
         </div>`
-    ).join('');
+        )
+      )
+    );
 
     this.shortcutsRendered = true;
   }
@@ -46,15 +49,18 @@ export class ShortcutsModal {
     if (!container) return;
 
     const items = SHORTCUT_GROUPS.flatMap((group) => group.shortcuts).filter((s) => s.welcome);
-    container.innerHTML = items
-      .map(
-        (s) => `
+    setHtml(
+      container,
+      joinHtml(
+        items.map(
+        (s) => html`
         <div class="shortcut-item">
           ${this.renderKeys(s.keys)}
-          <span class="shortcut-label">${escapeHtml(s.label)}</span>
+          <span class="shortcut-label">${s.label}</span>
         </div>`
+        )
       )
-      .join('');
+    );
   }
 
   showShortcutsModal(): void {

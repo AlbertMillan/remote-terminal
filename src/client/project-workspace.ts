@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog } from './track-branch-now-dialog.js';
 import { installTrackDependencies } from './track-picker.js';
@@ -273,9 +273,10 @@ export class ProjectWorkspace {
       this.renderList();
     } catch (error) {
       if (listEl) {
-        listEl.innerHTML = `<li class="project-empty">Couldn't load projects: ${escapeHtml(
-          error instanceof Error ? error.message : String(error)
-        )}</li>`;
+        setHtml(
+          listEl,
+          html`<li class="project-empty">Couldn't load projects: ${error instanceof Error ? error.message : String(error)}</li>`
+        );
       }
     }
   }
@@ -288,7 +289,7 @@ export class ProjectWorkspace {
     listEl.innerHTML = '';
 
     if (this.board.length === 0) {
-      listEl.innerHTML = '<li class="project-empty">No projects found.</li>';
+      setHtml(listEl, html`<li class="project-empty">No projects found.</li>`);
       return;
     }
 
@@ -316,22 +317,24 @@ export class ProjectWorkspace {
       if (project.nested.length > 0) meta.push(`+${project.nested.length} dirs`);
       if (!project.hasDoc) meta.push('no index');
 
-      body.innerHTML = `
-        <div class="project-item-name">${escapeHtml(project.name)}</div>
-        <div class="project-item-meta">${escapeHtml(meta.join(' · '))}</div>`;
+      setHtml(
+        body,
+        html`
+        <div class="project-item-name">${project.name}</div>
+        <div class="project-item-meta">${meta.join(' · ')}</div>`
+      );
       li.appendChild(body);
 
       if (project.hasDoc && project.counts.total > 0) {
         const badges = document.createElement('div');
         badges.className = 'project-badges';
         const { blocked, in_progress: active, total, done } = project.counts;
-        if (blocked > 0) {
-          badges.innerHTML += `<span class="project-badge blockers" title="Blocked">! ${blocked}</span>`;
-        }
-        if (active > 0) {
-          badges.innerHTML += `<span class="project-badge open" title="In progress">◐ ${active}</span>`;
-        }
-        badges.innerHTML += `<span class="project-badge" title="Features done">${done}/${total}</span>`;
+        setHtml(
+          badges,
+          html`${blocked > 0 && html`<span class="project-badge blockers" title="Blocked">! ${blocked}</span>`}${
+            active > 0 && html`<span class="project-badge open" title="In progress">◐ ${active}</span>`
+          }<span class="project-badge" title="Features done">${done}/${total}</span>`
+        );
         li.appendChild(badges);
       }
 
@@ -430,27 +433,28 @@ export class ProjectWorkspace {
     }
 
     if (!project.hasDoc) {
-      container.innerHTML = renderNoIndex(
-        project,
-        this.failedMigrations.get(project.cwd),
-        this.busy.has(project.cwd)
+      setHtml(
+        container,
+        renderNoIndex(project, this.failedMigrations.get(project.cwd), this.busy.has(project.cwd))
       );
       return;
     }
 
-    const tracks =
-      project.tracks
-        .map((track) =>
-          renderTrack(project, track, this.collapsedTracks, this.planning, this.unbranched, this.specs)
-        )
-        .join('') + renderOrphanBranches(project);
+    const tracks = joinHtml([
+      ...project.tracks.map((track) =>
+        renderTrack(project, track, this.collapsedTracks, this.planning, this.unbranched, this.specs)
+      ),
+      renderOrphanBranches(project),
+    ]);
     this.ensureUnbranched(project);
     const empty =
       project.counts.total === 0
-        ? '<div class="project-empty">No features yet — add the first one below.</div>'
+        ? html`<div class="project-empty">No features yet — add the first one below.</div>`
         : '';
 
-    container.innerHTML = `
+    setHtml(
+      container,
+      html`
       <div class="pw-features">
         <div class="pw-subhead">
           <h3 class="project-log-subhead">Features</h3>
@@ -462,7 +466,8 @@ export class ProjectWorkspace {
         ${tracks}${empty}
         ${renderAddRow(project)}
         ${renderQaCard(project, this.qaDocs.get(project.cwd), this.qaBusy.has(project.cwd))}
-      </div>`;
+      </div>`
+    );
   }
 
   /** Load a project's QA contract for the detail view. */
@@ -862,7 +867,7 @@ export class ProjectWorkspace {
     if (container) this.renderFeatures(container, cwd);
     const project = this.getProject(cwd);
     const badges = document.getElementById('project-badges-row');
-    if (project && badges) badges.innerHTML = this.renderHeaderBadges(project);
+    if (project && badges) setHtml(badges, this.renderHeaderBadges(project));
   }
 
   /**
@@ -911,26 +916,24 @@ export class ProjectWorkspace {
   }
 
   /** The header's Account select: default first (naming what it resolves to), then each account. */
-  private renderAccountBadge(project: WorkspaceProject): string {
-    if (!project.account) return ''; // a board from a server without accounts
+  private renderAccountBadge(project: WorkspaceProject): SafeHtml {
+    if (!project.account) return html``; // a board from a server without accounts
     this.loadAccountNames();
     const { own, effective, source } = project.account;
     const fallback = own ? null : effective;
     const names = [...(this.accountNames ?? [])];
     if (own && !names.includes(own)) names.push(own);
     const options = [
-      `<option value=""${own ? '' : ' selected'}>${
-        source === 'parent' ? 'Inherited' : 'Default'
-      }${fallback ? ` (${escapeHtml(fallback)})` : ''}</option>`,
-      ...names.map(
-        (n) => `<option value="${escapeAttr(n)}"${n === own ? ' selected' : ''}>${escapeHtml(n)}</option>`
-      ),
-    ].join('');
+      html`<option value=""${own ? '' : ' selected'}>${source === 'parent' ? 'Inherited' : 'Default'}${
+        fallback ? ` (${fallback})` : ''
+      }</option>`,
+      ...names.map((n) => html`<option value="${n}"${n === own ? ' selected' : ''}>${n}</option>`),
+    ];
     const title =
       "Claude account this project's new sessions default to and its jobs run under. " +
       'A new session can still pick another.';
-    return `<label class="pw-badge account" title="${escapeAttr(title)}">Account
-      <select class="pw-account-select" data-project-account data-cwd="${escapeAttr(project.cwd)}"${
+    return html`<label class="pw-badge account" title="${title}">Account
+      <select class="pw-account-select" data-project-account data-cwd="${project.cwd}"${
         this.accountBusy.has(project.cwd) ? ' disabled' : ''
       }>${options}</select></label>`;
   }
@@ -1119,35 +1122,29 @@ export class ProjectWorkspace {
   }
 
   /** Header badges describing the project's VCS tier and dispatch eligibility. */
-  renderHeaderBadges(project: WorkspaceProject): string {
-    const badges: string[] = [];
+  renderHeaderBadges(project: WorkspaceProject): SafeHtml {
+    const badges: SafeHtml[] = [];
     if (project.status) {
-      badges.push(`<span class="pw-badge status">${escapeHtml(project.status)}</span>`);
+      badges.push(html`<span class="pw-badge status">${project.status}</span>`);
     }
     badges.push(
-      `<span class="pw-badge vcs ${project.vcs.kind}" title="${escapeAttr(
-        project.vcs.note || 'Git repository'
-      )}">${escapeHtml(project.vcs.kind)}</span>`
+      html`<span class="pw-badge vcs ${project.vcs.kind}" title="${project.vcs.note || 'Git repository'}">${project.vcs.kind}</span>`
     );
     badges.push(this.renderAccountBadge(project));
     if (project.vcs.note) {
-      badges.push(`<span class="pw-badge warn" title="${escapeAttr(project.vcs.note)}">!</span>`);
+      badges.push(html`<span class="pw-badge warn" title="${project.vcs.note}">!</span>`);
     }
     if (project.nested.length > 0) {
       badges.push(
-        `<span class="pw-badge" title="${escapeAttr(
-          project.nested.join('\n')
-        )}">+${project.nested.length} dirs</span>`
+        html`<span class="pw-badge" title="${project.nested.join('\n')}">+${project.nested.length} dirs</span>`
       );
     }
     if (project.usage && hasSpend(project.usage.total)) {
       badges.push(
-        `<span class="jb-usage project" title="${escapeAttr(projectUsageTooltip(project.usage))}">${escapeHtml(
-          formatUsageCost(project.usage.total)
-        )}</span>`
+        html`<span class="jb-usage project" title="${projectUsageTooltip(project.usage)}">${formatUsageCost(project.usage.total)}</span>`
       );
     }
-    return badges.join('');
+    return joinHtml(badges);
   }
 
   openSession(cwd: string): void {

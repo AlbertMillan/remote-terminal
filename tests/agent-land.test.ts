@@ -27,7 +27,12 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
-const tracks = await import('../src/server/projects/track-branches.js');
+// Track branches, Land's git half and Update from main: one namespace, as before the split.
+const tracks = {
+  ...(await import('../src/server/projects/track-branches.js')),
+  ...(await import('../src/server/projects/track-land-core.js')),
+  ...(await import('../src/server/projects/track-update.js')),
+};
 const { updateAndInstall } = await import('../src/server/projects/track-land.js');
 const api = await import('../src/server/agent/sessions-api.js');
 const { sessionEnv, sessionForToken } = await import('../src/server/sessions/session-env.js');

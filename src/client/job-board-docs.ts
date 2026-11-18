@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, type SafeHtml } from './html-utils.js';
 import { findReferences, resolveReference } from './decision-format.js';
 import type { Job } from './job-board-types.js';
 
@@ -50,7 +50,7 @@ export function renderDocs(
   docsCollapsed: Set<string>,
   openDoc: Map<string, { path: string; mode: 'text' | 'diff' }>,
   docBodies: Map<string, { body: string; truncated: boolean }>
-): string {
+): SafeHtml {
   const changed = docs.filter((d) => d.status !== 'unchanged');
   const unchanged = docs.filter((d) => d.status === 'unchanged');
   const showAll = docsExpanded.has(job.id);
@@ -58,17 +58,15 @@ export function renderDocs(
   const hidden = unchanged.length - shown.length;
   const collapsed = docsCollapsed.has(job.id);
 
-  const rows = [...changed, ...shown]
-    .map((doc) => renderDocRow(job, doc, openDoc, docBodies))
-    .join('');
+  const rows = [...changed, ...shown].map((doc) => renderDocRow(job, doc, openDoc, docBodies));
 
   const body =
     docs.length === 0
-      ? '<div class="pw-hint">No documents for this job yet.</div>'
-      : `<ul class="jb-doc-list">${rows}</ul>
+      ? html`<div class="pw-hint">No documents for this job yet.</div>`
+      : html`<ul class="jb-doc-list">${rows}</ul>
          ${
            hidden > 0
-             ? `<button type="button" class="jb-doc-more" data-job="${escapeAttr(job.id)}">
+             ? html`<button type="button" class="jb-doc-more" data-job="${job.id}">
                   Show ${hidden} more document${hidden === 1 ? '' : 's'}
                 </button>`
              : ''
@@ -76,11 +74,11 @@ export function renderDocs(
 
   // aria-expanded on its own announces a state without saying whose, so the
   // body carries an id for the head to point at.
-  const bodyId = `jb-docs-body-${escapeAttr(job.id)}`;
+  const bodyId = `jb-docs-body-${job.id}`;
 
-  return `
+  return html`
     <div class="jb-docs${collapsed ? ' collapsed' : ''}">
-      <button type="button" class="jb-docs-head" data-job="${escapeAttr(job.id)}"
+      <button type="button" class="jb-docs-head" data-job="${job.id}"
               aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="${bodyId}">
         <span>Documents</span>
         <span class="jb-docs-count">${
@@ -97,22 +95,22 @@ function renderDocRow(
   doc: JobDoc,
   openDoc: Map<string, { path: string; mode: 'text' | 'diff' }>,
   docBodies: Map<string, { body: string; truncated: boolean }>
-): string {
+): SafeHtml {
   const open = openDoc.get(job.id);
   const isOpen = open?.path === doc.path;
   const changed = doc.status !== 'unchanged';
   const stat =
     changed && (doc.insertions || doc.deletions)
-      ? `<span class="jb-doc-stat">+${doc.insertions} −${doc.deletions}</span>`
+      ? html`<span class="jb-doc-stat">+${doc.insertions} −${doc.deletions}</span>`
       : '';
 
-  return `
+  return html`
     <li class="jb-doc ${changed ? 'changed' : 'unchanged'}${isOpen ? ' open' : ''}">
-      <button type="button" class="jb-doc-row" data-job="${escapeAttr(job.id)}"
-              data-path="${escapeAttr(doc.path)}">
+      <button type="button" class="jb-doc-row" data-job="${job.id}"
+              data-path="${doc.path}">
         <span class="jb-doc-mark" aria-hidden="true">${changed ? '●' : '○'}</span>
-        <span class="jb-doc-path">${escapeHtml(doc.path)}</span>
-        ${doc.isSpec ? '<span class="jb-doc-tag">spec</span>' : ''}
+        <span class="jb-doc-path">${doc.path}</span>
+        ${doc.isSpec ? html`<span class="jb-doc-tag">spec</span>` : ''}
         ${stat}
         <span class="jb-doc-status">${DOC_STATUS_LABEL[doc.status]}</span>
       </button>
@@ -125,32 +123,32 @@ function renderDocView(
   doc: JobDoc,
   mode: 'text' | 'diff',
   docBodies: Map<string, { body: string; truncated: boolean }>
-): string {
+): SafeHtml {
   const cached = docBodies.get(`${job.id}|${mode}|${doc.path}`);
   const changed = doc.status !== 'unchanged';
-  const tab = (value: 'text' | 'diff', label: string): string => `
+  const tab = (value: 'text' | 'diff', label: string): SafeHtml => html`
     <button type="button" class="jb-doc-tab${mode === value ? ' on' : ''}"
-            data-job="${escapeAttr(job.id)}" data-path="${escapeAttr(doc.path)}"
+            data-job="${job.id}" data-path="${doc.path}"
             data-mode="${value}">${label}</button>`;
 
   const body = !cached
-    ? '<div class="pw-hint">Loading…</div>'
+    ? html`<div class="pw-hint">Loading…</div>`
     : !cached.body.trim()
-      ? `<div class="pw-hint">${
+      ? html`<div class="pw-hint">${
           mode === 'diff'
             ? 'This run has not committed a change to this file.'
             : 'This file is empty.'
         }</div>`
       : mode === 'diff'
-        ? `<pre class="jb-diff">${highlightDiff(cached.body)}</pre>`
-        : `<pre class="jb-doc-body">${renderDocText(cached.body)}</pre>`;
+        ? html`<pre class="jb-diff">${highlightDiff(cached.body)}</pre>`
+        : html`<pre class="jb-doc-body">${renderDocText(cached.body)}</pre>`;
 
-  return `
-    <div class="jb-doc-view" data-doc="${escapeAttr(doc.path)}">
+  return html`
+    <div class="jb-doc-view" data-doc="${doc.path}">
       <div class="jb-doc-tabs">
         ${tab('text', 'text')}
         ${changed ? tab('diff', 'diff') : ''}
-        ${cached?.truncated ? '<span class="jb-doc-trunc">truncated</span>' : ''}
+        ${cached?.truncated ? html`<span class="jb-doc-trunc">truncated</span>` : ''}
       </div>
       ${body}
     </div>`;
@@ -162,8 +160,8 @@ function renderDocView(
  * Only the headings become elements — enough for a reference to scroll to one
  * and for the eye to find it, without pretending to render markdown.
  */
-function renderDocText(text: string): string {
-  return text
+function renderDocText(text: string): SafeHtml {
+  const lines = text
     .split('\n')
     .map((line) => {
       // Kept in step with headingNumbers() in src/server/jobs/docs.ts: a
@@ -172,16 +170,14 @@ function renderDocText(text: string): string {
       const match =
         /^\s{0,3}#{1,6}\s*§?\s*(\d+(?:\.\d+)*)[.)]?\s+\S/.exec(line) ??
         /^\s{0,3}§?\s*(\d+(?:\.\d+)+)[.)]?\s+\S/.exec(line);
-      if (!match) return escapeHtml(line);
-      return `<span class="jb-doc-h" data-section="${escapeAttr(match[1])}">${escapeHtml(
-        line
-      )}</span>`;
-    })
-    .join('\n');
+      if (!match) return html`${line}`;
+      return html`<span class="jb-doc-h" data-section="${match[1]}">${line}</span>`;
+    });
+  return joinHtml(lines, '\n');
 }
 
-export function paragraphs(job: Job, parts: string[], docs: Map<string, JobDoc[]>): string {
-  return parts.map((p) => `<p>${linked(job, p, docs)}</p>`).join('');
+export function paragraphs(job: Job, parts: string[], docs: Map<string, JobDoc[]>): SafeHtml {
+  return joinHtml(parts.map((p) => html`<p>${linked(job, p, docs)}</p>`));
 }
 
 /**
@@ -193,25 +189,28 @@ export function paragraphs(job: Job, parts: string[], docs: Map<string, JobDoc[]
  * escaped text needs offsets the escaping has already moved — and linking
  * only ever WRAPS, so nothing the model wrote is dropped.
  */
-export function linked(job: Job, raw: string, docsCache: Map<string, JobDoc[]>): string {
+export function linked(job: Job, raw: string, docsCache: Map<string, JobDoc[]>): SafeHtml {
   const refs = findReferences(raw);
-  if (refs.length === 0) return escapeHtml(raw);
+  if (refs.length === 0) return html`${raw}`;
 
   const docs = docsCache.get(job.id) || [];
-  let out = '';
+  const out: SafeHtml[] = [];
   let at = 0;
   for (const ref of refs) {
-    out += escapeHtml(raw.slice(at, ref.start));
+    out.push(html`${raw.slice(at, ref.start)}`);
     const target = resolveReference(ref, docs);
-    out += target
-      ? `<button type="button" class="jb-ref" data-job="${escapeAttr(job.id)}"
-                 data-path="${escapeAttr(target.path)}"
-                 data-section="${escapeAttr(ref.kind === 'section' ? ref.value : '')}"
-                 title="Open ${escapeAttr(target.path)}">${escapeHtml(ref.raw)}</button>`
-      : escapeHtml(ref.raw);
+    out.push(
+      target
+        ? html`<button type="button" class="jb-ref" data-job="${job.id}"
+                 data-path="${target.path}"
+                 data-section="${ref.kind === 'section' ? ref.value : ''}"
+                 title="Open ${target.path}">${ref.raw}</button>`
+        : html`${ref.raw}`
+    );
     at = ref.end;
   }
-  return out + escapeHtml(raw.slice(at));
+  out.push(html`${raw.slice(at)}`);
+  return joinHtml(out);
 }
 
 /**
@@ -226,18 +225,18 @@ export function specPathOf(job: Job, docs: Map<string, JobDoc[]>): string | null
 }
 
 /** Escape first, then colour by diff prefix — never the other way round. */
-export function highlightDiff(diff: string): string {
-  return escapeHtml(diff)
+export function highlightDiff(diff: string): SafeHtml {
+  const lines = diff
     .split('\n')
     .map((line) => {
-      if (line.startsWith('+++') || line.startsWith('---')) return `<span class="d-meta">${line}</span>`;
-      if (line.startsWith('@@')) return `<span class="d-hunk">${line}</span>`;
-      if (line.startsWith('diff --git')) return `<span class="d-file">${line}</span>`;
-      if (line.startsWith('+')) return `<span class="d-add">${line}</span>`;
-      if (line.startsWith('-')) return `<span class="d-del">${line}</span>`;
-      return line;
-    })
-    .join('\n');
+      if (line.startsWith('+++') || line.startsWith('---')) return html`<span class="d-meta">${line}</span>`;
+      if (line.startsWith('@@')) return html`<span class="d-hunk">${line}</span>`;
+      if (line.startsWith('diff --git')) return html`<span class="d-file">${line}</span>`;
+      if (line.startsWith('+')) return html`<span class="d-add">${line}</span>`;
+      if (line.startsWith('-')) return html`<span class="d-del">${line}</span>`;
+      return html`${line}`;
+    });
+  return joinHtml(lines, '\n');
 }
 
 export { DOC_STATUS_LABEL, DOCS_SHOWN };

@@ -23,6 +23,7 @@ import { startClaudeNameWatch, stopClaudeNameWatch } from './sessions/claude-reg
 import { broadcastAccountChanged, broadcastAccountWarnings, broadcastClaudeNames, broadcastSessionRow, isDeviceForeground } from './websocket/connections.js';
 import { recheckAccounts, startAccountWatch, stopAccountWatch } from './sessions/account-watch.js';
 import { getTailscaleCertPaths, getTailscaleStatus } from './auth/tailscale.js';
+import { registerAccessGate } from './auth/access-gate.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb, getAllSessions as getAllSessionsFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
@@ -43,7 +44,6 @@ import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
 import { registerUploadRoutes, sweepUploads } from './sessions/uploads.js';
 import { registerSessionFileRoutes } from './sessions/session-files.js';
-import { isAllowedHost, isGuardedPath } from './host-check.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
@@ -157,15 +157,13 @@ export async function createApp(): Promise<FastifyInstance> {
   // Register WebSocket plugin
   await app.register(fastifyWebsocket);
 
-  // DNS rebinding: a request to /api/* or /ws must name this server in its Host, or a page on
-  // another domain pointed at our IP reads every answer as the user (host-check.ts). Added
-  // before any route, so every route and plugin scope below inherits it.
-  app.addHook('onRequest', async (request, reply) => {
-    if (!isGuardedPath(request.url)) return;
-    const { hostname, allowedHosts } = getConfig().server;
-    if (isAllowedHost(request.headers.host, [hostname, ...(allowedHosts ?? [])])) return;
-    logger.warn({ host: request.headers.host, url: request.url }, 'Refused a request for an unknown host');
-    return reply.status(421).send({ error: 'Unknown host; add it to server.allowedHosts in config.json' });
+  // Host, Origin and identity for every /api/* and /ws request (auth/access-gate.ts,
+  // docs/auth.md). Before any route, so every route and plugin scope below inherits it.
+  registerAccessGate(app, {
+    hosts: () => {
+      const { hostname, allowedHosts } = getConfig().server;
+      return [hostname, ...(allowedHosts ?? [])];
+    },
   });
 
   // Determine static files path

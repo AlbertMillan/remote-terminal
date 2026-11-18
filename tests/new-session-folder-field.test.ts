@@ -4,7 +4,7 @@ import {
   ghostFor,
   leafName,
   tildeForm,
-  verdictHtml,
+  verdictHtml as verdictMarkup,
   type FolderCompletion,
   type FolderItem,
 } from '../src/client/new-session-modal.js';
@@ -76,6 +76,9 @@ describe('leafName', () => {
     expect(leafName('steam')).toBe('steam');
   });
 });
+
+/** The hint's markup as a string. */
+const verdictHtml = (...args: Parameters<typeof verdictMarkup>) => verdictMarkup(...args).value;
 
 describe('verdictHtml', () => {
   const options = { git: true, projectDoc: false };

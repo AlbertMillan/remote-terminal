@@ -1,5 +1,22 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, raw, setHtml, type SafeHtml } from './html-utils.js';
 import type { SessionInfo, CategoryInfo } from './session-types.js';
+import { SessionDrag } from './session-list-drag.js';
+import {
+  STATE_LABEL,
+  STATE_RANK,
+  groupStartedSessions,
+  matchesFilter,
+  needsYou,
+  rowState,
+  trackGroups,
+  worstState,
+  type RowState,
+  type TrackGroup,
+} from './session-list-model.js';
+
+// The model's helpers stay importable from the view, which its tests and callers know.
+export { groupStartedSessions, matchesFilter, needsYou, peersAfterBuilders, rowState, trackGroups, worstState } from './session-list-model.js';
+export type { RowState, TrackGroup } from './session-list-model.js';
 
 /**
  * The narrow surface SessionListView needs from SessionManager. `sessions`,
@@ -66,137 +83,6 @@ export function writeFlag(key: string, value: boolean): void {
   } catch {
     /* storage blocked: the choice still holds for this page */
   }
-}
-
-/**
- * Sessions grouped under the session that started them (docs/session-orchestration.md).
- * A child renders under its parent, in the parent's category, whatever its own categoryId.
- * One level only: a child whose parent is gone (deleted), or is itself a child, is
- * top-level. Children keep creation order, except that a read-only peer renders right
- * after its builder (peersAfterBuilders).
- */
-export function groupStartedSessions(sessions: Map<string, SessionInfo>): {
-  childrenOf: Map<string, SessionInfo[]>;
-  nested: Set<string>;
-} {
-  const childrenOf = new Map<string, SessionInfo[]>();
-  const nested = new Set<string>();
-  for (const session of sessions.values()) {
-    const parent = session.spawnedBy ? sessions.get(session.spawnedBy) : undefined;
-    if (!parent || parent.spawnedBy || parent.id === session.id) continue;
-    const list = childrenOf.get(parent.id) ?? [];
-    list.push(session);
-    childrenOf.set(parent.id, list);
-    nested.add(session.id);
-  }
-  for (const [id, list] of childrenOf) childrenOf.set(id, peersAfterBuilders(list));
-  return { childrenOf, nested };
-}
-
-/** A builder and every read-only peer beside it, or one session on its own (no peers). */
-export interface TrackGroup {
-  lead: SessionInfo;
-  peers: SessionInfo[];
-}
-
-/**
- * One parent's children as tracks, in creation order. A read-only peer joins the newest
- * writer in the same worktree started before it; a builder may have any number of peers
- * (project/builder-critic-pairs.md). A peer with no such builder is a group of its own.
- */
-export function trackGroups(children: SessionInfo[]): TrackGroup[] {
-  const sorted = [...children].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const builderOf = (peer: SessionInfo): SessionInfo | undefined => {
-    let found: SessionInfo | undefined;
-    for (const s of sorted) {
-      if (s.createdAt > peer.createdAt) break;
-      if (s.access !== 'read' && s.cwd === peer.cwd) found = s;
-    }
-    return found;
-  };
-  const builders = new Map(sorted.filter((s) => s.access === 'read').map((p) => [p.id, builderOf(p)]));
-  const groups: TrackGroup[] = [];
-  const byLead = new Map<string, TrackGroup>();
-  for (const s of sorted) {
-    if (s.access === 'read' && builders.get(s.id)) continue;
-    const group = { lead: s, peers: [] as SessionInfo[] };
-    groups.push(group);
-    byLead.set(s.id, group);
-  }
-  for (const s of sorted) {
-    const builder = s.access === 'read' ? builders.get(s.id) : undefined;
-    if (builder) byLead.get(builder.id)?.peers.push(s);
-  }
-  return groups;
-}
-
-/**
- * One parent's children in creation order, each read-only peer moved right after its
- * builder: the newest writer in the same worktree started before it. A peer with no such
- * builder keeps its place.
- */
-export function peersAfterBuilders(children: SessionInfo[]): SessionInfo[] {
-  return trackGroups(children).flatMap((g) => [g.lead, ...g.peers]);
-}
-
-export type RowState = 'input' | 'done' | 'live' | 'stopped';
-const STATE_RANK: Record<RowState, number> = { input: 0, done: 1, live: 2, stopped: 3 };
-const STATE_LABEL: Record<RowState, string> = {
-  input: 'Waiting for input',
-  done: 'Task completed',
-  live: 'Running',
-  stopped: 'Stopped',
-};
-
-type Notification = { type: 'needs-input' | 'completed'; timestamp: string } | undefined;
-
-/** A row's status glyph. A session with no live PTY is stopped whatever it last reported. */
-export function rowState(session: SessionInfo, notification: Notification): RowState {
-  if (!session.attachable) return 'stopped';
-  if (notification?.type === 'needs-input') return 'input';
-  if (notification?.type === 'completed') return 'done';
-  return 'live';
-}
-
-/** The most urgent of several states (a track's members, a category's rows). */
-export function worstState(states: RowState[]): RowState {
-  return states.reduce<RowState>((w, s) => (STATE_RANK[s] < STATE_RANK[w] ? s : w), 'stopped');
-}
-
-/** Every live session waiting for input, children included, longest-waiting first. */
-export function needsYou(
-  sessions: Map<string, SessionInfo>,
-  notifications: Map<string, { type: 'needs-input' | 'completed'; timestamp: string }>
-): SessionInfo[] {
-  return [...sessions.values()]
-    .filter((s) => s.attachable && notifications.get(s.id)?.type === 'needs-input')
-    .sort((a, b) => (notifications.get(a.id)?.timestamp ?? '').localeCompare(notifications.get(b.id)?.timestamp ?? ''));
-}
-
-/**
- * The sidebar filter: every whitespace-separated word must appear in the session's name,
- * its `@claudeName`, account, category, the name of the session that started it,
- * `read-only` for a peer, or `stopped` for a row with no live PTY.
- */
-export function matchesFilter(
-  session: SessionInfo,
-  query: string,
-  ctx: { parentName?: string | null; categoryName?: string | null } = {}
-): boolean {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return true;
-  const hay = [
-    session.name,
-    session.claudeName ? `@${session.claudeName}` : '',
-    session.account ?? '',
-    ctx.categoryName ?? '',
-    ctx.parentName ?? '',
-    session.access === 'read' ? 'read-only' : '',
-    session.attachable ? '' : 'stopped',
-  ]
-    .join(' ')
-    .toLowerCase();
-  return words.every((w) => hay.includes(w));
 }
 
 /** Copy text: the async clipboard first, then the selection fallback plain HTTP still allows. */
@@ -307,19 +193,33 @@ function restoreFocus(listEl: HTMLElement, key: FocusKey): void {
 }
 
 const ICON = {
-  chevron:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>',
-  handle:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>',
-  at: '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path></svg>',
-  check:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"></polyline></svg>',
-  stop: '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>',
-  play: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
-  trash:
-    '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
-  pen: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
-  x: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+  chevron: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>'
+  ),
+  handle: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>'
+  ),
+  at: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path></svg>'
+  ),
+  check: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"></polyline></svg>'
+  ),
+  stop: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>'
+  ),
+  play: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>'
+  ),
+  trash: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>'
+  ),
+  pen: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>'
+  ),
+  x: raw(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>'
+  ),
 };
 
 interface RowOptions {
@@ -347,8 +247,8 @@ interface RowOptions {
  * and a filter. Drag/drop reordering is unchanged.
  */
 export class SessionListView {
-  private draggedSessionId: string | null = null;
-  private dropIndicatorEl: HTMLElement | null = null;
+  /** Row drag-and-drop (session-list-drag.ts). */
+  private readonly drag: SessionDrag;
   private childrenOf = new Map<string, SessionInfo[]>();
   private nested = new Set<string>();
   private expanded = loadExpanded();
@@ -367,7 +267,13 @@ export class SessionListView {
   private copied: { id: string; until: number } | null = null;
   private copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private readonly host: SessionListViewHost) {}
+  constructor(private readonly host: SessionListViewHost) {
+    this.drag = new SessionDrag({
+      sessions: host.sessions,
+      moveSession: (sessionId, categoryId) => host.moveSession(sessionId, categoryId),
+      reorder: (draggedId, targetId, categoryId, before) => this.reorderSessionInCategory(draggedId, targetId, categoryId, before),
+    });
+  }
 
   /** Focus the filter box (Alt+K). The caller opens the sidebar first. */
   focusFilter(): void {
@@ -516,7 +422,7 @@ export class SessionListView {
   private renderAttention(container: HTMLElement, waiting: SessionInfo[]): void {
     const section = document.createElement('div');
     section.className = 'category-section attention-section';
-    section.innerHTML = `<div class="category-header attention-header"><span class="category-name">Needs you</span><span class="category-count">${waiting.length}</span></div>`;
+    setHtml(section, html`<div class="category-header attention-header"><span class="category-name">Needs you</span><span class="category-count">${waiting.length}</span></div>`);
     const ul = document.createElement('ul');
     ul.className = 'category-sessions';
     for (const s of waiting) {
@@ -535,7 +441,7 @@ export class SessionListView {
     header.type = 'button';
     header.className = 'category-header stopped-header';
     header.setAttribute('aria-expanded', String(this.stoppedOpen));
-    header.innerHTML = `<span class="category-toggle">${ICON.chevron}</span><span class="category-name">Stopped</span><span class="category-count">${this.rowCount(stopped)}</span>`;
+    setHtml(header, html`<span class="category-toggle">${ICON.chevron}</span><span class="category-name">Stopped</span><span class="category-count">${this.rowCount(stopped)}</span>`);
     header.addEventListener('click', () => {
       this.stoppedOpen = !this.stoppedOpen;
       writeFlag(STOPPED_OPEN_KEY, this.stoppedOpen);
@@ -568,7 +474,7 @@ export class SessionListView {
 
     const section = document.createElement('div');
     section.className = 'category-section matches-section';
-    section.innerHTML = `<div class="category-header"><span class="category-name">Matches</span><span class="category-count">${hits.length}</span></div>`;
+    setHtml(section, html`<div class="category-header"><span class="category-name">Matches</span><span class="category-count">${hits.length}</span></div>`);
     const ul = document.createElement('ul');
     ul.className = 'category-sessions';
     for (const s of hits) {
@@ -586,7 +492,7 @@ export class SessionListView {
   }
 
   /** "2 waiting · 1 done" over a category's rows and their children; empty when quiet. */
-  private categoryTally(sessions: SessionInfo[]): string {
+  private categoryTally(sessions: SessionInfo[]): SafeHtml {
     let waiting = 0;
     let done = 0;
     for (const s of sessions) {
@@ -596,10 +502,10 @@ export class SessionListView {
         else if (state === 'done') done++;
       }
     }
-    const parts: string[] = [];
-    if (waiting > 0) parts.push(`<span class="tally-input">${waiting} waiting</span>`);
-    if (done > 0) parts.push(`<span class="tally-done">${done} done</span>`);
-    return parts.length ? `<span class="category-tally">${parts.join(' · ')}</span>` : '';
+    const parts: SafeHtml[] = [];
+    if (waiting > 0) parts.push(html`<span class="tally-input">${waiting} waiting</span>`);
+    if (done > 0) parts.push(html`<span class="tally-done">${done} done</span>`);
+    return parts.length ? html`<span class="category-tally">${joinHtml(parts, ' · ')}</span>` : html``;
   }
 
   private renderCategory(container: HTMLElement, category: CategoryInfo, sessions: SessionInfo[]): void {
@@ -611,16 +517,19 @@ export class SessionListView {
 
     const header = document.createElement('div');
     header.className = 'category-header';
-    header.innerHTML = `
+    setHtml(
+      header,
+      html`
       <button class="category-toggle" title="${category.collapsed ? 'Expand' : 'Collapse'}" aria-expanded="${category.collapsed ? 'false' : 'true'}">${ICON.chevron}</button>
-      <span class="category-name">${escapeHtml(category.name)}</span>
+      <span class="category-name">${category.name}</span>
       <span class="category-count">${this.rowCount(sessions)}</span>
       ${this.categoryTally(sessions)}
       <div class="category-actions">
         <button class="category-rename-btn" title="Rename">${ICON.pen}</button>
         <button class="category-delete-btn" title="Delete">${ICON.x}</button>
       </div>
-    `;
+    `
+    );
 
     header.querySelector('.category-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -641,13 +550,13 @@ export class SessionListView {
         this.host.deleteCategory(category.id);
       }
     });
-    this.setupHeaderDrop(header, category.id);
+    this.drag.attachHeader(header, category.id);
 
     section.appendChild(header);
 
     const sessionList = document.createElement('ul');
     sessionList.className = 'category-sessions';
-    this.setupDropZone(sessionList, category.id);
+    this.drag.attachDropZone(sessionList, category.id);
     for (const session of sessions) this.renderSessionGroup(sessionList, session);
     section.appendChild(sessionList);
     container.appendChild(section);
@@ -661,39 +570,23 @@ export class SessionListView {
 
     const header = document.createElement('div');
     header.className = 'category-header';
-    header.innerHTML = `
+    setHtml(
+      header,
+      html`
       <span class="category-name">Uncategorized</span>
       <span class="category-count">${this.rowCount(sessions)}</span>
       ${this.categoryTally(sessions)}
-    `;
-    this.setupHeaderDrop(header, null);
+    `
+    );
+    this.drag.attachHeader(header, null);
     section.appendChild(header);
 
     const sessionList = document.createElement('ul');
     sessionList.className = 'category-sessions';
-    this.setupDropZone(sessionList, null);
+    this.drag.attachDropZone(sessionList, null);
     for (const session of sessions) this.renderSessionGroup(sessionList, session);
     section.appendChild(sessionList);
     container.appendChild(section);
-  }
-
-  /** A category header takes drops too, so an empty or folded category can be filled. */
-  private setupHeaderDrop(header: HTMLElement, categoryId: string | null): void {
-    header.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      header.classList.add('drop-target');
-    });
-    header.addEventListener('dragleave', (e) => {
-      if (!header.contains(e.relatedTarget as Node)) header.classList.remove('drop-target');
-    });
-    header.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      header.classList.remove('drop-target');
-      if (!this.draggedSessionId) return;
-      const session = this.host.sessions.get(this.draggedSessionId);
-      if (session && session.categoryId !== categoryId) this.host.moveSession(this.draggedSessionId, categoryId);
-    });
   }
 
   /** Sessions shown in a category: its top-level ones plus the children nested under them. */
@@ -724,13 +617,13 @@ export class SessionListView {
     }
   }
 
-  private glyph(state: RowState, readOnly: boolean, title?: string, peerId?: string): string {
+  private glyph(state: RowState, readOnly: boolean, title?: string, peerId?: string): SafeHtml {
     const label = title ?? (readOnly ? `${STATE_LABEL[state]} · read-only` : STATE_LABEL[state]);
-    return `<span class="session-glyph state-${state}${readOnly ? ' ro' : ''}"${peerId ? ` data-peer-id="${escapeAttr(peerId)}" role="button" tabindex="0"` : ''} title="${escapeAttr(label)}"></span>`;
+    return html`<span class="session-glyph state-${state}${readOnly ? ' ro' : ''}"${peerId && html` data-peer-id="${peerId}" role="button" tabindex="0"`} title="${label}"></span>`;
   }
 
   /** A folded parent's children: one dot per track at its worst state, then the count. */
-  private kidsTally(children: SessionInfo[], tracks: TrackGroup[]): string {
+  private kidsTally(children: SessionInfo[], tracks: TrackGroup[]): SafeHtml {
     const groups = tracks.map((g) => worstState([g.lead, ...g.peers].map((s) => this.stateOf(s))));
     groups.sort((a, b) => STATE_RANK[a] - STATE_RANK[b]);
     let waiting = 0;
@@ -744,43 +637,40 @@ export class SessionListView {
     if (waiting > 0) parts.push(`${waiting} need${waiting === 1 ? 's' : ''} input`);
     if (done > 0) parts.push(`${done} done`);
     parts.push(`${children.length} started`);
-    const dots = groups
-      .slice(0, MAX_TALLY_DOTS)
-      .map((st) => `<i class="tally-dot state-${st}"></i>`)
-      .join('');
-    return `<span class="session-kids" title="${escapeAttr(parts.join(' · '))}" aria-label="${escapeAttr(parts.join(' · '))}">${dots}<span class="session-kids-count">${children.length}</span></span>`;
+    const dots = groups.slice(0, MAX_TALLY_DOTS).map((st) => html`<i class="tally-dot state-${st}"></i>`);
+    return html`<span class="session-kids" title="${parts.join(' · ')}" aria-label="${parts.join(' · ')}">${dots}<span class="session-kids-count">${children.length}</span></span>`;
   }
 
-  private accountDot(session: SessionInfo): string {
-    if (!session.account || !this.multiAccount) return '';
+  private accountDot(session: SessionInfo): SafeHtml {
+    if (!session.account || !this.multiAccount) return html``;
     const index = this.accountOrder?.indexOf(session.account) ?? -1;
     const colour = index >= 0 ? ` acct-c${index % ACCOUNT_COLOURS}` : '';
-    return `<span class="session-account-dot${colour}" title="Runs under the ${escapeAttr(session.account)} Claude account"></span>`;
+    return html`<span class="session-account-dot${colour}" title="Runs under the ${session.account} Claude account"></span>`;
   }
 
   /** The selected row's second line: what used to sit on every row. */
-  private detailLine(session: SessionInfo, isChild: boolean): string {
-    const bits: string[] = [];
-    if (session.account) bits.push(`<span>${escapeHtml(session.account)}</span>`);
+  private detailLine(session: SessionInfo, isChild: boolean): SafeHtml {
+    const bits: SafeHtml[] = [];
+    if (session.account) bits.push(html`<span>${session.account}</span>`);
     const parts = session.cwd.split(/[\\/]+/).filter(Boolean);
     const shortCwd = parts.slice(-2).join('/') || session.cwd;
-    bits.push(`<span class="session-detail-cwd" title="${escapeAttr(session.cwd)}">${escapeHtml(shortCwd)}</span>`);
+    bits.push(html`<span class="session-detail-cwd" title="${session.cwd}">${shortCwd}</span>`);
     // Shown unless `auto`, the default: a `manual` child waits for the user.
     // Rows started before `manual` existed are stored as `default`.
     const mode = session.permissionMode === 'default' ? 'manual' : session.permissionMode;
     if (isChild && mode && mode !== 'auto') {
-      bits.push(`<span class="session-mode-chip" title="Started in ${escapeAttr(mode)} permission mode">${escapeHtml(mode)}</span>`);
+      bits.push(html`<span class="session-mode-chip" title="Started in ${mode} permission mode">${mode}</span>`);
     }
     // A read-only peer beside its track's builder (project/builder-critic-pairs.md).
     if (session.access === 'read') {
-      bits.push('<span class="session-access-chip" title="A read-only peer: it cannot edit its track’s worktree">read-only</span>');
+      bits.push(html`<span class="session-access-chip" title="A read-only peer: it cannot edit its track’s worktree">read-only</span>`);
     }
     const parent = isChild && session.spawnedBy ? this.host.sessions.get(session.spawnedBy) : undefined;
-    if (parent) bits.push(`<span>started by ${escapeHtml(parent.name)}</span>`);
-    if (session.status === 'terminated') bits.push('<span>exited</span>');
-    else if (!session.attachable) bits.push('<span>stopped</span>');
-    if (session.accountWarning) bits.push(`<span class="session-detail-warning">⚠ ${escapeHtml(session.accountWarning)}</span>`);
-    return `<div class="session-detail">${bits.join('')}</div>`;
+    if (parent) bits.push(html`<span>started by ${parent.name}</span>`);
+    if (session.status === 'terminated') bits.push(html`<span>exited</span>`);
+    else if (!session.attachable) bits.push(html`<span>stopped</span>`);
+    if (session.accountWarning) bits.push(html`<span class="session-detail-warning">⚠ ${session.accountWarning}</span>`);
+    return html`<div class="session-detail">${bits}</div>`;
   }
 
   private renderSessionItem(container: HTMLElement, session: SessionInfo, opts: RowOptions = {}): HTMLElement {
@@ -814,55 +704,51 @@ export class SessionListView {
     const state = this.stateOf(session);
     li.classList.add(`state-${state}`);
 
-    let lead = '<span class="session-lead"></span>';
+    let lead = html`<span class="session-lead"></span>`;
     if (children.length > 0) {
       const open = this.expanded.has(session.id);
-      lead = `<button class="session-group-toggle${open ? '' : ' collapsed'}" aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} started sessions">${ICON.chevron}</button>`;
+      lead = html`<button class="session-group-toggle${open ? '' : ' collapsed'}" aria-expanded="${String(open)}" title="${open ? 'Hide' : 'Show'} started sessions">${ICON.chevron}</button>`;
     } else if (track) {
-      lead = `<button class="session-group-toggle session-track-toggle${trackOpen ? '' : ' collapsed'}" aria-expanded="${trackOpen}" title="${trackOpen ? 'Hide' : 'Show'} this track's read-only peers">${ICON.chevron}</button>`;
+      lead = html`<button class="session-group-toggle session-track-toggle${trackOpen ? '' : ' collapsed'}" aria-expanded="${String(trackOpen)}" title="${trackOpen ? 'Hide' : 'Show'} this track's read-only peers">${ICON.chevron}</button>`;
     } else if (draggable) {
-      lead = `<span class="session-lead session-drag-handle">${ICON.handle}</span>`;
+      lead = html`<span class="session-lead session-drag-handle">${ICON.handle}</span>`;
     }
 
     let glyphs = this.glyph(state, session.access === 'read');
-    let trackChip = '';
+    let trackChip = html``;
     if (track && !trackOpen) {
       const peers = track.peers;
-      glyphs =
-        `<span class="session-glyphs">` +
-        this.glyph(state, false, `Builder: ${STATE_LABEL[state]}`) +
-        peers
-          .slice(0, MAX_PEER_GLYPHS)
-          .map((p) => this.glyph(this.stateOf(p), true, `${p.name} (read-only): ${STATE_LABEL[this.stateOf(p)]}`, p.id))
-          .join('') +
-        (peers.length > MAX_PEER_GLYPHS ? `<span class="session-glyph-more">+${peers.length - MAX_PEER_GLYPHS}</span>` : '') +
-        `</span>`;
+      const peerGlyphs = peers
+        .slice(0, MAX_PEER_GLYPHS)
+        .map((p) => this.glyph(this.stateOf(p), true, `${p.name} (read-only): ${STATE_LABEL[this.stateOf(p)]}`, p.id));
+      glyphs = html`<span class="session-glyphs">${this.glyph(state, false, `Builder: ${STATE_LABEL[state]}`)}${peerGlyphs}${peers.length > MAX_PEER_GLYPHS && html`<span class="session-glyph-more">+${peers.length - MAX_PEER_GLYPHS}</span>`}</span>`;
     }
     if (track) {
       const n = track.peers.length;
-      trackChip = `<span class="session-track-chip" title="Builder and ${n} read-only peer${n === 1 ? '' : 's'}">${n === 1 ? 'pair' : `1+${n}`}</span>`;
+      trackChip = html`<span class="session-track-chip" title="Builder and ${n} read-only peer${n === 1 ? '' : 's'}">${n === 1 ? 'pair' : `1+${n}`}</span>`;
     }
 
-    const context = opts.context ? `<span class="session-context">${escapeHtml(opts.context)}</span>` : '';
-    const chip = opts.chip ? `<span class="session-category-chip">${escapeHtml(opts.chip)}</span>` : '';
+    const context = opts.context ? html`<span class="session-context">${opts.context}</span>` : html``;
+    const chip = opts.chip ? html`<span class="session-category-chip">${opts.chip}</span>` : html``;
     const warning = session.accountWarning
-      ? `<span class="session-account-warning" title="${escapeAttr(session.accountWarning)}">⚠</span>`
-      : '';
+      ? html`<span class="session-account-warning" title="${session.accountWarning}">⚠</span>`
+      : html``;
     const tally =
-      children.length > 0 && !this.expanded.has(session.id) ? this.kidsTally(children, opts.groups ?? trackGroups(children)) : '';
+      children.length > 0 && !this.expanded.has(session.id)
+        ? this.kidsTally(children, opts.groups ?? trackGroups(children))
+        : html``;
     // Copy feedback comes from state, so a render inside its 1.6 s keeps it.
     const justCopied = this.copied?.id === session.id;
     if (justCopied) li.classList.add('just-copied');
 
     // Whether a row can be revived (stale ones, and exited ones with a conversation) is the
     // server's call: `revivable` comes from the same rule reviveSession() enforces.
-    const escapedId = escapeAttr(session.id);
     const copyHtml = session.claudeName
-      ? `<button class="session-copy-btn${justCopied ? ' copied' : ''}" data-copy="@${escapeAttr(session.claudeName)}" title="Copy @${escapeAttr(session.claudeName)}: the name other agents message this session by" aria-label="Copy the name agents use for ${escapeAttr(session.name)}">${justCopied ? ICON.check : ICON.at}</button>`
-      : '';
+      ? html`<button class="session-copy-btn${justCopied ? ' copied' : ''}" data-copy="@${session.claudeName}" title="Copy @${session.claudeName}: the name other agents message this session by" aria-label="Copy the name agents use for ${session.name}">${justCopied ? ICON.check : ICON.at}</button>`
+      : html``;
     const reviveHtml = session.revivable
-      ? `<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${escapedId}">${ICON.play}</button>`
-      : '';
+      ? html`<button class="session-revive-btn" title="${session.claudeSessionId ? 'Resume conversation' : 'Restart shell'}" data-session-id="${session.id}">${ICON.play}</button>`
+      : html``;
     // Stop parks a live session to resume later, in the slot Play takes once it is stopped.
     // Not for a fork (it could not come back) or a shell that already exited.
     // project/stop-sessions.md
@@ -873,23 +759,26 @@ export class SessionListView {
     const stopTitle =
       started > 0 ? `Stop session and its ${started} started session${started === 1 ? '' : 's'}` : 'Stop session (resume later)';
     const stopHtml = stoppable
-      ? `<button class="session-stop-btn" title="${stopTitle}" aria-label="${escapeAttr(`${stopTitle}: ${session.name}`)}" data-session-id="${escapedId}">${ICON.stop}</button>`
-      : '';
-    const deleteHtml = `<button class="session-delete-btn" title="Delete session" data-session-id="${escapedId}">${ICON.trash}</button>`;
+      ? html`<button class="session-stop-btn" title="${stopTitle}" aria-label="${`${stopTitle}: ${session.name}`}" data-session-id="${session.id}">${ICON.stop}</button>`
+      : html``;
+    const deleteHtml = html`<button class="session-delete-btn" title="Delete session" data-session-id="${session.id}">${ICON.trash}</button>`;
 
-    li.innerHTML = `
+    setHtml(
+      li,
+      html`
       <div class="session-line">
         ${lead}
         ${glyphs}
-        <span class="session-name">${escapeHtml(session.name)}</span>
+        <span class="session-name">${session.name}</span>
         ${context}${warning}${chip}${trackChip}${tally}
         ${this.accountDot(session)}
         <span class="session-actions">${copyHtml}${stopHtml}${reviveHtml}${deleteHtml}</span>
       </div>
-      ${isActive ? this.detailLine(session, isChild) : ''}
-    `;
+      ${isActive && this.detailLine(session, isChild)}
+    `
+    );
 
-    if (draggable) this.attachDragHandlers(li, session);
+    if (draggable) this.drag.attachRow(li, session);
 
     li.addEventListener('keydown', (e) => {
       if (e.target !== li || e.key !== 'Enter') return;
@@ -983,9 +872,12 @@ export class SessionListView {
     const toast = document.getElementById('session-toast');
     if (!toast) return;
     toast.classList.toggle('failed', !ok);
-    toast.innerHTML = ok
-      ? `${ICON.check}<span>Copied</span><span class="session-toast-text">${escapeHtml(text)}</span>`
-      : `<span>Couldn't copy. Select it:</span><input class="session-toast-input" readonly value="${escapeAttr(text)}" aria-label="Session address">`;
+    setHtml(
+      toast,
+      ok
+        ? html`${ICON.check}<span>Copied</span><span class="session-toast-text">${text}</span>`
+        : html`<span>Couldn't copy. Select it:</span><input class="session-toast-input" readonly value="${text}" aria-label="Session address">`
+    );
     toast.hidden = false;
     // Restart the transition when a second copy lands while the toast is still up.
     toast.classList.remove('show');
@@ -1000,120 +892,6 @@ export class SessionListView {
       },
       ok ? COPY_FEEDBACK_MS : COPY_FEEDBACK_MS * 3
     );
-  }
-
-  private attachDragHandlers(li: HTMLElement, session: SessionInfo): void {
-    // Drag handling
-    li.addEventListener('dragstart', (e) => {
-      this.draggedSessionId = session.id;
-      li.classList.add('dragging');
-      e.dataTransfer?.setData('text/plain', session.id);
-    });
-
-    li.addEventListener('dragend', () => {
-      this.draggedSessionId = null;
-      li.classList.remove('dragging');
-      if (this.dropIndicatorEl) {
-        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        this.dropIndicatorEl = null;
-      }
-      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
-    });
-
-    // Allow drops on session items for reordering within same category or moving between categories
-    li.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      if (!this.draggedSessionId || this.draggedSessionId === session.id) return;
-
-      const draggedSession = this.host.sessions.get(this.draggedSessionId);
-      if (!draggedSession) return;
-
-      const categorySection = li.closest('.category-section') as HTMLElement | null;
-      const categoryIdAttr = categorySection?.dataset.categoryId;
-      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
-
-      // Same category: show insertion indicator
-      if (draggedSession.categoryId === targetCategoryId) {
-        // Clear previous indicator if it's a different element
-        if (this.dropIndicatorEl && this.dropIndicatorEl !== li) {
-          this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        }
-        this.dropIndicatorEl = li;
-
-        const rect = li.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        li.classList.remove('drop-before', 'drop-after');
-        if (e.clientY < midY) {
-          li.classList.add('drop-before');
-        } else {
-          li.classList.add('drop-after');
-        }
-      } else {
-        // Different category: highlight the target category's session list
-        const sessionList = categorySection?.querySelector('.category-sessions');
-        sessionList?.classList.add('drop-target');
-      }
-    });
-
-    li.addEventListener('dragleave', () => {
-      li.classList.remove('drop-before', 'drop-after');
-    });
-
-    li.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const categorySection = li.closest('.category-section') as HTMLElement | null;
-      const categoryIdAttr = categorySection?.dataset.categoryId;
-      const targetCategoryId = categoryIdAttr === '' ? null : categoryIdAttr ?? null;
-
-      if (this.draggedSessionId) {
-        const draggedSession = this.host.sessions.get(this.draggedSessionId);
-        if (!draggedSession) return;
-
-        if (draggedSession.categoryId === targetCategoryId) {
-          // Same category: reorder
-          const rect = li.getBoundingClientRect();
-          const midY = rect.top + rect.height / 2;
-          const insertBefore = e.clientY < midY;
-          this.reorderSessionInCategory(this.draggedSessionId, session.id, targetCategoryId, insertBefore);
-        } else {
-          // Different category: move
-          this.host.moveSession(this.draggedSessionId, targetCategoryId);
-        }
-      }
-
-      if (this.dropIndicatorEl) {
-        this.dropIndicatorEl.classList.remove('drop-before', 'drop-after');
-        this.dropIndicatorEl = null;
-      }
-      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
-    });
-  }
-
-  private setupDropZone(element: HTMLElement, categoryId: string | null): void {
-    element.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      element.classList.add('drop-target');
-    });
-
-    element.addEventListener('dragleave', (e) => {
-      if (!element.contains(e.relatedTarget as Node)) {
-        element.classList.remove('drop-target');
-      }
-    });
-
-    element.addEventListener('drop', (e) => {
-      e.preventDefault();
-      element.classList.remove('drop-target');
-
-      if (this.draggedSessionId) {
-        const session = this.host.sessions.get(this.draggedSessionId);
-        if (session && session.categoryId !== categoryId) {
-          this.host.moveSession(this.draggedSessionId, categoryId);
-        }
-      }
-    });
   }
 
   private reorderSessionInCategory(draggedId: string, targetId: string, categoryId: string | null, insertBefore: boolean): void {

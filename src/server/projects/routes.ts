@@ -19,13 +19,13 @@ import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readSpec } from './project-store.js';
 import {
   TrackBranchError,
-  addBehindMain,
   branchNow,
   ensureTrackBranch,
   getActiveTrackBranch,
   moveIntoBranch,
   readSpecForTrack,
 } from './track-branches.js';
+import { addBehindMain } from './track-update.js';
 import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';

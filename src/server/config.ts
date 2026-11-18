@@ -106,7 +106,8 @@ const defaultConfig: Config = {
     defaultCwd: '~/NodeProjects',
   },
   auth: {
-    enabled: false,
+    // On: the server listens on 0.0.0.0, so off hands anyone on the LAN a shell (docs/auth.md).
+    enabled: true,
     allowedUsers: [],
   },
   persistence: {

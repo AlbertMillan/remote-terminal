@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, raw, setHtml, type SafeHtml } from './html-utils.js';
 import { TrackPicker } from './track-picker.js';
 
 /** `session.create`'s folder to make first (sessions/folder-picker.ts). */
@@ -23,14 +23,14 @@ export interface AccountsResponse {
  * holds the wrong login is marked, and still pickable: picking it is refused with
  * Log in / Clean up.
  */
-export function accountOptionsHtml(data: AccountsResponse | null): string {
+export function accountOptionsHtml(data: AccountsResponse | null): SafeHtml {
   const def = data?.defaultAccount ?? 'personal';
-  const options = [`<option value="">Default (project's, else ${escapeHtml(def)})</option>`];
+  const options = [html`<option value="">Default (project's, else ${def})</option>`];
   for (const a of data?.accounts ?? []) {
     const note = a.ready ? '' : ' — not logged in as expected';
-    options.push(`<option value="${escapeAttr(a.name)}">${escapeHtml(a.name)}${note}</option>`);
+    options.push(html`<option value="${a.name}">${a.name}${note}</option>`);
   }
-  return options.join('');
+  return html`${options}`;
 }
 
 /** GET /api/accounts/resolve: what the empty option means for a folder. */
@@ -103,55 +103,38 @@ export function leafName(path: string): string {
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
 }
 
-const CHECK_ICON =
+const CHECK_ICON = raw(
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
-const NEW_FOLDER_ICON =
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>'
+);
+const NEW_FOLDER_ICON = raw(
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>' +
-  '<line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
-const WARN_ICON =
+  '<line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>'
+);
+const WARN_ICON = raw(
   '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>' +
-  '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+  '<line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+);
 
 /** The hint under the field: what Create will do with what is typed. */
-export function verdictHtml(verdict: FolderVerdict, create: CreateCwd): string {
+export function verdictHtml(verdict: FolderVerdict, create: CreateCwd): SafeHtml {
   switch (verdict.kind) {
     case 'empty':
-      return (
-        `<p class="cwd-hint">Empty opens in <code>${escapeHtml(verdict.display)}</code>. ` +
-        `<kbd>Tab</kbd> fills it in; type a project name to search.</p>`
-      );
+      return html`<p class="cwd-hint">Empty opens in <code>${verdict.display}</code>. <kbd>Tab</kbd> fills it in; type a project name to search.</p>`;
     case 'exists':
-      return (
-        `<p class="cwd-hint cwd-hint-ok">${CHECK_ICON}<span>Existing folder` +
-        (verdict.project ? ` · project <strong>${escapeHtml(verdict.project)}</strong>` : '') +
-        `</span></p>`
-      );
+      return html`<p class="cwd-hint cwd-hint-ok">${CHECK_ICON}<span>Existing folder${verdict.project && html` · project <strong>${verdict.project}</strong>`}</span></p>`;
     case 'creatable': {
       const n = verdict.create.length;
       const created = verdict.create.join('/');
       const base = verdict.display.slice(0, verdict.display.length - created.length);
-      return (
-        `<div class="cwd-verdict cwd-verdict-new">` +
-        `<div class="cwd-verdict-title">${NEW_FOLDER_ICON}<span>Creates ${n} new folder${n === 1 ? '' : 's'}</span></div>` +
-        `<code class="cwd-verdict-path">${escapeHtml(base)}<span class="cwd-new-part">${escapeHtml(created)}</span></code>` +
-        `<label class="cwd-option"><input type="checkbox" id="session-cwd-git"${create.git ? ' checked' : ''}>` +
-        `Initialize git in <code>${escapeHtml(verdict.create[n - 1])}</code></label>` +
-        `<label class="cwd-option"><input type="checkbox" id="session-cwd-doc"${create.projectDoc ? ' checked' : ''}>` +
-        `Add a starter <code>PROJECT.md</code></label>` +
-        `</div>`
-      );
+      return html`<div class="cwd-verdict cwd-verdict-new"><div class="cwd-verdict-title">${NEW_FOLDER_ICON}<span>Creates ${n} new folder${n === 1 ? '' : 's'}</span></div><code class="cwd-verdict-path">${base}<span class="cwd-new-part">${created}</span></code><label class="cwd-option"><input type="checkbox" id="session-cwd-git"${create.git ? ' checked' : ''}>Initialize git in <code>${verdict.create[n - 1]}</code></label><label class="cwd-option"><input type="checkbox" id="session-cwd-doc"${create.projectDoc ? ' checked' : ''}>Add a starter <code>PROJECT.md</code></label></div>`;
     }
     case 'refused':
-      return (
-        `<div class="cwd-verdict cwd-verdict-refused" role="alert">` +
-        `<div class="cwd-verdict-title">${WARN_ICON}<span>Can't use this folder</span></div>` +
-        `<span class="cwd-verdict-reason">${escapeHtml(verdict.reason)}</span></div>`
-      );
+      return html`<div class="cwd-verdict cwd-verdict-refused" role="alert"><div class="cwd-verdict-title">${WARN_ICON}<span>Can't use this folder</span></div><span class="cwd-verdict-reason">${verdict.reason}</span></div>`;
   }
 }
 
@@ -159,18 +142,12 @@ export function verdictHtml(verdict: FolderVerdict, create: CreateCwd): string {
 const optionId = (index: number): string => `cwd-opt-${index}`;
 
 /** One dropdown row. `prefix` is bolded in path mode (what was typed of the name). */
-function itemHtml(item: FolderItem, index: number, active: boolean, mode: 'path' | 'search', prefix: string): string {
-  const tags =
-    (item.git ? '<span class="cwd-tag">git</span>' : '') +
-    (item.projectDoc ? '<span class="cwd-tag cwd-tag-doc">PROJECT.md</span>' : '');
+function itemHtml(item: FolderItem, index: number, active: boolean, mode: 'path' | 'search', prefix: string): SafeHtml {
+  const tags = html`${item.git && html`<span class="cwd-tag">git</span>`}${item.projectDoc && html`<span class="cwd-tag cwd-tag-doc">PROJECT.md</span>`}`;
   const n = mode === 'path' ? Math.min(prefix.length, item.name.length) : 0;
-  const name = `<strong>${escapeHtml(item.name.slice(0, n))}</strong>${escapeHtml(item.name.slice(n))}`;
-  const sub = mode === 'search' ? `<span class="cwd-item-path">&lrm;${escapeHtml(item.display)}</span>` : '';
-  return (
-    `<li class="cwd-suggestion${active ? ' active' : ''}" role="option" aria-selected="${active}" ` +
-    `id="${optionId(index)}" data-index="${index}" title="${escapeAttr(item.path)}">` +
-    `<span class="cwd-item-text"><span class="cwd-item-name">${name}</span>${sub}</span>${tags}</li>`
-  );
+  const name = html`<strong>${item.name.slice(0, n)}</strong>${item.name.slice(n)}`;
+  const sub = mode === 'search' ? html`<span class="cwd-item-path">&lrm;${item.display}</span>` : '';
+  return html`<li class="cwd-suggestion${active ? ' active' : ''}" role="option" aria-selected="${String(active)}" id="${optionId(index)}" data-index="${index}" title="${item.path}"><span class="cwd-item-text"><span class="cwd-item-name">${name}</span>${sub}</span>${tags}</li>`;
 }
 
 /**
@@ -233,7 +210,7 @@ export class NewSessionModal {
     } catch {
       // The server's default still applies: the picker offers only that.
     }
-    select.innerHTML = accountOptionsHtml(data);
+    setHtml(select, accountOptionsHtml(data));
     select.value = '';
     void this.refreshDefaultAccount();
   }
@@ -323,7 +300,7 @@ export class NewSessionModal {
     input.placeholder = `${c.defaultDisplay}/`;
 
     const verdictEl = document.getElementById('session-cwd-verdict');
-    if (verdictEl) verdictEl.innerHTML = verdictHtml(c.verdict, this.createOptions);
+    if (verdictEl) setHtml(verdictEl, verdictHtml(c.verdict, this.createOptions));
 
     const nameInput = document.getElementById('session-name-input') as HTMLInputElement | null;
     const v = c.verdict;
@@ -365,16 +342,13 @@ export class NewSessionModal {
     if (c.newFolder) {
       const i = c.items.length;
       rows.push(
-        `<li class="cwd-suggestion cwd-new-folder${i === this.activeIndex ? ' active' : ''}" role="option" ` +
-          `aria-selected="${i === this.activeIndex}" id="${optionId(i)}" data-index="${i}">${NEW_FOLDER_ICON}` +
-          `<span class="cwd-item-text"><span class="cwd-item-name">New folder <code>${escapeHtml(c.newFolder.display)}</code></span></span></li>`
+        html`<li class="cwd-suggestion cwd-new-folder${i === this.activeIndex ? ' active' : ''}" role="option" aria-selected="${String(i === this.activeIndex)}" id="${optionId(i)}" data-index="${i}">${NEW_FOLDER_ICON}<span class="cwd-item-text"><span class="cwd-item-name">New folder <code>${c.newFolder.display}</code></span></span></li>`
       );
     }
-    list.innerHTML =
-      (c.items.length ? `<li class="cwd-group" role="presentation">${escapeHtml(group)}</li>` : '') +
-      rows.join('') +
-      `<li class="cwd-keys" role="presentation"><span><kbd>Tab</kbd> complete</span>` +
-      `<span><kbd>↑↓</kbd> pick</span><span><kbd>Enter</kbd> create</span></li>`;
+    setHtml(
+      list,
+      html`${c.items.length > 0 && html`<li class="cwd-group" role="presentation">${group}</li>`}${rows}<li class="cwd-keys" role="presentation"><span><kbd>Tab</kbd> complete</span><span><kbd>↑↓</kbd> pick</span><span><kbd>Enter</kbd> create</span></li>`
+    );
 
     list.querySelectorAll<HTMLLIElement>('.cwd-suggestion').forEach((el) => {
       // mousedown (not click) so it fires before the input's blur handler.
@@ -405,9 +379,7 @@ export class NewSessionModal {
     ghost.style.font = cs.font;
     ghost.style.letterSpacing = cs.letterSpacing;
     ghost.style.paddingLeft = `${parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth)}px`;
-    ghost.innerHTML =
-      `<span class="cwd-ghost-typed">${escapeHtml(input.value)}</span>` +
-      `<span class="cwd-ghost-rest">${escapeHtml(rest)}</span>`;
+    setHtml(ghost, html`<span class="cwd-ghost-typed">${input.value}</span><span class="cwd-ghost-rest">${rest}</span>`);
   }
 
   hideCwdSuggestions(): void {

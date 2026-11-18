@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, joinHtml, setHtml } from './html-utils.js';
 
 /**
  * The Track picker in the New Session dialog.
@@ -100,14 +100,14 @@ export class TrackPicker {
       if (input.value.trim() !== cwd) return; // typed on since this was asked
       if (!data.canBranch) return this.hide();
 
-      select.innerHTML = [
-        '<option value="">No track (planning or unrelated work)</option>',
-        ...data.tracks.map(
-          (t) =>
-            `<option value="${escapeAttr(t.name)}">${escapeHtml(t.name)}${t.branch ? ' ⎇' : ''}</option>`
-        ),
-        '<option value="__new__">New track…</option>',
-      ].join('');
+      setHtml(
+        select,
+        joinHtml([
+          html`<option value="">No track (planning or unrelated work)</option>`,
+          ...data.tracks.map((t) => html`<option value="${t.name}">${t.name}${t.branch ? ' ⎇' : ''}</option>`),
+          html`<option value="__new__">New track…</option>`,
+        ])
+      );
       this.project = data.cwd;
       this.loadedFor = cwd;
       group.classList.remove('hidden');

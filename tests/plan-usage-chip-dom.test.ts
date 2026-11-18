@@ -11,6 +11,12 @@ import {
   type WindowReading,
 } from '../src/client/plan-usage-chip.js';
 
+/** renderPlanUsage with its markup as strings. */
+const renderText = (...args: Parameters<typeof renderPlanUsage>) => {
+  const view = renderPlanUsage(...args);
+  return { ...view, summary: view.summary.value, body: view.body.value };
+};
+
 /**
  * The sidebar's plan-usage chip. Its job is to be honest: a reading goes stale
  * when no session is open, a window that has reset no longer means its old
@@ -52,19 +58,19 @@ describe('levels', () => {
   });
 
   it('colours the chip by its worst window', () => {
-    expect(renderPlanUsage(data(reading(40, 2), reading(96, 50)), NOW).level).toBe('danger');
+    expect(renderText(data(reading(40, 2), reading(96, 50)), NOW).level).toBe('danger');
   });
 });
 
 describe('rendering', () => {
   it('summarises both windows', () => {
-    const view = renderPlanUsage(data(reading(55.4, 2), reading(22, 50)), NOW);
+    const view = renderText(data(reading(55.4, 2), reading(22, 50)), NOW);
     expect(text(view.summary)).toBe('work 5h 55% · wk 22%');
     expect(view.body).toContain('resets in 2h 0m');
   });
 
   it('renders one line per account, the attached tag, and ? for a window with no verified reading', () => {
-    const view = renderPlanUsage(
+    const view = renderText(
       {
         attached: 'personal',
         accounts: [
@@ -91,7 +97,7 @@ describe('rendering', () => {
   });
 
   it('escapes account names and plan labels', () => {
-    const view = renderPlanUsage(
+    const view = renderText(
       { attached: '<img src=x>', accounts: [account('<img src=x>', { plan: '<b>Max</b>', relaySeenAt: at(0) })] },
       NOW
     );
@@ -101,7 +107,7 @@ describe('rendering', () => {
   });
 
   it("shows this 5-hour window's tokens, running sessions, and where jobs run", () => {
-    const view = renderPlanUsage(
+    const view = renderText(
       one({
         snapshot: { fiveHour: reading(41, 3), sevenDay: reading(12, 50) },
         running: 2,
@@ -141,7 +147,7 @@ describe('rendering', () => {
   });
 
   it('says a window has reset instead of showing its old percentage', () => {
-    const view = renderPlanUsage(data(reading(97, -1), reading(22, 50)), NOW);
+    const view = renderText(data(reading(97, -1), reading(22, 50)), NOW);
     expect(view.summary).toContain('5h reset');
     expect(view.summary).not.toContain('97%');
     expect(view.body).toContain('no reading since');
@@ -150,18 +156,18 @@ describe('rendering', () => {
   });
 
   it('shows the reading’s age once it is over ten minutes old', () => {
-    const fresh = renderPlanUsage(data(reading(55, 2, 5 * 60_000), null), NOW);
+    const fresh = renderText(data(reading(55, 2, 5 * 60_000), null), NOW);
     expect(fresh.stale).toBe(false);
     expect(fresh.body).not.toContain('ago');
 
-    const stale = renderPlanUsage(data(reading(55, 2, 37 * 60_000), null), NOW);
+    const stale = renderText(data(reading(55, 2, 37 * 60_000), null), NOW);
     expect(stale.stale).toBe(true);
     expect(stale.body).toContain('(37m ago)');
   });
 
   it('shows the exact setup snippet when no reading has ever arrived', () => {
-    const view = renderPlanUsage(one({ snapshot: null }), NOW);
-    const personal = renderPlanUsage(
+    const view = renderText(one({ snapshot: null }), NOW);
+    const personal = renderText(
       one({ snapshot: null, setup: { command: 'x', settingsPath: 'C:\\Users\\me\\.claude-personal\\settings.json' } }),
       NOW
     );
@@ -169,13 +175,13 @@ describe('rendering', () => {
     expect(personal.body).toContain('C:\\Users\\me\\.claude-personal\\settings.json');
     expect(view.summary).toContain('not set up');
     expect(view.body).toContain('~/.claude/settings.json');
-    expect(view.body).toContain('"statusLine"');
+    expect(view.body).toContain('&quot;statusLine&quot;');
     expect(view.body).toContain('C:/repo/scripts/statusline.mjs');
   });
 
   it('shows ?, not "not set up", once the relay has reported without a verified reading', () => {
     // Asking for the snippet again would send the user to fix what is not broken.
-    const view = renderPlanUsage(one({ snapshot: null, relaySeenAt: at(2 * 60_000) }), NOW);
+    const view = renderText(one({ snapshot: null, relaySeenAt: at(2 * 60_000) }), NOW);
     expect(text(view.summary)).toBe('work 5h ? · wk ?');
     expect(view.summary).not.toContain('not set up');
     expect(view.body).toContain('is set up');
@@ -183,7 +189,7 @@ describe('rendering', () => {
   });
 
   it('tells a user who has added the snippet how to find a relay that cannot connect', () => {
-    const view = renderPlanUsage(one({ snapshot: null, relaySeenAt: null, setup: { command: null } }), NOW);
+    const view = renderText(one({ snapshot: null, relaySeenAt: null, setup: { command: null } }), NOW);
     expect(view.body).toContain('CLAUDE_REMOTE_URL');
   });
 

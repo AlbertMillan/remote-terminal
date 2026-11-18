@@ -599,8 +599,8 @@ export function accountSetupMissing(account: string, home?: string): string[] {
 
 /**
  * `GET /api/accounts`: what the Account picker needs, and nothing about where the
- * logins live. That route is unauthenticated on `0.0.0.0` like the rest of `/api/*`,
- * so it names no folder, identity or email.
+ * logins live. Every tailnet device may read it (and, with `auth.enabled` off, anyone who
+ * can reach the port), so it names no folder, identity or email.
  */
 export function accountsSummary(home?: string): {
   defaultAccount: string;

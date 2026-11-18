@@ -77,7 +77,7 @@ const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '
 
 describe('cards', () => {
   it('gives each account its windows, token table and counts', () => {
-    const html = renderAccountCards(DATA, NOW);
+    const html = renderAccountCards(DATA, NOW).value;
     expect(html.match(/class="au-card"/g)).toHaveLength(2);
     const t = text(html);
     expect(t).toContain('personal Max 5x verified attached');
@@ -95,7 +95,7 @@ describe('cards', () => {
   });
 
   it('escapes account names and plans', () => {
-    const html = renderAccountCards({ accounts: [account('<img src=x>', { plan: '<b>x</b>' })] }, NOW);
+    const html = renderAccountCards({ accounts: [account('<img src=x>', { plan: '<b>x</b>' })] }, NOW).value;
     expect(html).not.toContain('<img');
     expect(html).not.toContain('<b>');
     expect(html).toContain('&lt;img src=x&gt;');
@@ -104,13 +104,13 @@ describe('cards', () => {
 
 describe('held-back readings', () => {
   it('lists each with its account, window, value and reason in plain words', () => {
-    const t = text(renderHeldRows(HELD));
+    const t = text(renderHeldRows(HELD).value);
     expect(t).toContain('work');
     expect(t).toContain('no account');
     expect(t).toContain(HELD_REASONS['unverified-legacy']);
     expect(t).toContain(HELD_REASONS['unknown-folder']);
     expect(t).toMatch(/wk → .* 0%/);
-    expect(renderHeldRows(HELD).match(/data-held-id="h\d"/g)).toEqual(['data-held-id="h1"', 'data-held-id="h2"']);
+    expect(renderHeldRows(HELD).value.match(/data-held-id="h\d"/g)).toEqual(['data-held-id="h1"', 'data-held-id="h2"']);
   });
 
   it('has a plain-words reason for every reason the server holds a reading for', () => {

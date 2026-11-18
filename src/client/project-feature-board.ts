@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from './html-utils.js';
+import { html, type SafeHtml } from './html-utils.js';
 import type { GuessedFile } from './track-branch-now-dialog.js';
 import type {
   Feature,
@@ -43,14 +43,14 @@ export function renderQaCard(
   project: WorkspaceProject,
   doc: QaDoc | null | undefined,
   busy: boolean
-): string {
-  const cwd = escapeAttr(project.cwd);
+): SafeHtml {
+  const cwd = project.cwd;
 
-  if (doc === undefined) return '';
+  if (doc === undefined) return html``;
 
   if (!doc || !doc.exists) {
     const verify = project.verify.length;
-    return `
+    return html`
       <div class="pw-qa">
         <div class="pw-qa-head">
           <span class="pw-qa-title">QA</span>
@@ -70,47 +70,44 @@ export function renderQaCard(
   }
 
   const commands = doc.commands.length
-    ? `<ul class="pw-qa-cmds">${doc.commands
-        .map((c) => `<li><code>${escapeHtml(c)}</code></li>`)
-        .join('')}</ul>`
-    : '<p class="pw-hint">No commands declared.</p>';
+    ? html`<ul class="pw-qa-cmds">${doc.commands.map((c) => html`<li><code>${c}</code></li>`)}</ul>`
+    : html`<p class="pw-hint">No commands declared.</p>`;
 
-  return `
+  return html`
     <div class="pw-qa">
       <div class="pw-qa-head">
         <span class="pw-qa-title">QA</span>
-        <span class="pw-qa-driver ${doc.driver}">${escapeHtml(doc.driver)}</span>
+        <span class="pw-qa-driver ${doc.driver}">${doc.driver}</span>
         <code class="pw-qa-path">project/QA.md</code>
       </div>
       ${
-        doc.driver === 'manual'
-          ? '<p class="pw-qa-warn">Declared manual — automated QA is skipped and you verify before merging.</p>'
-          : ''
+        doc.driver === 'manual' &&
+        html`<p class="pw-qa-warn">Declared manual — automated QA is skipped and you verify before merging.</p>`
       }
       ${commands}
     </div>`;
 }
 
-export function renderCollapseAll(project: WorkspaceProject, collapsedTracks: Set<string>): string {
-  if (project.tracks.length < 2) return '';
+export function renderCollapseAll(project: WorkspaceProject, collapsedTracks: Set<string>): SafeHtml {
+  if (project.tracks.length < 2) return html``;
   const allCollapsed = project.tracks.every((t) => isCollapsed(project.cwd, t.name, collapsedTracks));
-  return `
-    <button class="pw-collapse-all" data-cwd="${escapeAttr(project.cwd)}"
+  return html`
+    <button class="pw-collapse-all" data-cwd="${project.cwd}"
             title="${allCollapsed ? 'Expand' : 'Collapse'} every track">
       ${allCollapsed ? 'Expand all' : 'Collapse all'}
     </button>`;
 }
 
-export function renderProgress(project: WorkspaceProject): string {
+export function renderProgress(project: WorkspaceProject): SafeHtml {
   const { done, total, in_progress: active, blocked } = project.counts;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const bits: string[] = [`${done}/${total} done`];
   if (active > 0) bits.push(`${active} in progress`);
   if (blocked > 0) bits.push(`${blocked} blocked`);
-  return `
-    <div class="pw-progress" title="${escapeAttr(bits.join(' · '))}">
+  return html`
+    <div class="pw-progress" title="${bits.join(' · ')}">
       <div class="pw-progress-bar"><span style="width:${pct}%"></span></div>
-      <span class="pw-progress-text">${escapeHtml(bits.join(' · '))}</span>
+      <span class="pw-progress-text">${bits.join(' · ')}</span>
     </div>`;
 }
 
@@ -118,9 +115,9 @@ export function renderNoIndex(
   project: WorkspaceProject,
   failure: string | undefined,
   busy: boolean
-): string {
+): SafeHtml {
   const label = busy ? 'Generating…' : failure ? 'Retry' : 'Generate project index';
-  return `
+  return html`
     <div class="pw-features">
       <div class="pw-empty-state">
         <p>This project has no <code>PROJECT.md</code> yet.</p>
@@ -128,10 +125,10 @@ export function renderNoIndex(
           Generating one reads the project's existing plan and design docs and converts
           them into a feature list this board can edit directly. It runs once.
         </p>
-        ${failure ? `<p class="pw-error">${escapeHtml(failure)}</p>` : ''}
-        <button class="btn-primary pw-migrate" data-cwd="${escapeAttr(project.cwd)}" ${
+        ${failure && html`<p class="pw-error">${failure}</p>`}
+        <button class="btn-primary pw-migrate" data-cwd="${project.cwd}" ${
           busy ? 'disabled' : ''
-        }>${escapeHtml(label)}</button>
+        }>${label}</button>
       </div>
     </div>`;
 }
@@ -151,23 +148,21 @@ export function renderTrack(
   planning: Set<string>,
   unbranched: Map<string, UnbranchedWork | 'loading'>,
   specs: Map<string, string | null>
-): string {
-  const rows = track.features
-    .map((f) => renderFeatureRow(project, track, f, specs))
-    .join('');
+): SafeHtml {
+  const rows = track.features.map((f) => renderFeatureRow(project, track, f, specs));
   const done = track.features.filter((f) => f.status === 'done').length;
   const collapsed = isCollapsed(project.cwd, track.name, collapsedTracks);
-  return `
+  return html`
     <div class="phase-group pw-track${collapsed ? ' collapsed' : ''}">
       <div class="phase-group-head pw-track-head" role="button" tabindex="0"
            aria-expanded="${collapsed ? 'false' : 'true'}"
-           data-cwd="${escapeAttr(project.cwd)}" data-track="${escapeAttr(track.name)}">
+           data-cwd="${project.cwd}" data-track="${track.name}">
         <span class="phase-chevron" aria-hidden="true">▾</span>
-        <span class="phase-group-name">${escapeHtml(track.name)}</span>
+        <span class="phase-group-name">${track.name}</span>
         <span class="phase-progress">${done}/${track.features.length}</span>
         ${renderTrackActions(project, track, planning, unbranched)}
       </div>
-      <ul class="phase-list">${track.planMissing ? renderPlanMissing(track) : ''}${rows}</ul>
+      <ul class="phase-list">${track.planMissing && renderPlanMissing(track)}${rows}</ul>
     </div>`;
 }
 
@@ -176,17 +171,17 @@ export function renderTrack(
  * never filled from main's copy, which stopped being this track's plan when
  * the branch was created.
  */
-function renderPlanMissing(track: WorkspaceTrack): string {
+function renderPlanMissing(track: WorkspaceTrack): SafeHtml {
   // A missing folder reads as a missing section too. Say which it is, since
   // the fix differs: the branch still holds the plan, and Open session
   // re-creates the folder from it.
   if (track.worktreeMissing) {
-    return '<li class="phase-item pw-plan-missing">⚠ This track’s worktree folder is missing. Its plan is still on the branch — Open session re-creates the folder.</li>';
+    return html`<li class="phase-item pw-plan-missing">⚠ This track’s worktree folder is missing. Its plan is still on the branch — Open session re-creates the folder.</li>`;
   }
   const hint = track.alsoOnMain
     ? 'Main still has lines for it — Move into branch takes them over.'
     : 'Add features here, or write the section in the worktree’s PROJECT.md.';
-  return `<li class="phase-item pw-plan-missing">⚠ This track’s worktree has no <code>## Track:</code> section. ${escapeHtml(hint)}</li>`;
+  return html`<li class="phase-item pw-plan-missing">⚠ This track’s worktree has no <code>## Track:</code> section. ${hint}</li>`;
 }
 
 /**
@@ -201,24 +196,22 @@ export function renderTrackActions(
   track: WorkspaceTrack,
   planning: Set<string>,
   unbranched: Map<string, UnbranchedWork | 'loading'>
-): string {
-  const cwd = escapeAttr(project.cwd);
-  const name = escapeAttr(track.name);
+): SafeHtml {
+  const cwd = project.cwd;
+  const name = track.name;
   const loading = planning.has(`${project.cwd}|${track.name}`);
-  const del = `<button class="pw-track-delete" data-cwd="${cwd}" data-track="${name}"
+  const del = html`<button class="pw-track-delete" data-cwd="${cwd}" data-track="${name}"
                        title="Delete this track: its lines, specs, jobs, branch and landed code"
                        ${loading ? 'disabled aria-busy="true"' : ''}>${loading ? 'Loading…' : 'Delete'}</button>`;
-  if (!project.vcs.canDispatch) return `<span class="pw-track-actions">${del}</span>`;
+  if (!project.vcs.canDispatch) return html`<span class="pw-track-actions">${del}</span>`;
   const badge = track.branch
-    ? `<span class="pw-branch" title="${escapeAttr(track.branch.worktreePath)}">⎇ ${escapeHtml(
-        track.branch.name
-      )}</span>`
+    ? html`<span class="pw-branch" title="${track.branch.worktreePath}">⎇ ${track.branch.name}</span>`
     : '';
   const work = track.branch ? undefined : unbranchedFor(unbranched, project.cwd, track.name);
   // Uncommitted files only — the one thing Branch now can move. Guessed
   // commits alone would badge every track with pre-branch history.
   const onMain = work?.files.length
-    ? `<button class="pw-track-branchnow" data-cwd="${cwd}" data-track="${name}"
+    ? html`<button class="pw-track-branchnow" data-cwd="${cwd}" data-track="${name}"
                title="This track's sessions changed files on main. Move them into a track branch so the work stays deletable.">⚠ ${
                  work.files.length
                } file${work.files.length === 1 ? '' : 's'} on main</button>`
@@ -227,15 +220,15 @@ export function renderTrackActions(
   // worktree now, so offer to move them there (Land would merge them anyway).
   const alsoOnMain =
     track.branch && track.alsoOnMain
-      ? `<button class="pw-track-moveinto" data-cwd="${cwd}" data-track="${name}"
+      ? html`<button class="pw-track-moveinto" data-cwd="${cwd}" data-track="${name}"
                title="Main's PROJECT.md also has ${track.alsoOnMain} line${track.alsoOnMain === 1 ? '' : 's'} for this track. Move them into its branch, where its plan lives.">also has lines on main · Move into branch</button>`
       : '';
   const behind = track.branch ? renderBehind(project, track) : '';
   const land = track.branch
-    ? `<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
-               title="Merge this track into ${escapeAttr(track.branch.baseBranch)} and retire its worktree">Land</button>`
+    ? html`<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
+               title="Merge this track into ${track.branch.baseBranch} and retire its worktree">Land</button>`
     : '';
-  return `
+  return html`
     <span class="pw-track-actions">
       ${badge}
       ${behind}
@@ -253,21 +246,19 @@ export function renderTrackActions(
  * main. Nothing when the track is level with its base. A null conflict list
  * means the dry run couldn't be made: only the count shows, never "clean".
  */
-export function renderBehind(project: WorkspaceProject, track: WorkspaceTrack): string {
+export function renderBehind(project: WorkspaceProject, track: WorkspaceTrack): SafeHtml {
   const n = track.behind ?? 0;
-  if (!track.branch || n <= 0) return '';
+  if (!track.branch || n <= 0) return html``;
   const base = track.branch.baseBranch;
   const conflicts = track.wouldConflict ?? [];
   const shown = conflicts.slice(0, 3).join(', ') + (conflicts.length > 3 ? ` +${conflicts.length - 3}` : '');
   const conflict = conflicts.length
-    ? `<span class="pw-behind pw-behind-conflict" title="${escapeAttr(
-        `Merging ${base} in would conflict in: ${conflicts.join(', ')}`
-      )}">would conflict: ${escapeHtml(shown)}</span>`
+    ? html`<span class="pw-behind pw-behind-conflict" title="${`Merging ${base} in would conflict in: ${conflicts.join(', ')}`}">would conflict: ${shown}</span>`
     : '';
-  return `<span class="pw-behind" title="${escapeAttr(`${n} commit${n === 1 ? '' : 's'} on ${base} this track lacks`)}">${n} behind ${escapeHtml(base)}</span>
+  return html`<span class="pw-behind" title="${`${n} commit${n === 1 ? '' : 's'} on ${base} this track lacks`}">${n} behind ${base}</span>
       ${conflict}
-      <button class="pw-track-update" data-cwd="${escapeAttr(project.cwd)}" data-track="${escapeAttr(track.name)}"
-              title="Merge ${escapeAttr(base)} into this track's worktree, keeping its plan">Update from ${escapeHtml(base)}</button>`;
+      <button class="pw-track-update" data-cwd="${project.cwd}" data-track="${track.name}"
+              title="Merge ${base} into this track's worktree, keeping its plan">Update from ${base}</button>`;
 }
 
 export function unbranchedFor(
@@ -283,21 +274,19 @@ export function unbranchedFor(
  * Track branches whose heading is gone from PROJECT.md — renamed or removed
  * by hand. Listed so they can be deleted instead of silently left behind.
  */
-export function renderOrphanBranches(project: WorkspaceProject): string {
-  if (!project.orphanBranches?.length) return '';
-  const cwd = escapeAttr(project.cwd);
-  const rows = project.orphanBranches
-    .map(
-      (b) => `
+export function renderOrphanBranches(project: WorkspaceProject): SafeHtml {
+  if (!project.orphanBranches?.length) return html``;
+  const cwd = project.cwd;
+  const rows = project.orphanBranches.map(
+    (b) => html`
       <li class="phase-item pw-orphan">
-        <span class="phase-title">${escapeHtml(b.trackName)}</span>
-        <span class="pw-branch" title="${escapeAttr(b.worktreePath)}">⎇ ${escapeHtml(b.branch)}</span>
-        <button class="pw-track-delete" data-cwd="${cwd}" data-track="${escapeAttr(b.trackName)}"
+        <span class="phase-title">${b.trackName}</span>
+        <span class="pw-branch" title="${b.worktreePath}">⎇ ${b.branch}</span>
+        <button class="pw-track-delete" data-cwd="${cwd}" data-track="${b.trackName}"
                 title="Delete this branch, its worktree and anything it landed">Delete</button>
       </li>`
-    )
-    .join('');
-  return `
+  );
+  return html`
     <div class="phase-group pw-track pw-orphans">
       <div class="phase-group-head"><span class="phase-group-name">Branches with no matching track</span></div>
       <ul class="phase-list">${rows}</ul>
@@ -309,45 +298,42 @@ export function renderFeatureRow(
   track: WorkspaceTrack,
   f: Feature,
   specs: Map<string, string | null>
-): string {
-  const cwd = escapeAttr(project.cwd);
-  const id = escapeAttr(f.id);
-  return `
+): SafeHtml {
+  const cwd = project.cwd;
+  const id = f.id;
+  return html`
     <li class="phase-item pw-feature" data-feature="${id}">
       <button class="pw-status ${f.status}" data-cwd="${cwd}" data-id="${id}"
-              title="${escapeAttr(STATUS_LABEL[f.status])} — click to change"
-              aria-label="${escapeAttr(STATUS_LABEL[f.status])}">${STATUS_ICON[f.status]}</button>
+              title="${STATUS_LABEL[f.status]} — click to change"
+              aria-label="${STATUS_LABEL[f.status]}">${STATUS_ICON[f.status]}</button>
       ${
-        f.priority !== null
-          ? `<span class="pw-priority p${f.priority}" title="Priority">P${f.priority}</span>`
-          : ''
+        f.priority !== null &&
+        html`<span class="pw-priority p${f.priority}" title="Priority">P${f.priority}</span>`
       }
-      <span class="pw-feature-id" title="Feature id">${escapeHtml(f.id)}</span>
+      <span class="pw-feature-id" title="Feature id">${f.id}</span>
       <span class="phase-title pw-title" data-cwd="${cwd}" data-id="${id}"
-            title="Click to rename">${escapeHtml(f.title)}</span>
+            title="Click to rename">${f.title}</span>
       ${
-        f.spec
-          ? `<button class="pw-spec" data-cwd="${cwd}" data-id="${id}"
-                     title="${escapeAttr(f.spec)}">spec</button>`
-          : ''
+        f.spec &&
+        html`<button class="pw-spec" data-cwd="${cwd}" data-id="${id}"
+                     title="${f.spec}">spec</button>`
       }
       ${
         project.vcs.canDispatch
-          ? `<button class="pw-dispatch" data-cwd="${cwd}" data-id="${id}"
-                     data-title="${escapeAttr(f.title)}"
+          ? html`<button class="pw-dispatch" data-cwd="${cwd}" data-id="${id}"
+                     data-title="${f.title}"
                      title="Dispatch this feature to the pipeline${
-                       project.account ? ` (runs as ${escapeAttr(project.account.effective)})` : ''
+                       project.account ? ` (runs as ${project.account.effective})` : ''
                      }">▸</button>`
-          : `<span class="pw-dispatch disabled" title="${escapeAttr(
+          : html`<span class="pw-dispatch disabled" title="${
               project.vcs.note || 'Dispatch unavailable'
-            )}">▸</span>`
+            }">▸</span>`
       }
       ${
         // A branched track's code sits on its branch: removing one line would
         // suggest that code went too. Delete the track instead.
-        track.branch
-          ? ''
-          : `<button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
+        !track.branch &&
+        html`<button class="pw-delete" data-cwd="${cwd}" data-id="${id}"
               title="Remove this feature" aria-label="Remove">×</button>`
       }
       ${renderSpec(project, f, specs)}
@@ -365,25 +351,23 @@ export function renderSpec(
   project: WorkspaceProject,
   f: Feature,
   specs: Map<string, string | null>
-): string {
+): SafeHtml {
   const spec = specs.get(specKey(project.cwd, f.id));
-  if (spec === undefined) return '';
+  if (spec === undefined) return html``;
   return spec
-    ? `<pre class="pw-spec-body">${escapeHtml(spec)}</pre>`
-    : `<div class="pw-hint pw-spec-body">Could not read ${escapeHtml(f.spec || 'the spec')}.</div>`;
+    ? html`<pre class="pw-spec-body">${spec}</pre>`
+    : html`<div class="pw-hint pw-spec-body">Could not read ${f.spec || 'the spec'}.</div>`;
 }
 
 export function specKey(cwd: string, featureId: string): string {
   return `${cwd}|${featureId}`;
 }
 
-export function renderAddRow(project: WorkspaceProject): string {
+export function renderAddRow(project: WorkspaceProject): SafeHtml {
   const tracks = project.tracks.map((t) => t.name);
-  const options = tracks
-    .map((t) => `<option value="${escapeAttr(t)}">${escapeHtml(t)}</option>`)
-    .join('');
-  return `
-    <form class="pw-add" data-cwd="${escapeAttr(project.cwd)}">
+  const options = tracks.map((t) => html`<option value="${t}">${t}</option>`);
+  return html`
+    <form class="pw-add" data-cwd="${project.cwd}">
       <input type="text" class="pw-add-title" placeholder="Add a feature…" maxlength="200"
              aria-label="New feature title" />
       <select class="pw-add-priority" aria-label="Priority">
@@ -392,11 +376,7 @@ export function renderAddRow(project: WorkspaceProject): string {
         <option value="2">P2</option>
         <option value="3">P3</option>
       </select>
-      ${
-        tracks.length > 1
-          ? `<select class="pw-add-track" aria-label="Track">${options}</select>`
-          : ''
-      }
+      ${tracks.length > 1 && html`<select class="pw-add-track" aria-label="Track">${options}</select>`}
       <button type="submit" class="btn-secondary">Add</button>
     </form>`;
 }

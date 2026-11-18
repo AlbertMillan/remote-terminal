@@ -1,4 +1,4 @@
-import { escapeHtml } from './html-utils.js';
+import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 
 /**
  * The plan-usage chip: how much of each Claude login's 5-hour and weekly
@@ -123,8 +123,8 @@ const LEVEL_RANK: Record<Level, number> = { ok: 0, warn: 1, danger: 2 };
 const worst = (levels: Level[]): Level => levels.reduce<Level>((w, l) => (LEVEL_RANK[l] > LEVEL_RANK[w] ? l : w), 'ok');
 
 export interface Rendered {
-  summary: string;
-  body: string;
+  summary: SafeHtml;
+  body: SafeHtml;
   level: Level;
   stale: boolean;
 }
@@ -155,28 +155,28 @@ function accountView(data: AccountPlanUsage, index: number, attached: string | u
   };
 }
 
-function windowChip(w: WindowView): string {
-  if (!w.reading) return `<span class="pu-window unknown" title="No verified reading">${w.short} ?</span>`;
-  return `<span class="pu-window ${w.level}">${w.short} ${w.reset ? 'reset' : `${Math.round(w.reading.usedPercentage)}%`}</span>`;
+function windowChip(w: WindowView): SafeHtml {
+  if (!w.reading) return html`<span class="pu-window unknown" title="No verified reading">${w.short} ?</span>`;
+  return html`<span class="pu-window ${w.level}">${w.short} ${w.reset ? 'reset' : `${Math.round(w.reading.usedPercentage)}%`}</span>`;
 }
 
 /** One summary line: name, both windows, and whether it is the attached session's. */
-function summaryLine(v: AccountView): string {
-  const name = `<span class="pu-acct ${v.colour}">${escapeHtml(v.data.account)}</span>`;
+function summaryLine(v: AccountView): SafeHtml {
+  const name = html`<span class="pu-acct ${v.colour}">${v.data.account}</span>`;
   const figures =
     v.state === 'not-set-up'
-      ? '<span class="pu-muted">not set up</span>'
-      : v.windows.map(windowChip).join('<span class="pu-sep">·</span>');
-  const tag = v.attached ? '<span class="pu-tag">attached</span>' : '';
-  return `<span class="pu-line">${name}${figures}${tag}</span>`;
+      ? html`<span class="pu-muted">not set up</span>`
+      : joinHtml(v.windows.map(windowChip), html`<span class="pu-sep">·</span>`);
+  const tag = v.attached ? html`<span class="pu-tag">attached</span>` : '';
+  return html`<span class="pu-line">${name}${figures}${tag}</span>`;
 }
 
-function windowRow(w: WindowView, now: number): string {
+function windowRow(w: WindowView, now: number): SafeHtml {
   if (!w.reading) {
-    return `
+    return html`
         <div class="pu-row">
           <div class="pu-row-head">
-            <span>${escapeHtml(w.label)}</span>
+            <span>${w.label}</span>
             <span class="pu-pct unknown">?</span>
           </div>
           <div class="pu-bar"></div>
@@ -189,67 +189,57 @@ function windowRow(w: WindowView, now: number): string {
     ? `reset at ${clock(resetsMs, weekly)} — no reading since`
     : `resets in ${formatCountdown(resetsMs - now)} (${clock(resetsMs, weekly)})`;
   const pct = w.reset ? 0 : Math.min(100, Math.max(0, w.reading.usedPercentage));
-  return `
+  return html`
         <div class="pu-row">
           <div class="pu-row-head">
-            <span>${escapeHtml(w.label)}</span>
+            <span>${w.label}</span>
             <span class="pu-pct ${w.level}">${w.reset ? '—' : `${Math.round(w.reading.usedPercentage)}%`}</span>
           </div>
           <div class="pu-bar"><div class="pu-fill ${w.level}" style="width: ${pct}%"></div></div>
-          <div class="pu-detail">${escapeHtml(detail)}</div>
+          <div class="pu-detail">${detail}</div>
         </div>`;
 }
 
 /** "This 5h window: 12 msgs · 3.4k in · 21k out · 1.2M cache read", from the ledger. */
-export function tokensLine(t: WindowTokens | null | undefined, label: string): string {
-  if (!t) return '';
+export function tokensLine(t: WindowTokens | null | undefined, label: string): SafeHtml {
+  if (!t) return html``;
   const parts = [
     `${t.messages} msg${t.messages === 1 ? '' : 's'}`,
     `${formatTokens(t.inputTokens)} in`,
     `${formatTokens(t.outputTokens)} out`,
     `${formatTokens(t.cacheReadTokens)} cache read`,
   ];
-  return `<p class="pu-detail pu-tokens">${escapeHtml(`${label}: ${parts.join(' · ')}`)}</p>`;
+  return html`<p class="pu-detail pu-tokens">${`${label}: ${parts.join(' · ')}`}</p>`;
 }
 
-function setupHint(data: AccountPlanUsage, now: number): string {
+function setupHint(data: AccountPlanUsage, now: number): SafeHtml {
   if (data.relaySeenAt) {
     const seen = Date.parse(data.relaySeenAt);
-    return (
-      `<p class="pu-detail">The status line is set up (last heard from ${escapeHtml(clock(seen, now - seen > 20 * 3600_000))}) ` +
-      'but has not sent a verified reading yet. Limits arrive after a Claude Code session answers its ' +
-      'first message, and only on a Pro or Max plan.</p>'
-    );
+    return html`<p class="pu-detail">The status line is set up (last heard from ${clock(seen, now - seen > 20 * 3600_000)}) but has not sent a verified reading yet. Limits arrive after a Claude Code session answers its first message, and only on a Pro or Max plan.</p>`;
   }
   const command = data.setup.command;
   const snippet = command
-    ? `<pre class="pu-snippet">${escapeHtml(JSON.stringify({ statusLine: { type: 'command', command } }, null, 2))}</pre>`
-    : '<p class="pu-detail">See docs/plan-usage.md in the claude-remote repository.</p>';
-  return (
-    `<p class="pu-detail">No reading yet. Add this to <code>${escapeHtml(data.setup.settingsPath ?? '~/.claude/settings.json')}</code>; ` +
-    'the chip fills in once a Claude Code session has answered a message.</p>' +
-    snippet +
-    '<p class="pu-detail">Already added? Then the status line cannot reach this server — ' +
-    'set <code>CLAUDE_REMOTE_URL</code> if it is not on http://localhost:4220.</p>'
-  );
+    ? html`<pre class="pu-snippet">${JSON.stringify({ statusLine: { type: 'command', command } }, null, 2)}</pre>`
+    : html`<p class="pu-detail">See docs/plan-usage.md in the claude-remote repository.</p>`;
+  return html`<p class="pu-detail">No reading yet. Add this to <code>${data.setup.settingsPath ?? '~/.claude/settings.json'}</code>; the chip fills in once a Claude Code session has answered a message.</p>${snippet}<p class="pu-detail">Already added? Then the status line cannot reach this server — set <code>CLAUDE_REMOTE_URL</code> if it is not on http://localhost:4220.</p>`;
 }
 
 /** One account's popover section: plan, verified state, bars, this window's tokens, freshness. */
-function section(v: AccountView, now: number): string {
+function section(v: AccountView, now: number): SafeHtml {
   const d = v.data;
   const tags = [
-    d.plan ? `<span class="pu-plan">${escapeHtml(d.plan)}</span>` : '',
+    d.plan ? html`<span class="pu-plan">${d.plan}</span>` : '',
     d.verified === false
-      ? '<span class="pu-tag warn" title="Its folder does not hold the expected login">login not verified</span>'
+      ? html`<span class="pu-tag warn" title="Its folder does not hold the expected login">login not verified</span>`
       : d.verified
-        ? '<span class="pu-tag ok">verified</span>'
+        ? html`<span class="pu-tag ok">verified</span>`
         : '',
-    v.attached ? '<span class="pu-tag">attached</span>' : '',
-    d.jobs ? '<span class="pu-tag" title="This project\'s jobs run under this account">jobs run here</span>' : '',
-  ].join('');
-  const head = `<div class="pu-section-head"><span class="pu-acct ${v.colour}">${escapeHtml(d.account)}</span>${tags}</div>`;
+    v.attached ? html`<span class="pu-tag">attached</span>` : '',
+    d.jobs ? html`<span class="pu-tag" title="This project's jobs run under this account">jobs run here</span>` : '',
+  ];
+  const head = html`<div class="pu-section-head"><span class="pu-acct ${v.colour}">${d.account}</span>${tags}</div>`;
 
-  let content: string;
+  let content: SafeHtml;
   if (v.state === 'readings') {
     const stale = now - (v.latest ?? 0) > STALE_MS;
     const running = d.running ?? 0;
@@ -257,17 +247,14 @@ function section(v: AccountView, now: number): string {
       `As of ${clock(v.latest ?? now, false)}` +
       (stale ? ` (${formatCountdown(now - (v.latest ?? now))} ago)` : '') +
       ` · ${running} running session${running === 1 ? '' : 's'}`;
-    content =
-      v.windows.map((w) => windowRow(w, now)).join('') +
-      tokensLine(d.tokens?.fiveHour, 'This 5h window') +
-      `<p class="pu-foot${stale ? ' stale' : ''}">${escapeHtml(asOf)}</p>`;
+    content = html`${v.windows.map((w) => windowRow(w, now))}${tokensLine(d.tokens?.fiveHour, 'This 5h window')}<p class="pu-foot${stale ? ' stale' : ''}">${asOf}</p>`;
   } else {
     content = setupHint(d, now);
   }
   const held = d.held
-    ? `<p class="pu-detail pu-held">${d.held} reading${d.held === 1 ? '' : 's'} held back (not this login's, or unverified)</p>`
+    ? html`<p class="pu-detail pu-held">${d.held} reading${d.held === 1 ? '' : 's'} held back (not this login's, or unverified)</p>`
     : '';
-  return `<section class="pu-section">${head}${content}${held}</section>`;
+  return html`<section class="pu-section">${head}${content}${held}</section>`;
 }
 
 /** The chip's summary lines and popover for `data` at time `now`. Pure, for tests. */
@@ -279,11 +266,8 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
   const stale = withReadings.length > 0 && withReadings.every((v) => now - (v.latest ?? 0) > STALE_MS);
 
   const summary =
-    views.length > 0 ? views.map(summaryLine).join('') : '<span class="pu-label">Plan usage</span> <span class="pu-muted">no accounts</span>';
-  const body =
-    views.map((v) => section(v, now)).join('') +
-    '<p class="pu-foot">Readings arrive while a Claude Code session is open; job runs do not send them.</p>' +
-    '<button type="button" class="pu-breakdown" data-action="account-usage">Per-account breakdown →</button>';
+    views.length > 0 ? joinHtml(views.map(summaryLine)) : html`<span class="pu-label">Plan usage</span> <span class="pu-muted">no accounts</span>`;
+  const body = html`${views.map((v) => section(v, now))}<p class="pu-foot">Readings arrive while a Claude Code session is open; job runs do not send them.</p><button type="button" class="pu-breakdown" data-action="account-usage">Per-account breakdown →</button>`;
   return { summary, body, level, stale };
 }
 
@@ -393,8 +377,8 @@ export class PlanUsageChip {
     const view = renderPlanUsage(this.data, now);
     const summary = root.querySelector('.plan-usage-summary');
     const body = root.querySelector('.plan-usage-body');
-    if (summary) summary.innerHTML = view.summary;
-    if (body) body.innerHTML = view.body;
+    if (summary) setHtml(summary, view.summary);
+    if (body) setHtml(body, view.body);
     root.dataset.level = view.level;
     root.classList.toggle('stale', view.stale);
     root.hidden = false;

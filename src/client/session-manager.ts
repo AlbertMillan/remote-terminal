@@ -8,8 +8,11 @@ import { RollupView } from './rollup-view.js';
 import { JobOverlay, type JobSummary } from './job-overlay.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
-import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
+import { SessionSocket } from './session-socket.js';
+import { BrowserNotifier } from './browser-notifier.js';
+import { CategoryModal, RenameModal } from './name-modals.js';
+import { bindGlobalShortcuts, closeOnBackdrop } from './global-shortcuts.js';
 import { BUILD_CHANGED_EVENT, BuildIndicator } from './server-restart.js';
 import { SettingsModal } from './settings-modal.js';
 import {
@@ -28,7 +31,7 @@ import { NewSessionModal, type CreateCwd } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
 import { StopRequests, currentAfterRevive, isLive } from './session-stop.js';
 import { AccountMenu } from './account-menu.js';
-import { SessionListView, isFilterShortcut, openMobileSidebar } from './session-list-view.js';
+import { SessionListView, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
   SessionInfo,
@@ -56,25 +59,21 @@ import type {
   ConnectionStatus,
 } from './session-types.js';
 
-// Configuration constants
-const REQUEST_TIMEOUT_MS = 30000;
-const NOTIFICATION_AUTO_CLOSE_MS = 10000;
-const RECONNECT_BASE_DELAY_MS = 1000;
-const MAX_RECONNECT_ATTEMPTS = 5;
 const SESSION_REATTACH_DELAY_MS = 100;
 
 class SessionManager {
-  private ws: WebSocket | null = null;
+  /** The /ws connection: reconnects, numbers messages, answers requests (session-socket.ts). */
+  private socket = new SessionSocket({
+    onStatus: (status) => this.updateConnectionStatus(status),
+    onOpen: () => this.handleSocketOpen(),
+    onClose: () => this.handleSocketClose(),
+    onMessage: (message) => this.handleMessage(message),
+  });
   private sessions: Map<string, SessionInfo> = new Map();
   private categories: Map<string, CategoryInfo> = new Map();
   private currentSessionId: string | null = null;
   private previousSessionId: string | null = null; // For reconnection (issue #7)
   private attachingSessionId: string | null = null; // Prevents duplicate attach requests
-  private messageId = 0;
-  private pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }> = new Map();
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  private reconnectDelay = RECONNECT_BASE_DELAY_MS;
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
 
   // Notification state
@@ -85,7 +84,12 @@ class SessionManager {
     notifyOnInput: true,
     notifyOnCompleted: true,
   };
-  private browserNotificationsPermission: 'default' | 'granted' | 'denied' = 'default';
+  private notifier = new BrowserNotifier();
+  private renameModal = new RenameModal((sessionId, name) => this.renameSession(sessionId, name));
+  private categoryModal = new CategoryModal({
+    create: (name) => this.createCategory(name),
+    rename: (categoryId, name) => this.renameCategory(categoryId, name),
+  });
 
   /** The sidebar session list: categories, drag/drop reordering, and session rows. */
   private sessionListView = new SessionListView({
@@ -100,7 +104,7 @@ class SessionManager {
     moveSession: (sessionId, categoryId) => this.moveSession(sessionId, categoryId),
     toggleCategory: (categoryId, collapsed) => this.toggleCategory(categoryId, collapsed),
     deleteCategory: (categoryId) => this.deleteCategory(categoryId),
-    showCategoryModal: (mode, category) => this.showCategoryModal(mode, category),
+    showCategoryModal: (mode, category) => this.categoryModal.show(mode, category),
     reorderSessions: (updates) => this.send('session.reorder', { sessions: updates }),
   });
 
@@ -177,8 +181,8 @@ class SessionManager {
     notificationPreferences: () => this.notificationPreferences,
     setNotificationPreferences: (prefs) => this.setNotificationPreferences(prefs),
     notificationPermission: async () => {
-      if (this.browserNotificationsPermission === 'default') await this.requestNotificationPermission();
-      return this.browserNotificationsPermission;
+      if (this.notifier.permission === 'default') await this.notifier.requestPermission();
+      return this.notifier.permission;
     },
     jobOverlay: this.jobOverlay,
     syncJobOverlay: () => this.syncJobOverlay(),
@@ -195,6 +199,7 @@ class SessionManager {
     detachCurrentSession: () => this.detachCurrentSession(),
     syncJobOverlay: () => this.syncJobOverlay(),
     showNewSessionModal: (cwd) => this.showNewSessionModal(cwd),
+    openHistorySession: (claudeSessionId, cwd, mode, account) => this.openHistorySession(claudeSessionId, cwd, mode, account),
   });
 
   constructor(terminal: TerminalManager = terminalManager) {
@@ -208,55 +213,13 @@ class SessionManager {
     this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
     this.planUsage.attach();
     this.buildIndicator.start();
-    this.initBrowserNotifications();
-    this.connect();
+    this.socket.connect();
   }
 
-  private initBrowserNotifications(): void {
-    if ('Notification' in window) {
-      this.browserNotificationsPermission = window.Notification.permission as 'default' | 'granted' | 'denied';
-    }
-  }
-
-  private async requestNotificationPermission(): Promise<boolean> {
-    if (!('Notification' in window)) {
-      return false;
-    }
-
-    if (window.Notification.permission === 'granted') {
-      this.browserNotificationsPermission = 'granted';
-      return true;
-    }
-
-    if (window.Notification.permission === 'denied') {
-      this.browserNotificationsPermission = 'denied';
-      return false;
-    }
-
-    const result = await window.Notification.requestPermission();
-    this.browserNotificationsPermission = result as 'default' | 'granted' | 'denied';
-    return result === 'granted';
-  }
-
+  /** A desktop notification for a session; a click opens it. */
   private showBrowserNotification(title: string, body: string, sessionId: string): void {
-    if (this.browserNotificationsPermission !== 'granted') return;
     if (!this.notificationPreferences.browserEnabled) return;
-    if (document.hasFocus()) return; // Don't show if tab is focused
-
-    const notification = new window.Notification(title, {
-      body,
-      icon: '/favicon.ico',
-      tag: `session-${sessionId}`,
-    });
-
-    notification.onclick = () => {
-      window.focus();
-      this.attachToSession(sessionId);
-      notification.close();
-    };
-
-    // Auto-close notification after timeout
-    setTimeout(() => notification.close(), NOTIFICATION_AUTO_CLOSE_MS);
+    this.notifier.show(title, body, `session-${sessionId}`, () => this.attachToSession(sessionId));
   }
 
   private setupEventListeners(): void {
@@ -286,7 +249,7 @@ class SessionManager {
 
     // New session buttons
     document.getElementById('new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
-    document.getElementById('add-category-btn')?.addEventListener('click', () => this.showCategoryModal('create'));
+    document.getElementById('add-category-btn')?.addEventListener('click', () => this.categoryModal.show('create'));
     document.getElementById('welcome-new-session-btn')?.addEventListener('click', () => this.showNewSessionModal());
 
     // Sidebar tabs (Sessions / Projects board)
@@ -307,53 +270,9 @@ class SessionManager {
     const jobsContainer = document.getElementById('project-jobs');
     if (jobsContainer) this.jobBoard.attach(jobsContainer);
 
-    // Phases table interactions (event delegation): copy session ids + collapse groups
+    // History entries: open, delete, copy ids, fold phase groups (delegated).
     const phasesContainer = document.getElementById('project-log-entries');
-    phasesContainer?.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement;
-      const backfillBtn = target.closest('[data-backfill-cwd]') as HTMLButtonElement | null;
-      if (backfillBtn) {
-        void this.projectLogView.backfillProject(backfillBtn.getAttribute('data-backfill-cwd') || '', backfillBtn);
-        return;
-      }
-      const openBtn = target.closest('[data-open-session]') as HTMLElement | null;
-      if (openBtn) {
-        const claudeSessionId = openBtn.getAttribute('data-open-session') || '';
-        const cwd = openBtn.getAttribute('data-open-cwd') || '';
-        const mode = openBtn.getAttribute('data-open-mode') === 'fork' ? 'fork' : 'resume';
-        const account = openBtn.getAttribute('data-open-account') || undefined;
-        if (claudeSessionId && cwd) this.openHistorySession(claudeSessionId, cwd, mode, account);
-        return;
-      }
-      const delBtn = target.closest('[data-delete-entry]') as HTMLElement | null;
-      if (delBtn) {
-        this.projectLogView.showDeleteEntryModal({
-          cwd: delBtn.getAttribute('data-delete-cwd') || '',
-          entryIndex: Number(delBtn.getAttribute('data-delete-entry')),
-          claudeSessionId: delBtn.getAttribute('data-delete-session') || null,
-          siblingCount: Number(delBtn.getAttribute('data-delete-siblings')) || 0,
-        });
-        return;
-      }
-      const copyBtn = target.closest('[data-copy]') as HTMLElement | null;
-      if (copyBtn) {
-        const sid = copyBtn.getAttribute('data-copy') || '';
-        navigator.clipboard?.writeText(sid);
-        copyBtn.classList.add('copied');
-        setTimeout(() => copyBtn.classList.remove('copied'), 1000);
-        return;
-      }
-      const head = target.closest('.phase-group-head') as HTMLElement | null;
-      if (head) togglePhaseGroup(head);
-    });
-    phasesContainer?.addEventListener('keydown', (e) => {
-      if (!isPhaseGroupActivation(e.key)) return;
-      const head = (e.target as HTMLElement).closest('.phase-group-head') as HTMLElement | null;
-      if (head) {
-        e.preventDefault();
-        togglePhaseGroup(head);
-      }
-    });
+    if (phasesContainer) this.projectLogView.attachEntries(phasesContainer);
 
     // New session modal
     document.getElementById('new-session-cancel')?.addEventListener('click', () => this.hideNewSessionModal());
@@ -380,19 +299,8 @@ class SessionManager {
     });
     document.getElementById('session-cwd-verdict')?.addEventListener('change', (e) => this.newSessionModal.onVerdictChange(e));
 
-    // Rename modal
-    document.getElementById('rename-cancel')?.addEventListener('click', () => this.hideRenameModal());
-    document.getElementById('rename-confirm')?.addEventListener('click', () => this.confirmRename());
-    document.getElementById('rename-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.confirmRename();
-    });
-
-    // Category modal
-    document.getElementById('category-cancel')?.addEventListener('click', () => this.hideCategoryModal());
-    document.getElementById('category-confirm')?.addEventListener('click', () => this.confirmCategoryAction());
-    document.getElementById('category-name-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.confirmCategoryAction();
-    });
+    this.renameModal.bind();
+    this.categoryModal.bind();
 
     // Delete history-entry modal
     document.getElementById('delete-entry-cancel')?.addEventListener('click', () => this.projectLogView.hideDeleteEntryModal());
@@ -423,79 +331,25 @@ class SessionManager {
       );
     }
 
-    // Keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
+    bindGlobalShortcuts({
+      closeModals: () => {
         this.hideNewSessionModal();
-        this.hideRenameModal();
-        this.hideCategoryModal();
+        this.renameModal.hide();
+        this.categoryModal.hide();
         this.settingsModal.hide();
         this.hideShortcutsModal();
         this.projectLogView.hideDeleteEntryModal();
-      }
-      // Show keyboard shortcuts: ?
-      // Skip when an input/textarea is focused (modal inputs or xterm helper
-      // textarea), or when another modal is already open (avoid stacking).
-      if (e.key === '?' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        const otherModalOpen = !!document.querySelector('.modal:not(.hidden):not(#shortcuts-modal)');
-        if (tag !== 'input' && tag !== 'textarea' && !otherModalOpen) {
-          e.preventDefault();
-          this.toggleShortcutsModal();
-        }
-      }
-      // New session: Alt+N
-      if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') {
-          e.preventDefault();
-          this.showNewSessionModal();
-        }
-      }
-      // Filter sessions: Alt+K. Not while typing in a field (a modal, the filter itself);
-      // inside the terminal, terminal.ts handles it, since xterm's textarea is focused there.
-      if (isFilterShortcut(e)) {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') {
-          e.preventDefault();
-          this.focusSessionFilter();
-        }
-      }
-      // Session navigation: Ctrl+Q = prev, Ctrl+E = next
-      // Skip when an input/textarea is focused (modal inputs or xterm helper textarea)
-      if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') {
-          if (e.key === 'q' || e.key === 'Q') {
-            e.preventDefault();
-            this.navigateToSession('prev');
-          } else if (e.key === 'e' || e.key === 'E') {
-            e.preventDefault();
-            this.navigateToSession('next');
-          } else if (e.key === 'b' || e.key === 'B') {
-            e.preventDefault();
-            this.toggleSidebar();
-          }
-        }
-      }
+      },
+      toggleShortcutsModal: () => this.toggleShortcutsModal(),
+      showNewSessionModal: () => this.showNewSessionModal(),
+      focusSessionFilter: () => this.focusSessionFilter(),
+      navigateToSession: (direction) => this.navigateToSession(direction),
+      toggleSidebar: () => this.toggleSidebar(),
     });
 
-    // Modal backdrop clicks
-    document.getElementById('new-session-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideNewSessionModal();
-    });
-    document.getElementById('rename-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideRenameModal();
-    });
-    document.getElementById('category-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideCategoryModal();
-    });
-    document.getElementById('shortcuts-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hideShortcutsModal();
-    });
-    document.getElementById('delete-entry-modal')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.projectLogView.hideDeleteEntryModal();
-    });
+    closeOnBackdrop('new-session-modal', () => this.hideNewSessionModal());
+    closeOnBackdrop('shortcuts-modal', () => this.hideShortcutsModal());
+    closeOnBackdrop('delete-entry-modal', () => this.projectLogView.hideDeleteEntryModal());
   }
 
   private setupPipButton(): void {
@@ -536,149 +390,59 @@ class SessionManager {
     setTimeout(() => this.terminalMgr?.fit(), 300);
   }
 
-  private connect(): void {
-    // Close existing WebSocket to prevent duplicate connections
-    if (this.ws) {
-      // Remove handlers before closing to prevent reconnect loop
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.onmessage = null;
-      this.ws.onopen = null;
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close();
-      }
-      this.ws = null;
+  /** Connected (or reconnected): load everything, then re-attach to the session open before (issue #7). */
+  private handleSocketOpen(): void {
+    void this.sessionListView.refreshAccountOrder();
+    void this.accountMenu?.load();
+    this.listSessions();
+    this.listCategories();
+    this.getNotificationPreferences();
+
+    if (this.previousSessionId) {
+      const sessionToReattach = this.previousSessionId;
+      this.previousSessionId = null;
+      // Delay slightly to allow session list to load first
+      setTimeout(() => {
+        if (this.sessions.has(sessionToReattach)) {
+          console.log('Re-attaching to previous session:', sessionToReattach);
+          this.attachToSession(sessionToReattach);
+        }
+      }, SESSION_REATTACH_DELAY_MS);
     }
-
-    this.updateConnectionStatus('connecting');
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onopen = () => {
-      console.log('WebSocket connected');
-      this.reconnectAttempts = 0;
-      this.updateConnectionStatus('connected');
-      void this.sessionListView.refreshAccountOrder();
-      void this.accountMenu?.load();
-      this.listSessions();
-      this.listCategories();
-      this.getNotificationPreferences();
-
-      // Re-attach to previous session on reconnect (issue #7)
-      if (this.previousSessionId) {
-        const sessionToReattach = this.previousSessionId;
-        this.previousSessionId = null;
-        // Delay slightly to allow session list to load first
-        setTimeout(() => {
-          if (this.sessions.has(sessionToReattach)) {
-            console.log('Re-attaching to previous session:', sessionToReattach);
-            this.attachToSession(sessionToReattach);
-          }
-        }, SESSION_REATTACH_DELAY_MS);
-      }
-    };
-
-    this.ws.onclose = () => {
-      console.log('WebSocket disconnected');
-      this.updateConnectionStatus('disconnected');
-      // Save current session for re-attachment on reconnect (issue #7)
-      // Clear currentSessionId and attachingSessionId so reattach can proceed
-      if (this.currentSessionId) {
-        this.previousSessionId = this.currentSessionId;
-        this.currentSessionId = null;
-      }
-      this.attachingSessionId = null;
-      // No answer is coming for a stop sent before the drop; keeping it would make the
-      // next click on that session's Stop wait forever.
-      this.stopRequests.clear();
-      // Nor for a move: the menu would show "Moving…" and ignore the chip until a reload. A
-      // move the server finished is in the session list it re-sends; a session it stopped
-      // for the move is Resumed from the sidebar.
-      for (const id of this.accountMoves.keys()) this.launchRetries.delete(id);
-      this.accountMoves.clear();
-      this.accountMenu?.finished();
-      // Job states from before the drop go stale silently -- no further push is
-      // coming -- so show nothing until the server re-seeds us after auth.
-      this.jobOverlay.clear();
-      this.attemptReconnect();
-    };
-
-    this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    this.ws.onmessage = (event) => {
-      this.handleMessage(event.data);
-    };
   }
 
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('Max reconnect attempts reached');
-      return;
+  /** The socket dropped; the socket reconnects by itself. */
+  private handleSocketClose(): void {
+    // Save current session for re-attachment on reconnect (issue #7)
+    // Clear currentSessionId and attachingSessionId so reattach can proceed
+    if (this.currentSessionId) {
+      this.previousSessionId = this.currentSessionId;
+      this.currentSessionId = null;
     }
-
-    this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    setTimeout(() => this.connect(), delay);
+    this.attachingSessionId = null;
+    // No answer is coming for a stop sent before the drop; keeping it would make the
+    // next click on that session's Stop wait forever.
+    this.stopRequests.clear();
+    // Nor for a move: the menu would show "Moving…" and ignore the chip until a reload. A
+    // move the server finished is in the session list it re-sends; a session it stopped
+    // for the move is Resumed from the sidebar.
+    for (const id of this.accountMoves.keys()) this.launchRetries.delete(id);
+    this.accountMoves.clear();
+    this.accountMenu?.finished();
+    // Job states from before the drop go stale silently -- no further push is
+    // coming -- so show nothing until the server re-seeds us after auth.
+    this.jobOverlay.clear();
   }
 
   private send(type: string, payload?: any): string {
-    const id = String(++this.messageId);
-    const message = JSON.stringify({ type, id, payload });
-
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(message);
-    }
-
-    return id;
+    return this.socket.send(type, payload);
   }
 
   private sendRequest(type: string, payload?: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const id = this.send(type, payload);
-      this.pendingRequests.set(id, { resolve, reject });
-
-      // Timeout pending requests
-      setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
-          reject(new Error('Request timeout'));
-        }
-      }, REQUEST_TIMEOUT_MS);
-    });
+    return this.socket.request(type, payload);
   }
 
-  private handleMessage(data: string): void {
-    let message: ServerMessage;
-    try {
-      message = JSON.parse(data);
-    } catch {
-      console.error('Invalid message:', data);
-      return;
-    }
-
-    // Handle pending request responses (issue #4 - reject on error)
-    if (message.id && this.pendingRequests.has(message.id)) {
-      const { resolve, reject } = this.pendingRequests.get(message.id)!;
-      this.pendingRequests.delete(message.id);
-
-      // Reject if this is an error response
-      if (message.type === 'error' || message.type === 'session.error') {
-        const errorPayload = message.payload as ErrorPayload;
-        // A refused launch keeps its refusal, for the Log in / Clean up dialog.
-        reject(Object.assign(new Error(errorPayload?.message || 'Request failed'), { refusal: errorPayload?.refusal }));
-        return;
-      }
-
-      resolve(message.payload);
-    }
-
+  private handleMessage(message: ServerMessage): void {
     // Handle message types
     switch (message.type) {
       case 'auth.success':
@@ -857,7 +621,7 @@ class SessionManager {
 
   private handleAuthFailure(payload: any): void {
     alert('Authentication failed: ' + payload.message);
-    this.ws?.close();
+    this.socket.close();
   }
 
   private handleSessionList(payload: { sessions: SessionInfo[] }): void {
@@ -1185,20 +949,9 @@ class SessionManager {
    */
   private handleLandResult(payload: LandNotificationPayload): void {
     showLandResult(payload);
-    if (
-      this.browserNotificationsPermission === 'granted' &&
-      this.notificationPreferences.browserEnabled &&
-      !document.hasFocus()
-    ) {
-      const notification = new window.Notification(landResultTitle(payload), {
-        body: payload.detail,
-        icon: '/favicon.ico',
-        tag: `land-${payload.projectCwd}-${payload.track}`,
-      });
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
+    if (this.notificationPreferences.browserEnabled) {
+      // Stays until clicked: the session that asked is gone, so this is the only answer.
+      this.notifier.show(landResultTitle(payload), payload.detail, `land-${payload.projectCwd}-${payload.track}`, undefined, false);
     }
     void this.workspace.refresh();
     // A land of this server's own project leaves it behind its build.
@@ -1624,37 +1377,8 @@ class SessionManager {
   }
 
   private showRenameModal(): void {
-    if (!this.currentSessionId) return;
-
-    const session = this.sessions.get(this.currentSessionId);
-    if (!session) return;
-
-    const modal = document.getElementById('rename-modal');
-    const input = document.getElementById('rename-input') as HTMLInputElement;
-
-    if (modal && input) {
-      modal.classList.remove('hidden');
-      input.value = session.name;
-      input.focus();
-      input.select();
-    }
-  }
-
-  private hideRenameModal(): void {
-    document.getElementById('rename-modal')?.classList.add('hidden');
-  }
-
-  private confirmRename(): void {
-    if (!this.currentSessionId) return;
-
-    const input = document.getElementById('rename-input') as HTMLInputElement;
-    const name = input.value.trim();
-
-    if (name) {
-      this.renameSession(this.currentSessionId, name);
-    }
-
-    this.hideRenameModal();
+    const session = this.currentSessionId ? this.sessions.get(this.currentSessionId) : undefined;
+    if (session) this.renameModal.show(session.id, session.name);
   }
 
   private terminateCurrentSession(): void {
@@ -1664,48 +1388,6 @@ class SessionManager {
       // server, then removes the record — surviving a page reload.
       this.deleteSession(this.currentSessionId);
     }
-  }
-
-  // Category modal handlers
-
-  private categoryModalMode: 'create' | 'rename' = 'create';
-  private categoryModalCategoryId: string | null = null;
-
-  private showCategoryModal(mode: 'create' | 'rename', category?: CategoryInfo): void {
-    this.categoryModalMode = mode;
-    this.categoryModalCategoryId = category?.id || null;
-
-    const modal = document.getElementById('category-modal');
-    const title = document.getElementById('category-modal-title');
-    const input = document.getElementById('category-name-input') as HTMLInputElement;
-
-    if (modal && title && input) {
-      modal.classList.remove('hidden');
-      title.textContent = mode === 'create' ? 'Create Category' : 'Rename Category';
-      input.value = category?.name || '';
-      input.focus();
-      input.select();
-    }
-  }
-
-  private hideCategoryModal(): void {
-    document.getElementById('category-modal')?.classList.add('hidden');
-    this.categoryModalCategoryId = null;
-  }
-
-  private confirmCategoryAction(): void {
-    const input = document.getElementById('category-name-input') as HTMLInputElement;
-    const name = input.value.trim();
-
-    if (!name) return;
-
-    if (this.categoryModalMode === 'create') {
-      this.createCategory(name);
-    } else if (this.categoryModalMode === 'rename' && this.categoryModalCategoryId) {
-      this.renameCategory(this.categoryModalCategoryId, name);
-    }
-
-    this.hideCategoryModal();
   }
 
   // Notification preference methods
