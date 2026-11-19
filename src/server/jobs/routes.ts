@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createLogger } from '../utils/logger.js';
 import { findWorkspaceProject } from '../projects/workspace.js';
 import { capabilitiesFor, detectVcs } from '../projects/vcs.js';
@@ -12,6 +12,7 @@ import {
   retryJob,
 } from './runner.js';
 import { getJobWithStages, listJobs, listJobsForProject } from './store.js';
+import type { JobWithStages } from './types.js';
 import { diffAgainst, diffStat, fileDiff } from './worktree.js';
 import { hasRemote } from '../utils/git.js';
 import { listJobDocs, readDoc, resolveInWorktree } from './docs.js';
@@ -37,15 +38,15 @@ export function registerJobRoutes(app: FastifyInstance): void {
   });
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    const job = jobOr404(reply, request.params.id);
+    if (!job) return reply;
     return { job };
   });
 
   // The job branch's diff against its base, for review before approving a merge.
   app.get<{ Params: { id: string } }>('/api/jobs/:id/diff', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    const job = jobOr404(reply, request.params.id);
+    if (!job) return reply;
     if (!job.worktreePath) return { diff: '', stat: null };
 
     const base = await baseBranchFor(job);
@@ -64,8 +65,8 @@ export function registerJobRoutes(app: FastifyInstance): void {
   // markdown it could have been reading. Empty — never an error — for a job
   // whose worktree has been torn down, since the board still renders those rows.
   app.get<{ Params: { id: string } }>('/api/jobs/:id/docs', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    const job = jobOr404(reply, request.params.id);
+    if (!job) return reply;
     if (!job.worktreePath) return { docs: [] };
 
     const base = await baseBranchFor(job);
@@ -76,8 +77,8 @@ export function registerJobRoutes(app: FastifyInstance): void {
   app.get<{ Params: { id: string }; Querystring: { path?: string; mode?: string } }>(
     '/api/jobs/:id/file',
     async (request, reply) => {
-      const job = getJobWithStages(request.params.id);
-      if (!job) return reply.status(404).send({ error: 'Unknown job' });
+      const job = jobOr404(reply, request.params.id);
+      if (!job) return reply;
       const rel = request.query?.path;
       if (!rel) return reply.status(400).send({ error: 'path required' });
       if (!job.worktreePath) return { text: null, diff: null, path: rel };
@@ -106,16 +107,16 @@ export function registerJobRoutes(app: FastifyInstance): void {
   // A parked job's question as the board renders it: question, context, options and
   // recommendation per card, or null when the detail asks nothing (show it as text).
   app.get<{ Params: { id: string } }>('/api/jobs/:id/decision', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    const job = jobOr404(reply, request.params.id);
+    if (!job) return reply;
     return { decision: job.detail ? parseDecision(job.detail) : null };
   });
 
   // Review findings for the gate. Returns an empty list rather than 404 when a
   // job has not been reviewed yet, so the UI has one code path.
   app.get<{ Params: { id: string } }>('/api/jobs/:id/findings', async (request, reply) => {
-    const job = getJobWithStages(request.params.id);
-    if (!job) return reply.status(404).send({ error: 'Unknown job' });
+    const job = jobOr404(reply, request.params.id);
+    if (!job) return reply;
     if (!job.worktreePath) return { findings: [] };
     const file = readFindings(job.worktreePath, job.id);
     return { findings: file?.findings ?? [], generatedAt: file?.generatedAt ?? null };
@@ -126,8 +127,8 @@ export function registerJobRoutes(app: FastifyInstance): void {
   app.post<{ Params: { id: string }; Body?: { selected?: string[] } }>(
     '/api/jobs/:id/findings/select',
     async (request, reply) => {
-      const job = getJobWithStages(request.params.id);
-      if (!job) return reply.status(404).send({ error: 'Unknown job' });
+      const job = jobOr404(reply, request.params.id);
+      if (!job) return reply;
       if (!job.worktreePath) return reply.status(409).send({ error: 'This job has no worktree' });
 
       const selected = Array.isArray(request.body?.selected)
@@ -279,4 +280,11 @@ function withJob<T>(
       .status(500)
       .send({ error: error instanceof Error ? error.message : 'Request failed' });
   }
+}
+
+/** The job with its stages, or null once a 404 has gone out (the route then returns `reply`). */
+function jobOr404(reply: FastifyReply, id: string): JobWithStages | null {
+  const job = getJobWithStages(id);
+  if (!job) reply.status(404).send({ error: 'Unknown job' });
+  return job;
 }

@@ -1,6 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createLogger } from '../utils/logger.js';
-import { getWorkspaceBoard, findWorkspaceProject, listBoardCwds } from './workspace.js';
+import { getWorkspaceBoard, findWorkspaceProject, listBoardCwds, type WorkspaceProject } from './workspace.js';
 import { getRollup } from './rollup.js';
 import { pathKey } from '../utils/paths.js';
 import { resolveCwdInput } from '../sessions/folder-picker.js';
@@ -97,8 +97,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
 
       // Build the board once and reuse it for both the lookup and the payload.
       const allProjects = getWorkspaceBoard({ runningSessions: runningSessions() });
-      const project = findWorkspaceProject(cwd, allProjects);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, cwd, allProjects);
+      if (!project) return reply;
 
       const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
       if (board) await addBehindMain([board]);
@@ -206,8 +206,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (!cwd || typeof cwd !== 'string') {
       return reply.status(400).send({ error: 'cwd required' });
     }
-    const project = findWorkspaceProject(cwd);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, cwd);
+    if (!project) return reply;
 
     const result = await migrateProject(project);
     return result;
@@ -219,8 +219,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: { cwd?: string } }>('/api/projects/qa', async (request, reply) => {
     const cwd = request.query?.cwd;
     if (!cwd) return reply.status(400).send({ error: 'cwd required' });
-    const project = findWorkspaceProject(cwd);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, cwd);
+    if (!project) return reply;
     const doc = readQaDoc(project.cwd);
     return { path: qaDocRelPath(), doc };
   });
@@ -230,8 +230,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const cwd = request.body?.cwd;
       if (!cwd) return reply.status(400).send({ error: 'cwd required' });
-      const project = findWorkspaceProject(cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, cwd);
+      if (!project) return reply;
       return generateQaDoc(project, { force: request.body?.force === true });
     }
   );
@@ -252,8 +252,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (!body.cwd || !body.title?.trim()) {
       return reply.status(400).send({ error: 'cwd and title required' });
     }
-    const project = findWorkspaceProject(body.cwd);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, body.cwd);
+    if (!project) return reply;
 
     return withErrors(reply, () => {
       const plan = readProjectPlan(project);
@@ -294,8 +294,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (body.status !== undefined && !isStatus(body.status)) {
       return reply.status(400).send({ error: `status must be one of ${STATUSES.join(', ')}` });
     }
-    const project = findWorkspaceProject(body.cwd);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, body.cwd);
+    if (!project) return reply;
 
     return withErrors(reply, () => {
       const plan = readProjectPlan(project);
@@ -330,8 +330,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.id) {
         return reply.status(400).send({ error: 'cwd and id required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
 
       return withErrors(reply, () => {
         const target = planFileFor(project, readProjectPlan(project), { featureId: body.id });
@@ -353,8 +353,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track || !Array.isArray(body.ids)) {
         return reply.status(400).send({ error: 'cwd, track and ids required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
 
       return withErrors(reply, () => {
         const target = planFileFor(project, readProjectPlan(project), { track: body.track });
@@ -381,8 +381,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     // One board build serves both the membership check and the answer: an
     // unregistered project otherwise builds it twice per keystroke-debounce.
     const allProjects = getWorkspaceBoard();
-    const project = findWorkspaceProject(cwd, allProjects);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, cwd, allProjects);
+    if (!project) return reply;
     const board = allProjects.find((p) => pathKey(p.cwd) === pathKey(project.cwd));
     return {
       cwd: project.cwd,
@@ -398,8 +398,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track?.trim()) {
         return reply.status(400).send({ error: 'cwd and track required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       return withErrors(reply, async () => {
         const branch = await ensureTrackBranch(project, body.track as string);
         // The caller opens a session there; it runs /track/install first when
@@ -420,8 +420,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track) {
         return reply.status(400).send({ error: 'cwd and track required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       const branch = getActiveTrackBranch(project.cwd, body.track.trim());
       if (!branch) return reply.status(404).send({ error: `"${body.track}" has no branch` });
       return { install: await installDependencies(branch.worktreePath) };
@@ -435,8 +435,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track) {
         return reply.status(400).send({ error: 'cwd and track required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       return withErrors(reply, () =>
         landAndBuild(project, body.track as string, {
           sessions: runningSessions(),
@@ -457,8 +457,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track) {
         return reply.status(400).send({ error: 'cwd and track required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       return withErrors(reply, () =>
         updateAndInstall(project, body.track as string)
       );
@@ -474,8 +474,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track) {
         return reply.status(400).send({ error: 'cwd and track required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       return withErrors(reply, async () => {
         const moved = await withProjectLock(project.cwd, `moving "${body.track}" lines into its branch`, () =>
           moveIntoBranch(project, body.track as string)
@@ -504,8 +504,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.status(400).send({ error: 'cwd required' });
-      const project = findWorkspaceProject(cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, cwd);
+      if (!project) return reply;
       const tracks: Record<string, { files: { path: string; status: string }[]; commits: number }> = {};
       // One context for every track: transcripts, status and the phase list
       // are the same for all of them, and this runs on each project render.
@@ -531,8 +531,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       if (!body.cwd || !body.track || !Array.isArray(body.files)) {
         return reply.status(400).send({ error: 'cwd, track and files required' });
       }
-      const project = findWorkspaceProject(body.cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, body.cwd);
+      if (!project) return reply;
       const files = body.files.filter((x): x is string => typeof x === 'string');
       return withErrors(reply, () =>
         withProjectLock(project.cwd, `moving "${body.track}" off main`, () =>
@@ -551,8 +551,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const { cwd, track } = request.query;
       if (!cwd || !track) return reply.status(400).send({ error: 'cwd and track required' });
-      const project = findWorkspaceProject(cwd);
-      if (!project) return reply.status(404).send({ error: 'Unknown project' });
+      const project = projectOr404(reply, cwd);
+      if (!project) return reply;
       return withErrors(reply, async () => ({ plan: await planTrackDelete(project, track, runningSessions()) }));
     }
   );
@@ -572,8 +572,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     if (!body.cwd || !body.track || !body.token) {
       return reply.status(400).send({ error: 'cwd, track and token required' });
     }
-    const project = findWorkspaceProject(body.cwd);
-    if (!project) return reply.status(404).send({ error: 'Unknown project' });
+    const project = projectOr404(reply, body.cwd);
+    if (!project) return reply;
     const strings = (v: unknown): string[] =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
@@ -624,6 +624,17 @@ function writingTo<T>(project: RegistryProject, target: { copy: PlanCopy | null 
  *  - TrackBranchError, ProjectBusyError, WorktreeError: their status and message;
  *  - anything else: 500, logged.
  */
+/**
+ * The board project for `cwd`, or null once a 404 has gone out (the route
+ * then returns `reply`). Every route resolves its cwd here, so a request can
+ * never point the store at a folder that isn't on the board.
+ */
+function projectOr404(reply: FastifyReply, cwd: string, board?: WorkspaceProject[]): RegistryProject | null {
+  const project = findWorkspaceProject(cwd, board);
+  if (!project) reply.status(404).send({ error: 'Unknown project' });
+  return project;
+}
+
 async function withErrors<T>(
   reply: { status: (code: number) => { send: (body: unknown) => unknown } },
   fn: () => T | Promise<T>
