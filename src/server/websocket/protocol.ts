@@ -1,6 +1,5 @@
 // WebSocket message protocol definitions
-import type { JobsSummary } from '../jobs/summary.js';
-import type { PreflightRefusal } from '../accounts.js';
+import type { ServerPayloads } from '../../shared/protocol.js';
 
 /**
  * Every message type, as values: the Android app mirrors them in Kotlin, and
@@ -42,6 +41,20 @@ export const CLIENT_MESSAGE_TYPES = [
 
 export type ClientMessageType = (typeof CLIENT_MESSAGE_TYPES)[number];
 
+// Server -> client payloads are defined with the client in shared/protocol.ts.
+export type {
+  AccountChangedNotificationPayload,
+  AnyNotificationPayload,
+  CategoryInfo,
+  ErrorPayload,
+  LandNotificationPayload,
+  NotificationPayload,
+  NotificationPreferencesPayload,
+  PromptMissingNotificationPayload,
+  ServerPayloads,
+  SessionInfo,
+} from '../../shared/protocol.js';
+
 export const SERVER_MESSAGE_TYPES = [
   'auth.success',
   'auth.failure',
@@ -82,6 +95,12 @@ export const SERVER_MESSAGE_TYPES = [
 ] as const;
 
 export type ServerMessageType = (typeof SERVER_MESSAGE_TYPES)[number];
+
+// A message in SERVER_MESSAGE_TYPES without a payload in ServerPayloads (or the reverse)
+// fails to compile here: the list feeds the Android fixture, the map types every send.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const serverTypesMatch: Same<ServerMessageType, keyof ServerPayloads> = true;
+void serverTypesMatch;
 
 export interface ClientMessage {
   type: ClientMessageType;
@@ -186,54 +205,6 @@ export interface CategoryTogglePayload {
   collapsed: boolean;
 }
 
-// Server message payloads
-export interface SessionInfo {
-  id: string;
-  name: string;
-  shell: string;
-  cwd: string;
-  createdAt: string;
-  lastAccessedAt: string;
-  status: string;
-  cols: number;
-  rows: number;
-  attachable: boolean;
-  categoryId: string | null;
-  sortOrder: number;
-  isFork: boolean;
-  /** The Claude conversation this session last reported, if any. Drives the sidebar's
-   *  revive tooltip: with an id we resume the conversation, without one we only respawn
-   *  the shell. */
-  claudeSessionId: string | null;
-  /** The session that started this one through the agent-sessions API; the sidebar
-   *  nests it under that session while it is in the list. */
-  spawnedBy: string | null;
-  /** The `--permission-mode` a started session's `claude` runs with. */
-  permissionMode: string | null;
-  /** `read` for a read-only peer beside its track's builder (project/builder-critic-pairs.md);
-   *  null is write. The sidebar chips it and orders it after its builder. */
-  access?: string | null;
-  /** What Claude calls the conversation running here (`ListAgents`' name), or null when
-   *  none is running. Kept current by `session.claudeNames`. */
-  claudeName: string | null;
-  /** The Claude login it runs under (accounts.ts). */
-  account: string;
-  /** Why its account no longer holds the expected login (account-watch.ts), or null. */
-  accountWarning: string | null;
-  /** The sidebar's play button: `reviveRefusal()` (sessions/revivable.ts) found nothing
-   *  against reviving it. Computed here so the client never re-derives the server's rules. */
-  revivable: boolean;
-  /** Why the header's account chip can't move this session to another account
-   *  (`moveBlockedReason()`, sessions/account-move.ts), or null. Computed here, as
-   *  `revivable` is; running started sessions are refused at move time instead. */
-  accountMoveBlocked: string | null;
-}
-
-/** Every session with a running Claude, by session id → Claude's name; sent on change. */
-export interface SessionClaudeNamesPayload {
-  names: Record<string, string>;
-}
-
 export interface SessionForkPayload {
   sessionId: string;
 }
@@ -276,107 +247,11 @@ export interface SessionChangeAccountPayload {
   force?: boolean;
 }
 
-/** The requester's answer to session.changeAccount; `resume`: it was running, revive it. */
-export interface SessionAccountChangedPayload {
-  sessionId: string;
-  account: string;
-  resume: boolean;
-}
-
-/** The requester's answer to session.stop: every id stopped, children first. */
-export interface SessionStoppedPayload {
-  sessionIds: string[];
-}
-
 export interface SessionKeepPayload {
   sessionId: string;
 }
 
-export interface SessionKeptPayload {
-  sessionId: string;
-}
-
-export interface CategoryInfo {
-  id: string;
-  name: string;
-  sortOrder: number;
-  collapsed: boolean;
-}
-
-export interface SessionCreatedPayload {
-  session: SessionInfo;
-  scrollback?: string;
-}
-
-export interface SessionAttachedPayload {
-  session: SessionInfo;
-  scrollback: string;
-}
-
-export interface SessionListPayload {
-  sessions: SessionInfo[];
-}
-
-export interface TerminalDataServerPayload {
-  sessionId: string;
-  data: string;
-}
-
-export interface TerminalExitPayload {
-  sessionId: string;
-  exitCode: number;
-}
-
-export interface ErrorPayload {
-  message: string;
-  code?: string;
-}
-
-// Category server payloads
-export interface CategoryCreatedPayload {
-  category: CategoryInfo;
-}
-
-export interface CategoryRenamedPayload {
-  categoryId: string;
-  name: string;
-}
-
-export interface CategoryDeletedPayload {
-  categoryId: string;
-}
-
-export interface CategoryReorderedPayload {
-  categories: { id: string; sortOrder: number }[];
-}
-
-export interface CategoryToggledPayload {
-  categoryId: string;
-  collapsed: boolean;
-}
-
-export interface CategoryListPayload {
-  categories: CategoryInfo[];
-}
-
-export interface SessionMovedPayload {
-  sessionId: string;
-  categoryId: string | null;
-  sortOrder: number;
-}
-
-export interface SessionReorderedPayload {
-  sessions: { id: string; sortOrder: number }[];
-}
-
 // Notification payloads
-
-export interface NotificationPreferencesPayload {
-  browserEnabled: boolean;
-  visualEnabled: boolean;
-  notifyOnInput: boolean;
-  notifyOnCompleted: boolean;
-}
 
 export interface NotificationPreferencesSetPayload {
   browserEnabled?: boolean;
@@ -397,85 +272,10 @@ export interface NotificationDismissPayload {
   sessionId: string;
 }
 
-/**
- * The live job feed behind the overlay. Pushed on every job or stage write and
- * once per client just after auth, so a fresh page is populated before anything
- * moves. Mirrors JobSummary in src/server/jobs/summary.ts.
- */
-export type JobsSummaryPayload = JobsSummary;
-
-export interface NotificationPayload {
-  sessionId: string;
-  type: 'needs-input' | 'completed';
-  timestamp: string;
-}
-
-/**
- * The outcome of a Land a session asked for (POST /api/agent/land), sent once
- * it has run. Same `notification` message, told apart by `kind`: the session
- * that asked is closed by then, so it can't key a session notification.
- */
-export interface LandNotificationPayload {
-  kind: 'land';
-  projectCwd: string;
-  track: string;
-  ok: boolean;
-  /** Land's detail (with the build and restart hint), or why it failed. */
-  detail: string;
-  timestamp: string;
-}
-
-/**
- * A started session's prompt never reached its agent (agent/prompt-delivery.ts).
- * Sent once, a grace period after the start; the same `notification` message,
- * told apart by `kind`, because a session badge would read as "needs input".
- */
-export interface PromptMissingNotificationPayload {
-  kind: 'prompt-missing';
-  sessionId: string;
-  name: string;
-  detail: string;
-  timestamp: string;
-}
-
-/** A running session's account changed login under it (account-watch.ts). */
-export interface AccountChangedNotificationPayload {
-  kind: 'account-changed';
-  sessionId: string;
-  name: string;
-  detail: string;
-  timestamp: string;
-}
-
-/** Every running session whose account is on the wrong login, by id → why. */
-export interface SessionAccountWarningsPayload {
-  warnings: Record<string, string>;
-}
-
-/**
- * A Log in session's process exited: the client that opened it retries the launch
- * it was opened for. Sent to every connection, not just attached ones (unlike
- * `terminal.exit`), so switching sessions during the login doesn't lose the retry.
- */
-export interface SessionLoginEndedPayload {
-  sessionId: string;
-  exitCode: number;
-}
-
-/** `session.error`; `refusal` when a launch was refused by preflight (accounts.ts). */
-export interface SessionErrorPayload {
-  message: string;
-  /**
-   * 'viewers': session.stop or session.changeAccount refused because another browser is
-   * viewing (resend with force). 'stopped': session.changeAccount failed after stopping the
-   * session, which still has its old account (revive it).
-   */
-  code?: string;
-  refusal?: PreflightRefusal;
-}
 
 // Helper functions
-export function createMessage(type: ServerMessageType, payload?: unknown, id?: string): string {
+/** The one way a server message is built: `payload` is checked against what the client reads. */
+export function createMessage<K extends ServerMessageType>(type: K, payload: ServerPayloads[K], id?: string): string {
   const message: ServerMessage = { type };
   if (payload !== undefined) message.payload = payload;
   if (id !== undefined) message.id = id;

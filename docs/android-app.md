@@ -15,7 +15,7 @@ decisions are in `project/android-app.md`.
 | `tests/fixtures/protocol/messages.json` | One example of every `/ws` message, read by both test suites |
 | `src/server/push/` | FCM sender, device registry and what gets pushed |
 
-Inside the app: `protocol/` mirrors `protocol.ts`; `net/` is the socket (`Connection`), the
+Inside the app: `protocol/` mirrors `protocol.ts` and `src/shared/protocol.ts`; `net/` is the socket (`Connection`), the
 REST client (`Api`) and address parsing; `sessions/` the session list and the open
 terminal; `jobs/` the job and project routes and the live job feed; `push/` Firebase and
 notifications; `links/` the `claude-remote://` scheme; `ui/` the screens.

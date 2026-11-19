@@ -1,4 +1,8 @@
 import { formatCost, formatTokens } from './format.js';
+import type { JobStatus, StageName, StageStatus } from '../shared/protocol.js';
+
+// Defined with the wire format (src/shared/protocol.ts), which the overlay's feed carries too.
+export type { JobStatus, StageName, StageStatus };
 
 /**
  * Types and pure formatting helpers shared by the job board.
@@ -8,24 +12,6 @@ import { formatCost, formatTokens } from './format.js';
  * stops as soon as nothing is running.
  */
 
-export type StageName =
-  | 'design'
-  | 'implement'
-  | 'integrate'
-  | 'review'
-  | 'fix'
-  | 'qa'
-  | 'merge'
-  | 'rebuild';
-
-export type JobStatus = 'queued' | 'running' | 'parked' | 'done' | 'failed' | 'cancelled';
-export type StageStatus =
-  | 'pending'
-  | 'running'
-  | 'passed'
-  | 'skipped'
-  | 'failed'
-  | 'needs_decision';
 export type ParkReason = 'gate' | 'question';
 
 /** Mirrors StageUsage in src/server/jobs/types.ts. */

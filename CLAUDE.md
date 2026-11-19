@@ -36,6 +36,9 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
 
 ## WebSocket (`/ws`; message types in `protocol.ts`)
 
+- Server → client payloads live in `src/shared/protocol.ts` (`ServerPayloads`), read by the
+  client and checked on every `createMessage()`. It imports nothing, or the client's
+  type-check pulls in server modules; never re-declare a payload on either side.
 - `cols`/`rows` from **any** message pass `websocket/validation.ts` before reaching a PTY.
 - `attachToSession()` detaches first; keep it there, or the old session's listener leaks
   and keystrokes arrive twice. Output goes only through the connection's `TerminalOutput`
@@ -201,9 +204,9 @@ worktree. Gates after **design**, after **review**, before **merge**.
 
 ## Android app (`android/`) → `docs/android-app.md`
 
-- A `/ws` type or session/category/job field added to `protocol.ts` goes into
-  `tests/fixtures/protocol/messages.json` and the app's `protocol/Protocol.kt` too, or
-  `npm test` and `npm run android:test` fail.
+- A `/ws` type or session/category/job field added to `protocol.ts` or `shared/protocol.ts`
+  goes into `tests/fixtures/protocol/messages.json` and the app's `protocol/Protocol.kt` too,
+  or `npm test` and `npm run android:test` fail.
 - Build only through `scripts/android.mjs` (`npm run android:*`): the PATH `java` is 1.8.
 - Push stays optional: a send never throws into its caller; `google-services.json` and the
   service-account key never enter the repo.

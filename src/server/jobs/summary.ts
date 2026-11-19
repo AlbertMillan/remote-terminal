@@ -2,7 +2,7 @@ import { basename } from 'path';
 import { pathKey } from '../utils/paths.js';
 import { loadRegistry } from '../projects/registry.js';
 import { listLiveAndRecentJobs } from './store.js';
-import { STAGE_ORDER, type JobStatus, type StageName, type StageStatus } from './types.js';
+import { STAGE_ORDER } from './types.js';
 
 /**
  * The compact cross-project job feed behind the live overlay.
@@ -19,39 +19,10 @@ export const RECENT_TERMINAL_MS = 2 * 60 * 1000;
 /** Detail is a glance on a card, not the full question; the board shows that. */
 const MAX_DETAIL = 240;
 
-export interface JobSummaryStage {
-  name: StageName;
-  status: StageStatus;
-}
+// The overlay's feed is the wire format: defined with it (shared/protocol.ts).
+import type { JobSummary, JobSummaryStage, JobsSummary } from '../../shared/protocol.js';
 
-export interface JobSummary {
-  id: string;
-  projectCwd: string;
-  /** Resolved exactly as the workspace board resolves it, so the two agree. */
-  projectName: string;
-  featureId: string | null;
-  title: string;
-  status: JobStatus;
-  stage: StageName | null;
-  gate: string | null;
-  parkReason: string | null;
-  detail: string | null;
-  /** All eight stages, in STAGE_ORDER — the strip renders them positionally. */
-  stages: JobSummaryStage[];
-  costUsd: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * No counts ride along here. The pill counts the cards it is actually showing,
- * and a finished job leaves the panel a minute before it leaves this feed — so
- * a server-side tally would be a second implementation of the same rule,
- * guaranteed to disagree with the one on screen.
- */
-export interface JobsSummary {
-  jobs: JobSummary[];
-}
+export type { JobSummary, JobSummaryStage, JobsSummary };
 
 /**
  * Display names, resolved the way `workspace.ts` does: a registry override if

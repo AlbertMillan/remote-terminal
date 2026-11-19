@@ -7,11 +7,14 @@ import {
   type CategoryInfo,
   type LandNotificationPayload,
   type PromptMissingNotificationPayload,
-  type SessionClaudeNamesPayload,
-  type SessionAccountWarningsPayload,
-  type SessionLoginEndedPayload,
   type AccountChangedNotificationPayload,
 } from './protocol.js';
+import type {
+  ServerPayloads,
+  SessionAccountWarningsPayload,
+  SessionClaudeNamesPayload,
+  SessionLoginEndedPayload,
+} from '../../shared/protocol.js';
 import { sessionManager } from '../sessions/manager.js';
 import { claudeNameFor } from '../sessions/claude-registry.js';
 import { defaultAccount } from '../accounts.js';
@@ -343,8 +346,12 @@ export function categoryToInfo(category: { id: string; name: string; sortOrder: 
   };
 }
 
-export function broadcastCategoryUpdate(event: 'created' | 'renamed' | 'deleted' | 'reordered' | 'toggled', payload: unknown, excludeClientId?: string): void {
-  const messageType = `category.${event}` as const;
+export function broadcastCategoryUpdate<E extends 'created' | 'renamed' | 'deleted' | 'reordered' | 'toggled'>(
+  event: E,
+  payload: ServerPayloads[`category.${E}`],
+  excludeClientId?: string
+): void {
+  const messageType = `category.${event}` as `category.${E}`;
 
   for (const conn of connections.values()) {
     if (conn.id !== excludeClientId && conn.ws.readyState === WS_OPEN) {

@@ -16,11 +16,10 @@ import {
   type SessionKeepPayload,
   type SessionStopPayload,
   type SessionChangeAccountPayload,
-  type SessionAccountChangedPayload,
   type TerminalDataPayload,
   type TerminalResizePayload,
-  type SessionErrorPayload,
 } from '../protocol.js';
+import type { ErrorPayload, SessionAccountChangedPayload } from '../../../shared/protocol.js';
 import { homedir } from 'os';
 import { AccountRefusedError, cleanupAccount, isAccount } from '../../accounts.js';
 import { injectCommand } from '../../sessions/session-open.js';
@@ -143,7 +142,7 @@ function validateSessionOptions(payload: SessionCreatePayload | undefined): {
  * A `session.error` for a failed launch. A preflight refusal carries the refusal
  * itself, so the client can offer Log in / Clean up (docs/accounts.md).
  */
-export function sessionErrorPayload(error: unknown, fallback: string): SessionErrorPayload {
+export function sessionErrorPayload(error: unknown, fallback: string): ErrorPayload {
   if (error instanceof AccountRefusedError) return { message: error.message, refusal: error.refusal };
   return { message: error instanceof Error ? error.message : fallback };
 }
@@ -512,7 +511,7 @@ export async function handleSessionStop(connection: ClientConnection, message: C
     const targets = sessionManager.stopTargets(payload.sessionId);
     const others = viewersOf(targets, connection);
     if (others > 0 && !payload.force) {
-      const error: SessionErrorPayload = {
+      const error: ErrorPayload = {
         message: `${others === 1 ? 'Another browser is' : `${others} other browsers are`} viewing this session`,
         code: 'viewers',
       };
@@ -550,7 +549,7 @@ export async function handleSessionChangeAccount(connection: ClientConnection, m
     if (typeof payload.account !== 'string' || !payload.account) throw new Error('Account required');
     const others = viewersOf([payload.sessionId], connection);
     if (others > 0 && !payload.force && sessionManager.isRunning(payload.sessionId)) {
-      const error: SessionErrorPayload = {
+      const error: ErrorPayload = {
         message: `${others === 1 ? 'Another browser is' : `${others} other browsers are`} viewing this session`,
         code: 'viewers',
       };

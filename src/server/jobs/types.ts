@@ -1,4 +1,8 @@
 import type { Usage } from '../usage/types.js';
+import type { JobStatus, StageName, StageStatus } from '../../shared/protocol.js';
+
+// The client renders these, so they are defined with the wire format (shared/protocol.ts).
+export type { JobStatus, StageName, StageStatus };
 
 /**
  * A job is one feature carried through the pipeline in an isolated worktree.
@@ -9,16 +13,6 @@ import type { Usage } from '../usage/types.js';
  * runs unattended; on approval at the final gate it merges, commits, pushes
  * where there is a remote, and removes its worktree.
  */
-
-export type StageName =
-  | 'design'
-  | 'implement'
-  | 'integrate'
-  | 'review'
-  | 'fix'
-  | 'qa'
-  | 'merge'
-  | 'rebuild';
 
 /** Stages in execution order. A job advances through exactly this sequence. */
 export const STAGE_ORDER: StageName[] = [
@@ -49,28 +43,6 @@ export const GATE_AFTER: Partial<Record<StageName, GateName>> = {
 export const GATE_BEFORE: Partial<Record<StageName, GateName>> = {
   merge: 'merge',
 };
-
-export type JobStatus =
-  | 'queued' // waiting for the scheduler to admit it
-  | 'running' // a stage is executing
-  | 'parked' // waiting at a gate, or on an open question
-  | 'done' // merged (or completed without merging) and torn down
-  | 'failed' // a stage failed hard; worktree retained for inspection
-  | 'cancelled'; // user abandoned it
-
-export type StageStatus =
-  | 'pending'
-  | 'running'
-  | 'passed'
-  | 'skipped'
-  | 'failed'
-  /**
-   * The stage ran, could not settle a decision, and stopped rather than guess.
-   * Distinct from 'passed' because the pipeline strip must not show a tick
-   * beside a job that is waiting on the user, and distinct from 'failed'
-   * because nothing went wrong.
-   */
-  | 'needs_decision';
 
 /** Why a job is parked — distinguishes "waiting for you" from "needs an answer". */
 export type ParkReason = 'gate' | 'question';

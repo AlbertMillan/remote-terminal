@@ -10,7 +10,6 @@ import {
   type ClientMessage,
   type ClientMessageType,
   type NotificationPayload,
-  type JobsSummaryPayload,
   type AppStatePayload,
 } from './protocol.js';
 import {
@@ -60,6 +59,7 @@ import {
   handleNotificationPreferencesSet,
   handleNotificationDismiss,
 } from './handlers/notifications.js';
+import type { JobsSummary } from '../../shared/protocol.js';
 
 export { getActiveConnections, closeAllConnections };
 
@@ -104,7 +104,7 @@ function broadcastJobsSummary(target?: ClientConnection): void {
   // browser open would otherwise pay for a summary on every write.
   if (targets.length === 0) return;
 
-  let payload: JobsSummaryPayload;
+  let payload: JobsSummary;
   try {
     payload = buildJobsSummary();
   } catch (error) {

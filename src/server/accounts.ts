@@ -6,6 +6,7 @@ import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNTS } from './account-defaults.js';
 import { isDescendantOf, loadRegistry, type RegistryProject } from './projects/registry.js';
 import { pathKey } from './utils/paths.js';
 import { tryGetTranscriptPath } from './sessions/transcript.js';
+import type { AccountRefusal } from '../shared/protocol.js';
 
 /**
  * Claude logins (docs/accounts.md). An account is one Claude Code config folder
@@ -411,19 +412,12 @@ export function remoteSettingsFiles(account: string, home?: string): string[] {
   }
 }
 
-export type RefusalReason = 'no-expected-identity' | 'unreadable' | 'no-login' | 'mismatch' | 'org-settings';
+export type RefusalReason = AccountRefusal['reason'];
 
-export interface PreflightRefusal {
-  ok: false;
-  account: string;
-  configDir: string;
-  reason: RefusalReason;
+/** The wire shape the client's Log in / Clean up dialog reads (shared/protocol.ts), with the server's fuller identity. */
+export interface PreflightRefusal extends AccountRefusal {
   /** Who is logged in there, or null for nobody. */
   found: Identity | null;
-  expected: { accountUuid?: string; organizationUuid?: string };
-  /** For `org-settings`: the files an org login left behind (Clean up deletes them). */
-  remoteSettings?: string[];
-  message: string;
 }
 
 export type PreflightResult = { ok: true; account: string; configDir: string; found: Identity } | PreflightRefusal;

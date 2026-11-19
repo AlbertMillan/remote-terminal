@@ -1,5 +1,7 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
-import type { JobStatus, StageName, StageStatus } from './job-board.js';
+import type { JobStatus, JobsSummary, JobSummary } from '../shared/protocol.js';
+
+export type { JobsSummary, JobSummary, JobSummaryStage } from '../shared/protocol.js';
 import { parseDecision, stripMarks } from './decision-format.js';
 import { formatCost, shortAge } from './format.js';
 
@@ -13,37 +15,6 @@ import { formatCost, shortAge } from './format.js';
  *
  * Mirrors JobSummary in src/server/jobs/summary.ts.
  */
-
-export interface JobSummaryStage {
-  name: StageName;
-  status: StageStatus;
-}
-
-export interface JobSummary {
-  id: string;
-  projectCwd: string;
-  projectName: string;
-  featureId: string | null;
-  title: string;
-  status: JobStatus;
-  stage: StageName | null;
-  gate: string | null;
-  parkReason: string | null;
-  detail: string | null;
-  stages: JobSummaryStage[];
-  costUsd: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * Mirrors JobsSummary in src/server/jobs/summary.ts. Carries no counts: the
- * pill counts the cards it is showing, and a finished job leaves the panel a
- * minute before it leaves the feed.
- */
-export interface JobsSummary {
-  jobs: JobSummary[];
-}
 
 export type OverlayPlacement = 'header' | 'below';
 
