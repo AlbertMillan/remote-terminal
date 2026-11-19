@@ -6,8 +6,30 @@ import { isAbsolute, relative, resolve } from 'path';
  * `resolveInWorktree()` in jobs/docs.ts), or a link inside can point outside.
  */
 export function isInside(root: string, p: string): boolean {
+  return relativeInside(root, p) !== null;
+}
+
+/**
+ * `p` relative to `root` (native separators) when `p` is `root` (`''`) or below
+ * it, otherwise null. The one lexical containment check: callers that must
+ * exclude the root itself test for `''`. Same symlink caveat as `isInside`.
+ */
+export function relativeInside(root: string, p: string): string | null {
   const rel = relative(resolve(root), resolve(p));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  // Another drive on Windows comes back absolute.
+  if (isAbsolute(rel)) return null;
+  // Only a leading `..` SEGMENT escapes; `..foo` is an ordinary name inside.
+  return rel.split(/[\\/]/)[0] === '..' ? null : rel;
+}
+
+/** Forward slashes: the form git, PROJECT.md links and the client use for repo-relative paths. */
+export function toPosix(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** `toPosix` and lowercased: the key for matching repo-relative paths across those sources. */
+export function posixKey(p: string): string {
+  return toPosix(p).toLowerCase();
 }
 
 /**

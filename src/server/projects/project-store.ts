@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { createLogger } from '../utils/logger.js';
+import { relativeInside } from '../utils/paths.js';
 import { docPathFor, type RegistryProject } from './registry.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import {
@@ -187,9 +188,7 @@ export function reviewsDir(project: RegistryProject): string {
 export function resolveSpecPath(project: RegistryProject, spec: string): string | null {
   if (!spec || isAbsolute(spec)) return null;
   const abs = resolve(project.cwd, spec);
-  const rel = relative(project.cwd, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  return abs;
+  return relativeInside(project.cwd, abs) === null ? null : abs;
 }
 
 /** Read a feature's spec file, or null when it is missing/unsafe/unreadable. */

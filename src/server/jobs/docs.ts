@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
-import { isAbsolute, relative, resolve, sep } from 'path';
+import { isAbsolute, resolve } from 'path';
 import { createLogger } from '../utils/logger.js';
+import { relativeInside } from '../utils/paths.js';
 import { diffNumstat, listMarkdown, type ChangedFile } from './worktree.js';
 
 const logger = createLogger('job-docs');
@@ -58,9 +59,9 @@ export function resolveInWorktree(worktreePath: string, rel: string): string | n
   }
 }
 
+/** Strictly below `root`: a document is a file, never the worktree itself. */
 function contains(root: string, target: string): boolean {
-  const rel = relative(root, target);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) && !rel.startsWith(`..${sep}`);
+  return !!relativeInside(root, target);
 }
 
 /** Read one document, capped. Null when it is missing or unreadable. */

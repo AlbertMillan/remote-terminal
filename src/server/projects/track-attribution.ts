@@ -1,12 +1,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { open } from 'fs/promises';
-import { basename, isAbsolute, join, relative, resolve } from 'path';
+import { basename, join, resolve } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { posixKey, relativeInside, toPosix } from '../utils/paths.js';
 import { git, gitStatusEntries, type GitStatusEntry } from '../utils/git.js';
 import { parsePhasesBlock, type PhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
 import { readProjectPlan } from './project-plan.js';
+import { docRelOf } from './track-plan.js';
 import { allProjectsDirs } from '../accounts.js';
 import { featuresOf, type ProjectDoc } from './project-doc-format.js';
 
@@ -253,13 +255,13 @@ async function transcriptsIn(dir: string): Promise<TranscriptSummary[]> {
 
 // --- Guessing ----------------------------------------------------------
 
+/** Repo-relative, forward slashes; null for the checkout itself or anything outside it. */
 function toRel(cwd: string, abs: string): string | null {
-  const rel = relative(resolve(cwd), resolve(abs));
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
-  return rel.replace(/\\/g, '/');
+  const rel = relativeInside(cwd, abs);
+  return rel ? toPosix(rel) : null;
 }
 
-const key = (p: string): string => p.replace(/\\/g, '/').toLowerCase();
+const key = posixKey;
 
 /**
  * Everything a guess reads that doesn't depend on the track: the transcripts,
@@ -287,7 +289,7 @@ export async function attributionContext(project: RegistryProject): Promise<Attr
   }
   return {
     project,
-    docRel: (project.doc || 'PROJECT.md').replace(/\\/g, '/'),
+    docRel: docRelOf(project),
     // Main's plan plus each in-progress track's section from its worktree:
     // a branched track's feature ids are no longer on main.
     doc: readProjectPlan(project).doc,

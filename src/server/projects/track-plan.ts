@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { posixKey, toPosix } from '../utils/paths.js';
 import { COMMIT_IDENTITY, git, gitStatusEntries } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import type { RegistryProject } from './registry.js';
@@ -67,7 +68,7 @@ export function specFolderOf(docRel: string): string {
  * branch and make every Land conflict with main's.
  */
 export function isSessionLogPath(rel: string): boolean {
-  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  const norm = (p: string) => posixKey(p).replace(/^\.\//, '');
   return norm(rel) === norm(getConfig().projectLog.fileName);
 }
 
@@ -194,7 +195,7 @@ export async function commitOnHead(
 
 /** The project's plan doc, repo-relative with forward slashes. */
 export function docRelOf(project: RegistryProject): string {
-  return (project.doc || 'PROJECT.md').replace(/\\/g, '/');
+  return toPosix(project.doc || 'PROJECT.md');
 }
 
 async function headDocText(cwd: string, docRel: string): Promise<string | null> {

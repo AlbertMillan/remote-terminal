@@ -5,7 +5,7 @@ import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { currentBranch, git } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
-import { pathKey } from '../utils/paths.js';
+import { pathKey, posixKey } from '../utils/paths.js';
 import { createWorktree, ensureGitRepo, removeWorktree, worktreeRoot } from '../jobs/worktree.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive } from '../jobs/types.js';
@@ -361,7 +361,7 @@ export async function branchNow(
   const guess = await guessTrackWork(project, trackName);
   const allowed = new Map(guess.files.map((f) => [f.path.toLowerCase(), f]));
   const chosen = files
-    .map((p) => allowed.get(p.replace(/\\/g, '/').toLowerCase()))
+    .map((p) => allowed.get(posixKey(p)))
     .filter((f): f is GuessedFile => f !== undefined);
   if (chosen.length === 0) {
     throw new TrackBranchError('None of those files are uncommitted work of this track', 400);
