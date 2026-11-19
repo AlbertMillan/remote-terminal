@@ -1,4 +1,5 @@
 import { jsonPost } from './job-board-types.js';
+import { failureMessage, requestJson } from './api.js';
 
 /**
  * The Restart / Build & restart controls in the Settings modal. The server side
@@ -136,24 +137,22 @@ export class ServerRestartControl {
     const build = this.pendingBuild;
     this.setStatus(build ? 'Building… this can take a minute.' : 'Restarting…', false);
 
-    try {
-      const res = await fetch('/api/server/restart', jsonPost({ build }));
-      const body = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; bootId?: string };
-      if (res.status !== 202) {
-        const message = [body.error || `Restart failed (${res.status})`, body.detail].filter(Boolean).join('\n');
-        this.fail(message);
-        return;
-      }
-      const oldBootId = body.bootId || this.bootId || '';
-      this.setStatus(build ? 'Build passed. Restarting…' : 'Restarting…', false);
-      if (await waitForNewBoot(oldBootId)) {
-        this.setStatus('Server is back — reloading…', false);
-        window.location.reload();
-      } else {
-        this.fail('The server did not come back within 60s — check ~/.claude-remote/logs/server.log.');
-      }
-    } catch (error) {
-      this.fail(`Restart request failed: ${error instanceof Error ? error.message : String(error)}`);
+    const result = await requestJson<{ detail?: string; bootId?: string }>('/api/server/restart', jsonPost({ build }));
+    if (result.status === 0) {
+      this.fail(`Restart request failed: ${result.data.error ?? 'no answer'}`);
+      return;
+    }
+    if (result.status !== 202) {
+      this.fail([failureMessage(result, 'Restart failed'), result.data.detail].filter(Boolean).join('\n'));
+      return;
+    }
+    const oldBootId = result.data.bootId || this.bootId || '';
+    this.setStatus(build ? 'Build passed. Restarting…' : 'Restarting…', false);
+    if (await waitForNewBoot(oldBootId)) {
+      this.setStatus('Server is back — reloading…', false);
+      window.location.reload();
+    } else {
+      this.fail('The server did not come back within 60s — check ~/.claude-remote/logs/server.log.');
     }
   }
 

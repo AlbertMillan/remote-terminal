@@ -9,6 +9,8 @@ export interface ApiResult<T> {
   ok: boolean;
   /** HTTP status; 0 when the request never got an answer. */
   status: number;
+  /** Status 0 because the request's `signal` timed out (`AbortSignal.timeout`), not a dropped connection. */
+  timedOut?: boolean;
   data: T & { error?: string };
 }
 
@@ -22,7 +24,8 @@ export async function requestJson<T extends object = object>(
     return { ok: res.ok, status: res.status, data: data ?? ({} as T) };
   } catch (error) {
     const message = error instanceof Error ? error.message : undefined;
-    return { ok: false, status: 0, data: { error: message } as T & { error?: string } };
+    const timedOut = (error as { name?: unknown } | null)?.name === 'TimeoutError';
+    return { ok: false, status: 0, ...(timedOut ? { timedOut } : {}), data: { error: message } as T & { error?: string } };
   }
 }
 

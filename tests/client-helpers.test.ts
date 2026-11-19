@@ -71,7 +71,16 @@ describe('requestJson', () => {
     }));
     const result = await requestJson('/x');
     expect(result).toMatchObject({ ok: false, status: 0 });
+    expect(result.timedOut).toBeUndefined();
     expect(failureMessage(result, 'Could not save')).toBe('Failed to fetch');
+  });
+
+  it('tells a timed-out signal from a dropped connection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new DOMException('signal timed out', 'TimeoutError');
+    }));
+    const result = await requestJson('/x');
+    expect(result).toMatchObject({ ok: false, status: 0, timedOut: true });
   });
 });
 

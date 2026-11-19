@@ -1,3 +1,5 @@
+import { requestJson } from './api.js';
+
 /**
  * The server's settings in the Settings modal: the limits Maximum sessions and Started
  * sessions per session, and the Cross-account messaging switch. Unlike the other settings they live in the server's config, not this browser:
@@ -155,29 +157,28 @@ export class SessionLimitSetting {
     }
     if (Object.keys(changes).length === 0) return true;
     this.setStatus('');
-    try {
-      const response = await fetch('/api/server/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(changes),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        this.setStatus(body?.error || `Could not save the session limits (HTTP ${response.status}).`);
-        return false;
-      }
-      const body = (await response.json().catch(() => null)) as ServerSettingsView | null;
-      this.saved = body ?? { ...saved, ...(changes as Partial<ServerSettingsView>) };
-      if (body) this.setCounted(body.counted);
-      return true;
-    } catch (error) {
+    const result = await requestJson<Partial<ServerSettingsView>>('/api/server/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(changes),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (result.status === 0) {
       this.setStatus(
-        (error as { name?: unknown } | null)?.name === 'TimeoutError'
+        result.timedOut
           ? 'The server did not answer in time; the session limits may not have been saved.'
           : 'Could not reach the server to save the session limits.'
       );
       return false;
     }
+    if (!result.ok) {
+      this.setStatus(result.data.error || `Could not save the session limits (HTTP ${result.status}).`);
+      return false;
+    }
+    // An unreadable body still saved: keep what was sent.
+    const body = 'counted' in result.data ? (result.data as ServerSettingsView) : null;
+    this.saved = body ?? { ...saved, ...(changes as Partial<ServerSettingsView>) };
+    if (body) this.setCounted(body.counted);
+    return true;
   }
 }

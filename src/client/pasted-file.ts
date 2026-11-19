@@ -1,3 +1,5 @@
+import { failureMessage, requestJson } from './api.js';
+
 /**
  * Files pasted or dropped into the terminal. Claude Code runs on the server's PC, which
  * cannot see a file on this device, so each file is uploaded (`POST /api/sessions/:id/files`,
@@ -47,18 +49,18 @@ export async function uploadPastedFile(sessionId: string, file: Blob, name = (fi
   // and a browser often reports that as a bare network error rather than the 413.
   if (file.size > MAX_UPLOAD_BYTES) throw new Error('larger than 20 MB');
   const query = name ? `?name=${encodeURIComponent(name)}` : '';
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files${query}`, {
+  const result = await requestJson<{ path?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/files${query}`, {
     method: 'POST',
     // The server takes any type and reads an image's from its bytes.
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
   });
-  const data = (await res.json().catch(() => ({}))) as { path?: string; error?: string };
-  if (!res.ok || !data.path) {
-    if (res.status === 413) throw new Error('larger than 20 MB');
-    throw new Error(data.error ?? `upload failed (HTTP ${res.status})`);
+  const path = result.data.path;
+  if (!result.ok || !path) {
+    if (result.status === 413) throw new Error('larger than 20 MB');
+    throw new Error(failureMessage(result, 'upload failed'));
   }
-  return data.path;
+  return path;
 }
 
 /**
