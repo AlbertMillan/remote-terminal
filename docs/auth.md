@@ -36,5 +36,12 @@ The server listens on `0.0.0.0:4220` and hands out shells, so every `/api/*` req
   unreachable from anything but the tailnet.
 - **`extractIpFromRequest` never defaults to loopback.** A socket with no address reads as
   `''`, which nothing admits.
+- **Identity admits; it doesn't partition data.** One person reaches the server as `local`
+  on loopback, as their Tailscale login from the phone (or from this machine through its
+  tailnet address), and as `anonymous` with auth off. Categories were once listed by
+  `owner_id`, so turning auth on hid every category made before it, and the phone and the
+  desktop each saw their own set. `getAllCategories()` now lists every row; `owner_id` stays
+  only as a record of who created it. Sessions were never filtered. Notification preferences
+  are still keyed per identity.
 - Restart, Settings and the file routes keep their own identity checks: they predate the
   gate, cost nothing (cached), and each is the most dangerous thing in its module.

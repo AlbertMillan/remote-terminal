@@ -389,24 +389,18 @@ export function getCategory(id: string): CategoryMetadata | null {
   return { ...row, collapsed: row.collapsed === 1 };
 }
 
-export function getAllCategories(ownerId?: string): CategoryMetadata[] {
-  if (ownerId) {
-    const stmt = getStatement('getAllCategoriesByOwner', `
-      SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
-      FROM categories WHERE owner_id = ? OR owner_id IS NULL
-      ORDER BY sort_order ASC
-    `);
-    const rows = stmt.all(ownerId) as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string }[];
-    return rows.map(row => ({ ...row, collapsed: row.collapsed === 1 }));
-  } else {
-    const stmt = getStatement('getAllCategories', `
-      SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
-      FROM categories
-      ORDER BY sort_order ASC
-    `);
-    const rows = stmt.all() as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string }[];
-    return rows.map(row => ({ ...row, collapsed: row.collapsed === 1 }));
-  }
+// Categories are shared by every caller, never filtered by owner_id: the one user reaches
+// the server as `local` on loopback and as their Tailscale login elsewhere (and as
+// `anonymous` with auth off), so an owner filter shows each device a different set.
+// owner_id is kept only as a record of who created the row. → docs/auth.md
+export function getAllCategories(): CategoryMetadata[] {
+  const stmt = getStatement('getAllCategories', `
+    SELECT id, name, sort_order as sortOrder, collapsed, owner_id as ownerId, created_at as createdAt
+    FROM categories
+    ORDER BY sort_order ASC
+  `);
+  const rows = stmt.all() as { id: string; name: string; sortOrder: number; collapsed: number; ownerId: string | null; createdAt: string }[];
+  return rows.map(row => ({ ...row, collapsed: row.collapsed === 1 }));
 }
 
 export function updateSessionCategory(sessionId: string, categoryId: string | null): void {

@@ -21,7 +21,7 @@ import { type ClientConnection, categoryToInfo, broadcastCategoryUpdate } from '
 // Category handlers
 
 export function handleCategoryList(connection: ClientConnection, message: ClientMessage): void {
-  const categories = getAllCategories(connection.identity?.userId).map(categoryToInfo);
+  const categories = getAllCategories().map(categoryToInfo);
   connection.ws.send(createMessage('category.list', { categories }, message.id));
 }
 
@@ -39,7 +39,7 @@ export function handleCategoryCreate(connection: ClientConnection, message: Clie
     return;
   }
 
-  const existingCategories = getAllCategories(connection.identity?.userId);
+  const existingCategories = getAllCategories();
   const maxSortOrder = existingCategories.reduce((max, cat) => Math.max(max, cat.sortOrder), -1);
 
   const category = {
