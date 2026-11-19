@@ -10,22 +10,14 @@ import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
 import { SessionSocket } from './session-socket.js';
-import { BrowserNotifier } from './browser-notifier.js';
 import { CategoryModal, RenameModal } from './name-modals.js';
 import { bindGlobalShortcuts, closeOnBackdrop } from './global-shortcuts.js';
 import { BUILD_CHANGED_EVENT, BuildIndicator } from './server-restart.js';
 import { SettingsModal } from './settings-modal.js';
-import {
-  isLandNotification,
-  isPromptMissingNotification,
-  isAccountChangedNotification,
-  accountChangedTitle,
-  showAccountChanged,
-  landResultTitle,
-  promptMissingTitle,
-  showLandResult,
-  showPromptMissing,
-} from './land-result.js';
+import { CategoryStore } from './category-store.js';
+import { SessionNotifications } from './session-notifications.js';
+import { AccountMoves } from './account-moves.js';
+import { showHeaderToast } from './header-toast.js';
 import { ProjectLogView } from './project-log-view.js';
 import { NewSessionModal, type CreateCwd } from './new-session-modal.js';
 import { AccountRefusalModal, LoginRetries } from './account-refusal-modal.js';
@@ -35,26 +27,13 @@ import { SessionListView, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
 import type {
   SessionInfo,
-  CategoryInfo,
   SessionMovedPayload,
   SessionClaudeNamesPayload,
   SessionAccountWarningsPayload,
-  SessionAccountChangedPayload,
   SessionLoginEndedPayload,
-  AccountChangedNotificationPayload,
   AccountRefusal,
   SessionReorderedPayload,
-  CategoryCreatedPayload,
-  CategoryRenamedPayload,
-  CategoryDeletedPayload,
-  CategoryReorderedPayload,
-  CategoryToggledPayload,
-  CategoryListPayload,
   ErrorPayload,
-  NotificationPreferencesPayload,
-  LandNotificationPayload,
-  NotificationPayload,
-  PromptMissingNotificationPayload,
   ServerMessage,
   ConnectionStatus,
 } from './session-types.js';
@@ -70,40 +49,53 @@ class SessionManager {
     onMessage: (message) => this.handleMessage(message),
   });
   private sessions: Map<string, SessionInfo> = new Map();
-  private categories: Map<string, CategoryInfo> = new Map();
+  /** The sidebar's categories and the category.* messages (category-store.ts). */
+  private categoryStore = new CategoryStore({
+    send: (type, payload) => this.send(type, payload),
+    render: () => this.renderSessionList(),
+  });
   private currentSessionId: string | null = null;
   private previousSessionId: string | null = null; // For reconnection (issue #7)
   private attachingSessionId: string | null = null; // Prevents duplicate attach requests
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
 
-  // Notification state
-  private sessionNotifications: Map<string, { type: 'needs-input' | 'completed'; timestamp: string }> = new Map();
-  private notificationPreferences: NotificationPreferencesPayload = {
-    browserEnabled: true,
-    visualEnabled: true,
-    notifyOnInput: true,
-    notifyOnCompleted: true,
-  };
-  private notifier = new BrowserNotifier();
+  /** Badges, notification preferences and desktop notifications (session-notifications.ts). */
+  private notifications = new SessionNotifications({
+    send: (type, payload) => this.send(type, payload),
+    session: (sessionId) => this.sessions.get(sessionId),
+    currentSessionId: () => this.currentSessionId,
+    attach: (sessionId) => this.attachToSession(sessionId),
+    renderBadges: () => {
+      this.renderSessionList();
+      this.syncPip();
+    },
+    preferencesChanged: () => this.settingsModal.updateUI(),
+    landed: (ok) => {
+      // The track is gone from the board, or its worktree is back to take another look.
+      void this.workspace.refresh();
+      // A land of this server's own project leaves it behind its build.
+      if (ok) window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
+    },
+  });
   private renameModal = new RenameModal((sessionId, name) => this.renameSession(sessionId, name));
   private categoryModal = new CategoryModal({
-    create: (name) => this.createCategory(name),
-    rename: (categoryId, name) => this.renameCategory(categoryId, name),
+    create: (name) => this.categoryStore.create(name),
+    rename: (categoryId, name) => this.categoryStore.rename(categoryId, name),
   });
 
   /** The sidebar session list: categories, drag/drop reordering, and session rows. */
   private sessionListView = new SessionListView({
     sessions: this.sessions,
-    categories: this.categories,
-    sessionNotifications: this.sessionNotifications,
+    categories: this.categoryStore.categories,
+    sessionNotifications: this.notifications.badges,
     getCurrentSessionId: () => this.currentSessionId,
     attachToSession: (sessionId) => this.attachToSession(sessionId),
     reviveSession: (sessionId) => this.reviveSession(sessionId),
     stopSession: (sessionId) => this.stopSession(sessionId),
     deleteSession: (sessionId) => this.deleteSession(sessionId),
     moveSession: (sessionId, categoryId) => this.moveSession(sessionId, categoryId),
-    toggleCategory: (categoryId, collapsed) => this.toggleCategory(categoryId, collapsed),
-    deleteCategory: (categoryId) => this.deleteCategory(categoryId),
+    toggleCategory: (categoryId, collapsed) => this.categoryStore.toggle(categoryId, collapsed),
+    deleteCategory: (categoryId) => this.categoryStore.remove(categoryId),
     showCategoryModal: (mode, category) => this.categoryModal.show(mode, category),
     reorderSessions: (updates) => this.send('session.reorder', { sessions: updates }),
   });
@@ -133,8 +125,17 @@ class SessionManager {
   private stopRequests = new StopRequests();
   /** The header's account chip (project/move-conversation-account.md); null until bound. */
   private accountMenu: AccountMenu | null = null;
-  /** session.changeAccount requests in flight, by message id. */
-  private accountMoves = new Map<string, { sessionId: string; account: string }>();
+  /** Moving a session's conversation to another account (account-moves.ts). */
+  private accountMoves = new AccountMoves({
+    send: (type, payload) => this.send(type, payload),
+    launchRetries: this.launchRetries,
+    session: (sessionId) => this.sessions.get(sessionId),
+    currentSessionId: () => this.currentSessionId,
+    revive: (sessionId) => this.reviveSession(sessionId),
+    render: () => this.renderSessionList(),
+    menuFinished: () => this.accountMenu?.finished(),
+    showRefusal: (refusal, retry) => this.accountRefusal.show(refusal, retry),
+  });
   /** Launches waiting on a Log in session, retried once it exits (`session.loginEnded`). */
   private loginRetries = new LoginRetries();
 
@@ -178,12 +179,9 @@ class SessionManager {
   /** Notifications, display, the session limits and Restart; after jobOverlay and buildIndicator, which it is handed. */
   private settingsModal = new SettingsModal({
     buildBehind: () => this.buildIndicator.behind,
-    notificationPreferences: () => this.notificationPreferences,
-    setNotificationPreferences: (prefs) => this.setNotificationPreferences(prefs),
-    notificationPermission: async () => {
-      if (this.notifier.permission === 'default') await this.notifier.requestPermission();
-      return this.notifier.permission;
-    },
+    notificationPreferences: () => this.notifications.preferences,
+    setNotificationPreferences: (prefs) => this.notifications.setPreferences(prefs),
+    notificationPermission: () => this.notifications.permission(),
     jobOverlay: this.jobOverlay,
     syncJobOverlay: () => this.syncJobOverlay(),
     renderSessionList: () => this.renderSessionList(),
@@ -214,12 +212,6 @@ class SessionManager {
     this.planUsage.attach();
     this.buildIndicator.start();
     this.socket.connect();
-  }
-
-  /** A desktop notification for a session; a click opens it. */
-  private showBrowserNotification(title: string, body: string, sessionId: string): void {
-    if (!this.notificationPreferences.browserEnabled) return;
-    this.notifier.show(title, body, `session-${sessionId}`, () => this.attachToSession(sessionId));
   }
 
   private setupEventListeners(): void {
@@ -324,7 +316,7 @@ class SessionManager {
       this.accountMenu = new AccountMenu(
         {
           current: () => (this.currentSessionId ? this.sessions.get(this.currentSessionId) : undefined),
-          move: (sessionId, account) => this.changeAccount(sessionId, account),
+          move: (sessionId, account) => this.accountMoves.change(sessionId, account),
         },
         accountChip,
         accountMenu
@@ -367,7 +359,7 @@ class SessionManager {
 
   private openPip(): void {
     if (!this.currentSessionId) return;
-    this.pipManager.open(this.currentSessionId, this.sessions, this.sessionNotifications);
+    this.pipManager.open(this.currentSessionId, this.sessions, this.notifications.badges);
   }
 
   /** Alt+K: show the Sessions tab (and the sidebar, if folded or off-screen) and focus its filter. */
@@ -395,8 +387,8 @@ class SessionManager {
     void this.sessionListView.refreshAccountOrder();
     void this.accountMenu?.load();
     this.listSessions();
-    this.listCategories();
-    this.getNotificationPreferences();
+    this.categoryStore.list();
+    this.notifications.requestPreferences();
 
     if (this.previousSessionId) {
       const sessionToReattach = this.previousSessionId;
@@ -423,12 +415,8 @@ class SessionManager {
     // No answer is coming for a stop sent before the drop; keeping it would make the
     // next click on that session's Stop wait forever.
     this.stopRequests.clear();
-    // Nor for a move: the menu would show "Moving…" and ignore the chip until a reload. A
-    // move the server finished is in the session list it re-sends; a session it stopped
-    // for the move is Resumed from the sidebar.
-    for (const id of this.accountMoves.keys()) this.launchRetries.delete(id);
+    // Nor for an account move (account-moves.ts).
     this.accountMoves.clear();
-    this.accountMenu?.finished();
     // Job states from before the drop go stale silently -- no further push is
     // coming -- so show nothing until the server re-seeds us after auth.
     this.jobOverlay.clear();
@@ -443,7 +431,14 @@ class SessionManager {
   }
 
   private handleMessage(message: ServerMessage): void {
-    // Handle message types
+    // Each domain applies its own messages; what is left is the session list and terminal.
+    if (
+      this.categoryStore.handleMessage(message) ||
+      this.notifications.handleMessage(message) ||
+      this.accountMoves.handleMessage(message)
+    ) {
+      return;
+    }
     switch (message.type) {
       case 'auth.success':
         this.handleAuthSuccess(message.payload);
@@ -497,44 +492,14 @@ class SessionManager {
       case 'session.stopped':
         this.stopRequests.answered(message.id);
         break;
-      case 'session.accountChanged':
-        this.handleAccountChanged(message.payload, message.id);
-        break;
       case 'session.kept':
         this.handleSessionKept(message.payload);
-        break;
-      case 'category.list':
-        this.handleCategoryList(message.payload);
-        break;
-      case 'category.created':
-        this.handleCategoryCreated(message.payload);
-        break;
-      case 'category.renamed':
-        this.handleCategoryRenamed(message.payload);
-        break;
-      case 'category.deleted':
-        this.handleCategoryDeleted(message.payload);
-        break;
-      case 'category.reordered':
-        this.handleCategoryReordered(message.payload);
-        break;
-      case 'category.toggled':
-        this.handleCategoryToggled(message.payload);
         break;
       case 'terminal.data':
         this.handleTerminalData(message.payload);
         break;
       case 'terminal.exit':
         this.handleTerminalExit(message.payload);
-        break;
-      case 'notification.preferences':
-        this.handleNotificationPreferences(message.payload);
-        break;
-      case 'notification.preferences.updated':
-        this.handleNotificationPreferencesUpdated(message.payload);
-        break;
-      case 'notification':
-        this.handleNotification(message.payload);
         break;
       case 'jobs.summary':
         this.jobOverlay.update(message.payload);
@@ -572,15 +537,8 @@ class SessionManager {
 
   private handleSessionError(payload: ErrorPayload, messageId?: string): void {
     console.error('Session error:', payload.message);
+    if (this.accountMoves.failed(messageId, payload)) return;
     const retry = messageId ? this.launchRetries.get(messageId) : undefined;
-    const move = messageId ? this.accountMoves.get(messageId) : undefined;
-    if (messageId && move) {
-      this.accountMoves.delete(messageId);
-      this.launchRetries.delete(messageId);
-      this.accountMenu?.finished();
-      this.handleAccountMoveError(payload, move, retry);
-      return;
-    }
     // Another browser is viewing a session this stop would take down: ask, then insist.
     const stopping = this.stopRequests.refused(messageId, payload.code);
     if (stopping) {
@@ -696,9 +654,7 @@ class SessionManager {
     // The plan chip tags this session's account, and its project's jobs account (docs/plan-usage.md).
     this.planUsage.setAccount(payload.session.account, payload.session.cwd);
 
-    // Clear notification for this session
-    this.sessionNotifications.delete(payload.session.id);
-    this.send('notification.dismiss', { sessionId: payload.session.id });
+    this.notifications.dismiss(payload.session.id);
 
     this.renderSessionList();
     this.showTerminal(payload.session);
@@ -823,52 +779,6 @@ class SessionManager {
     this.renderSessionList();
   }
 
-  private handleCategoryList(payload: CategoryListPayload): void {
-    this.categories.clear();
-    for (const category of payload.categories) {
-      this.categories.set(category.id, category);
-    }
-    this.renderSessionList();
-  }
-
-  private handleCategoryCreated(payload: CategoryCreatedPayload): void {
-    this.categories.set(payload.category.id, payload.category);
-    this.renderSessionList();
-  }
-
-  private handleCategoryRenamed(payload: CategoryRenamedPayload): void {
-    const category = this.categories.get(payload.categoryId);
-    if (category) {
-      category.name = payload.name;
-      this.categories.set(payload.categoryId, category);
-    }
-    this.renderSessionList();
-  }
-
-  private handleCategoryDeleted(payload: CategoryDeletedPayload): void {
-    this.categories.delete(payload.categoryId);
-    this.renderSessionList();
-  }
-
-  private handleCategoryReordered(payload: CategoryReorderedPayload): void {
-    for (const cat of payload.categories) {
-      const category = this.categories.get(cat.id);
-      if (category) {
-        category.sortOrder = cat.sortOrder;
-      }
-    }
-    this.renderSessionList();
-  }
-
-  private handleCategoryToggled(payload: CategoryToggledPayload): void {
-    const category = this.categories.get(payload.categoryId);
-    if (category) {
-      category.collapsed = payload.collapsed;
-      this.categories.set(payload.categoryId, category);
-    }
-    this.renderSessionList();
-  }
-
   private handleTerminalData(payload: { sessionId: string; data: string }): void {
     if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
       this.terminalMgr.write(payload.data);
@@ -879,83 +789,6 @@ class SessionManager {
     if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
       this.terminalMgr.writeln(`\r\n[Process exited with code ${payload.exitCode}]`);
     }
-  }
-
-  private handleNotificationPreferences(payload: NotificationPreferencesPayload): void {
-    this.notificationPreferences = payload;
-    this.settingsModal.updateUI();
-  }
-
-  private handleNotificationPreferencesUpdated(payload: NotificationPreferencesPayload): void {
-    this.notificationPreferences = payload;
-    this.settingsModal.updateUI();
-  }
-
-  private handleNotification(
-    payload: NotificationPayload | LandNotificationPayload | PromptMissingNotificationPayload | AccountChangedNotificationPayload
-  ): void {
-    if (isLandNotification(payload)) {
-      this.handleLandResult(payload);
-      return;
-    }
-    if (isAccountChangedNotification(payload)) {
-      // The row's account chip shows the warning too (session.accountWarnings).
-      showAccountChanged(payload);
-      this.showBrowserNotification(accountChangedTitle(payload), payload.detail, payload.sessionId);
-      return;
-    }
-    if (isPromptMissingNotification(payload)) {
-      // A toast, never a badge: an idle session badged would read as "needs input".
-      showPromptMissing(payload);
-      this.showBrowserNotification(promptMissingTitle(payload), payload.detail, payload.sessionId);
-      return;
-    }
-    const session = this.sessions.get(payload.sessionId);
-    if (!session) return;
-
-    // Don't notify for current session if we're focused
-    if (payload.sessionId === this.currentSessionId && document.hasFocus()) {
-      return;
-    }
-
-    // Store notification for visual badge
-    if (this.notificationPreferences.visualEnabled) {
-      this.sessionNotifications.set(payload.sessionId, {
-        type: payload.type,
-        timestamp: payload.timestamp,
-      });
-      this.renderSessionList();
-      this.syncPip();
-    }
-
-    // Show browser notification
-    if (this.notificationPreferences.browserEnabled) {
-      const title = payload.type === 'needs-input'
-        ? `Input Required: ${session.name}`
-        : `Task Completed: ${session.name}`;
-      const body = payload.type === 'needs-input'
-        ? 'Claude Code is waiting for your input'
-        : 'Claude Code has finished the task';
-
-      this.showBrowserNotification(title, body, payload.sessionId);
-    }
-  }
-
-  /**
-   * A Land a session asked for has run. The session is closed by now, so this
-   * is a toast over every view (and a browser notification when the tab is in
-   * the background), plus a board refresh: the track is gone from it, or its
-   * worktree is back to take another look.
-   */
-  private handleLandResult(payload: LandNotificationPayload): void {
-    showLandResult(payload);
-    if (this.notificationPreferences.browserEnabled) {
-      // Stays until clicked: the session that asked is gone, so this is the only answer.
-      this.notifier.show(landResultTitle(payload), payload.detail, `land-${payload.projectCwd}-${payload.track}`, undefined, false);
-    }
-    void this.workspace.refresh();
-    // A land of this server's own project leaves it behind its build.
-    if (payload.ok) window.dispatchEvent(new window.Event(BUILD_CHANGED_EVENT));
   }
 
   /**
@@ -1020,63 +853,6 @@ class SessionManager {
     this.sessionListView.render();
     // A row's account, shell or children may have changed: the header chip follows.
     this.accountMenu?.update();
-  }
-
-  /**
-   * Move a session's conversation to another account. The server stops a running one first;
-   * its answer (handleAccountChanged) says whether to revive it. A preflight refusal is
-   * retried after Log in through launchRetries, like a launch.
-   */
-  changeAccount(sessionId: string, account: string, force = false): void {
-    const id = this.send('session.changeAccount', { sessionId, account, ...(force ? { force: true } : {}) });
-    this.accountMoves.set(id, { sessionId, account });
-    this.launchRetries.set(id, () => this.changeAccount(sessionId, account));
-  }
-
-  private handleAccountChanged(payload: SessionAccountChangedPayload, messageId?: string): void {
-    if (messageId) {
-      this.accountMoves.delete(messageId);
-      this.launchRetries.delete(messageId);
-    }
-    const session = this.sessions.get(payload.sessionId);
-    if (session) session.account = payload.account;
-    this.accountMenu?.finished();
-    this.renderSessionList();
-    const name = session?.name ?? 'The session';
-    // Revive attaches this browser to it: only while it is still the session on screen, or a
-    // move finishing would pull the user back from wherever they went meanwhile.
-    const resumeHere = payload.resume && this.currentSessionId === payload.sessionId;
-    this.showInfoToast(
-      resumeHere
-        ? `${name} now runs under ${payload.account}: resuming the conversation there.`
-        : `${name} now runs under ${payload.account}. Resume opens it there.`
-    );
-    if (resumeHere) this.reviveSession(payload.sessionId);
-  }
-
-  private handleAccountMoveError(
-    payload: ErrorPayload,
-    move: { sessionId: string; account: string },
-    retry: (() => void) | undefined
-  ): void {
-    // Another browser is viewing it: the move would close their terminal too.
-    if (payload.code === 'viewers') {
-      if (confirm(`${payload.message}. Move it to ${move.account} anyway?`)) this.changeAccount(move.sessionId, move.account, true);
-      return;
-    }
-    if (payload.refusal && retry) {
-      this.accountRefusal.show(payload.refusal, retry);
-      return;
-    }
-    // It was stopped for the move and kept its account: bring it back where it was, if it is
-    // still the session on screen (reviving attaches to it).
-    if (payload.code === 'stopped') {
-      const here = this.currentSessionId === move.sessionId;
-      this.showErrorToast(`${payload.message}. Nothing moved; ${here ? 'resuming it where it was' : 'Resume brings it back'}.`);
-      if (here) this.reviveSession(move.sessionId);
-      return;
-    }
-    this.showErrorToast(payload.message);
   }
 
   private showTerminal(session: SessionInfo): void {
@@ -1169,7 +945,7 @@ class SessionManager {
         });
         return;
       }
-      this.showErrorToast(error instanceof Error ? error.message : 'Failed to fork session');
+      showHeaderToast(error instanceof Error ? error.message : 'Failed to fork session');
     }
   }
 
@@ -1191,29 +967,7 @@ class SessionManager {
       }
     }
     if (failures.length) problems.push(uploadFailureMessage(failures));
-    if (problems.length) this.showErrorToast(problems.join(' '));
-  }
-
-  /** A short error under the header (a failed fork, a file that could not be attached). */
-  private showErrorToast(message: string): void {
-    this.showHeaderToast(message, false);
-  }
-
-  /** The same line for news that is not an error (a session moved to another account). */
-  private showInfoToast(message: string): void {
-    this.showHeaderToast(message, true);
-  }
-
-  private headerToastTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private showHeaderToast(message: string, info: boolean): void {
-    const toast = document.getElementById('error-toast');
-    if (!toast) return;
-    toast.textContent = message;
-    toast.classList.toggle('info', info);
-    toast.classList.remove('hidden');
-    if (this.headerToastTimer) clearTimeout(this.headerToastTimer);
-    this.headerToastTimer = setTimeout(() => toast.classList.add('hidden'), 6000);
+    if (problems.length) showHeaderToast(problems.join(' '));
   }
 
   private keepCurrentForkSession(): void {
@@ -1332,28 +1086,7 @@ class SessionManager {
     }
   }
 
-  // Category methods
-
-  listCategories(): void {
-    this.send('category.list');
-  }
-
-  createCategory(name: string): void {
-    this.send('category.create', { name });
-  }
-
-  renameCategory(categoryId: string, name: string): void {
-    this.send('category.rename', { categoryId, name });
-  }
-
-  deleteCategory(categoryId: string): void {
-    this.send('category.delete', { categoryId });
-  }
-
-  toggleCategory(categoryId: string, collapsed: boolean): void {
-    this.send('category.toggle', { categoryId, collapsed });
-  }
-
+  /** Into a category, or out of every one (null). */
   moveSession(sessionId: string, categoryId: string | null): void {
     this.send('session.move', { sessionId, categoryId });
   }
@@ -1362,7 +1095,7 @@ class SessionManager {
 
   private syncPip(): void {
     if (this.pipManager.isOpen()) {
-      this.pipManager.updateSessions(this.sessions, this.sessionNotifications);
+      this.pipManager.updateSessions(this.sessions, this.notifications.badges);
     }
   }
 
@@ -1388,16 +1121,6 @@ class SessionManager {
       // server, then removes the record — surviving a page reload.
       this.deleteSession(this.currentSessionId);
     }
-  }
-
-  // Notification preference methods
-
-  getNotificationPreferences(): void {
-    this.send('notification.preferences.get');
-  }
-
-  setNotificationPreferences(prefs: Partial<NotificationPreferencesPayload>): void {
-    this.send('notification.preferences.set', prefs);
   }
 
   // Keyboard shortcuts modal — delegates to ShortcutsModal (shortcuts-modal.ts).

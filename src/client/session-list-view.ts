@@ -19,10 +19,11 @@ export { groupStartedSessions, matchesFilter, needsYou, peersAfterBuilders, rowS
 export type { RowState, TrackGroup } from './session-list-model.js';
 
 /**
- * The narrow surface SessionListView needs from SessionManager. `sessions`,
- * `categories` and `sessionNotifications` are SessionManager's Maps, shared
- * by reference (it owns their identity and content; this view only reads
- * them) so a mutation there is visible on the next render without a copy.
+ * The narrow surface SessionListView needs from SessionManager. `sessions`
+ * (SessionManager's), `categories` (CategoryStore's) and `sessionNotifications`
+ * (SessionNotifications' badges) are Maps shared by reference: their owners
+ * hold their identity and content and this view only reads them, so a
+ * mutation there is visible on the next render without a copy.
  */
 export interface SessionListViewHost {
   sessions: Map<string, SessionInfo>;
