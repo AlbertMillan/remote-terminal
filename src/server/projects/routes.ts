@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createLogger } from '../utils/logger.js';
 import { getWorkspaceBoard, findWorkspaceProject, listBoardCwds } from './workspace.js';
 import { getRollup } from './rollup.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { resolveCwdInput } from '../sessions/folder-picker.js';
 import {
   RegistryUnreadableError,

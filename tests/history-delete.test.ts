@@ -29,7 +29,7 @@ vi.mock('../src/server/utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
-vi.mock('../src/server/sessions/project-discovery.js', () => ({
+vi.mock('../src/server/projects/project-discovery.js', () => ({
   findProjectByCwd: (cwd: string) =>
     cwd === projectCwd ? { cwd: projectCwd, name: 'proj', hasLog: true, lastActivity: null, transcriptCount: 1, transcriptPaths: [] } : undefined,
   invalidateProjectCache: () => invalidateProjectCache(),

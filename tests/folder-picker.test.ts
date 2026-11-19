@@ -20,8 +20,8 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 let recent: { cwd: string; lastUsed: number }[] = [];
 let discovered: { cwd: string; lastActivity: string | null }[] = [];
 vi.mock('../src/server/sessions/recent-paths.js', () => ({ getRecentPaths: () => recent }));
-vi.mock('../src/server/sessions/project-discovery.js', async (orig) => ({
-  ...(await orig<typeof import('../src/server/sessions/project-discovery.js')>()),
+vi.mock('../src/server/projects/project-discovery.js', async (orig) => ({
+  ...(await orig<typeof import('../src/server/projects/project-discovery.js')>()),
   discoverProjects: () => discovered,
 }));
 vi.mock('../src/server/projects/registry.js', async (orig) => ({

@@ -6,7 +6,7 @@ import { mutateProjectDoc, readProjectDoc } from '../../projects/project-store.j
 import { docPathFor, type RegistryProject } from '../../projects/registry.js';
 import { findFeature, updateFeature } from '../../projects/project-doc-format.js';
 import { findActiveTrackBranchByName, worktreeProject } from '../../projects/track-branches.js';
-import { invalidateProjectCache } from '../../sessions/project-discovery.js';
+import { invalidateProjectCache } from '../../projects/project-discovery.js';
 
 const logger = createLogger('stage-rebuild');
 

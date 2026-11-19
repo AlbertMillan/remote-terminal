@@ -17,7 +17,7 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 
 const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
-const { pathKey } = await import('../src/server/sessions/project-discovery.js');
+const { pathKey } = await import('../src/server/utils/paths.js');
 const { trackBranchContaining, listAllTrackBranches } = await import('../src/server/projects/track-store.js');
 const { projectForCwd } = await import('../src/server/agent/sessions-api.js');
 

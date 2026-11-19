@@ -28,7 +28,8 @@ import { notificationService, type NotificationType } from './notifications/serv
 import { setClaudeSessionId, getSession as getSessionFromDb, getAllSessions as getAllSessionsFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
 import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
-import { discoverProjects, findProjectByCwd, getProjectBoard, pathKey } from './sessions/project-discovery.js';
+import { discoverProjects, findProjectByCwd, getProjectBoard } from './projects/project-discovery.js';
+import { hookCwdToStore, pathKey } from './utils/paths.js';
 import { deleteHistoryEntry, HistoryDeleteError } from './sessions/history-delete.js';
 import { getRecentPaths } from './sessions/recent-paths.js';
 import { completeFolder, resolveCwdInput } from './sessions/folder-picker.js';
@@ -48,7 +49,6 @@ import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
 import { reconcileJobsOnStartup } from './jobs/runner.js';
 import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
-import { hookCwdToStore } from './utils/paths.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

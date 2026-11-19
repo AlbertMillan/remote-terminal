@@ -10,7 +10,7 @@ import { isInside, pathKey } from '../utils/paths.js';
 import { createLogger } from '../utils/logger.js';
 import { emptyFrontmatter, renderProjectDoc } from '../projects/project-doc-format.js';
 import { loadRegistry } from '../projects/registry.js';
-import { discoverProjects } from './project-discovery.js';
+import { discoverProjects } from '../projects/project-discovery.js';
 import { getRecentPaths } from './recent-paths.js';
 
 const logger = createLogger('folder-picker');

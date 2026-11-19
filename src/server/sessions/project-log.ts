@@ -18,9 +18,8 @@ import { git, isGitRepo } from '../utils/git.js';
 import { worktreeOwner, type WorktreeOwner } from '../projects/worktree-owner.js';
 import { loadRegistry } from '../projects/registry.js';
 import { worktreeRoot } from '../jobs/worktree.js';
-import { isInside } from '../utils/paths.js';
+import { isInside, pathKey } from '../utils/paths.js';
 import { findTranscript } from '../accounts.js';
-import { pathKey } from './project-discovery.js';
 
 const logger = createLogger('project-log');
 

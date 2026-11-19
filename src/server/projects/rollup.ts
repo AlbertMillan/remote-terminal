@@ -1,4 +1,4 @@
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { getWorkspaceBoard, type WorkspaceProject } from './workspace.js';
 import { listJobs } from '../jobs/store.js';
 import type { JobWithStages } from '../jobs/types.js';

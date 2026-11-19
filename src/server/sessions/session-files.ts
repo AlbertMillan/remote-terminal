@@ -5,7 +5,7 @@ import { extractIpFromRequest, verifyTailscaleConnection } from '../auth/tailsca
 import { getSession as getSessionFromDb } from '../db/queries.js';
 import { isInside, pathKey } from '../utils/paths.js';
 import { findTranscript } from '../accounts.js';
-import { readTranscriptCwd } from './project-discovery.js';
+import { readTranscriptCwd } from '../projects/project-discovery.js';
 import { createLogger } from '../utils/logger.js';
 import { isSessionId, uploadDirFor } from './uploads.js';
 

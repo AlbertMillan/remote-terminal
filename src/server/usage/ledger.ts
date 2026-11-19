@@ -4,7 +4,7 @@ import { setImmediate } from 'timers';
 import type Database from 'better-sqlite3';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { worktreeRoot } from '../jobs/worktree.js';
 import { jobEvents } from '../jobs/events.js';
 import { onRunSettled } from '../agent/run-events.js';

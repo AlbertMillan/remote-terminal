@@ -4,7 +4,7 @@ import { rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import { killTree } from '../agent/claude-run.js';
 import { createLogger } from '../utils/logger.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 
 const logger = createLogger('project-deps');
 

@@ -1,5 +1,5 @@
 import { basename } from 'path';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { loadRegistry } from '../projects/registry.js';
 import { listLiveAndRecentJobs } from './store.js';
 import { STAGE_ORDER, type JobStatus, type StageName, type StageStatus } from './types.js';

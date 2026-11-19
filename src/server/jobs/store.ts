@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/schema.js';
-import { pathKey } from '../sessions/project-discovery.js';
-import { isInside } from '../utils/paths.js';
+import { isInside, pathKey } from '../utils/paths.js';
 import { jobEvents } from './events.js';
 import type {
   GateName,

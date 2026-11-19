@@ -39,7 +39,7 @@ const { getWorkspaceBoard } = await import('../src/server/projects/workspace.js'
 const { registerProjectRoutes } = await import('../src/server/projects/routes.js');
 const { runRebuildStage } = await import('../src/server/jobs/stages/rebuild.js');
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
-const { pathKey } = await import('../src/server/sessions/project-discovery.js');
+const { pathKey } = await import('../src/server/utils/paths.js');
 const { withProjectLock } = await import('../src/server/projects/project-lock.js');
 const { sessionManager } = await import('../src/server/sessions/manager.js');
 

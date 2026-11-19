@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 
 const logger = createLogger('project-registry');
 

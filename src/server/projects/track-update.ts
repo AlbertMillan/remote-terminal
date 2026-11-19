@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, runGit } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { loadRegistry, type RegistryProject } from './registry.js';
 import { parseProjectDoc, renderProjectDoc, replaceTrack, type Track } from './project-doc-format.js';
 import type { WorkspaceProject } from './workspace.js';

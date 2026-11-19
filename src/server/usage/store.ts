@@ -1,6 +1,6 @@
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { priceTokens } from './prices.js';
 import { addUsage, ZERO_USAGE, type Usage } from './types.js';
 

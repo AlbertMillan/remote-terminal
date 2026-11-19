@@ -5,7 +5,7 @@ import { createLogger } from '../utils/logger.js';
 import { getRecentCwds } from '../db/queries.js';
 import { pathKey } from '../utils/paths.js';
 import { allProjectsDirs } from '../accounts.js';
-import { parseLogEntries, parsePhasesBlock, type LogEntryMeta, type ParsedLogEntry, type PhaseGroup } from './session-log-format.js';
+import { parseLogEntries, parsePhasesBlock, type LogEntryMeta, type ParsedLogEntry, type PhaseGroup } from '../sessions/session-log-format.js';
 
 const logger = createLogger('project-discovery');
 
@@ -20,9 +20,6 @@ export interface DiscoveredProject {
   transcriptCount: number;
   transcriptPaths: string[]; // absolute paths, newest first, capped
 }
-
-// Lives in utils/paths.ts, which accounts.ts imports without pulling in this module.
-export { pathKey };
 
 /**
  * Read the first JSONL line that carries a `cwd` field (Claude Code records the

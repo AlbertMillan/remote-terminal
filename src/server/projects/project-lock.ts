@@ -1,4 +1,4 @@
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 
 /**
  * One track operation at a time per project: Land, Delete track, Branch now,

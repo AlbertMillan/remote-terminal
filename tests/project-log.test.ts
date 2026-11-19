@@ -6,7 +6,7 @@ import {
   type LogEntryMeta,
 } from '../src/server/sessions/session-log-format.js';
 import { transcriptHasEdits, countUserTurns } from '../src/server/sessions/transcript.js';
-import { pathKey } from '../src/server/sessions/project-discovery.js';
+import { pathKey } from '../src/server/utils/paths.js';
 
 const meta = (over: Partial<LogEntryMeta> = {}): LogEntryMeta => ({
   date: '2026-06-28T10:00:00.000Z',

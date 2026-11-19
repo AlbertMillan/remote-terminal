@@ -1,5 +1,5 @@
 import { createLogger } from '../utils/logger.js';
-import { pathKey } from '../sessions/project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import type { Job } from './types.js';
 
 const logger = createLogger('job-scheduler');

@@ -23,8 +23,8 @@ vi.mock('../src/server/jobs/worktree.js', () => ({
   worktreeRoot: () => join(FAKE_HOME, '.claude-remote', 'worktrees'),
 }));
 
-vi.mock('../src/server/sessions/project-discovery.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/server/sessions/project-discovery.js')>();
+vi.mock('../src/server/projects/project-discovery.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/server/projects/project-discovery.js')>();
   return { ...actual, discoverProjects: () => discovered.map((cwd) => ({ cwd })) };
 });
 

@@ -4,7 +4,7 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getSession } from '../db/queries.js';
 import { sessionManager } from './manager.js';
-import { findProjectByCwd, invalidateProjectCache } from './project-discovery.js';
+import { findProjectByCwd, invalidateProjectCache } from '../projects/project-discovery.js';
 import { parseLogEntries, removeLogEntry } from './session-log-format.js';
 import { allProjectsDirs, findTranscript } from '../accounts.js';
 import { isInside } from '../utils/paths.js';

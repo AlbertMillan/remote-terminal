@@ -1,5 +1,5 @@
 import { createLogger } from '../utils/logger.js';
-import { isInside } from '../utils/paths.js';
+import { isInside, pathKey } from '../utils/paths.js';
 import { sessionManager } from '../sessions/manager.js';
 import type { SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb } from '../db/queries.js';
@@ -9,7 +9,6 @@ import type { LandNotificationPayload } from '../websocket/protocol.js';
 import type { RegistryProject } from '../projects/registry.js';
 import { landAndBuild, landPreflightForSession, updateAndInstall } from '../projects/track-land.js';
 import type { UpdateResult } from '../projects/track-update.js';
-import { pathKey } from '../sessions/project-discovery.js';
 import { trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
 import type { InstallResult } from '../projects/project-deps.js';
 import { AgentSessionError, projectForCwd } from './agent-common.js';

@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { trackBranchContaining } from '../projects/track-store.js';
 import { UNSAFE_IN_QUOTES } from '../utils/shell-quote.js';
-import { pathKey } from './project-discovery.js';
+import { pathKey } from '../utils/paths.js';
 import { mcpConfigPathFor, peerNotesDirFor, peerSettingsPathFor } from './prompt-file.js';
 import { claudeJsonPath, defaultAccount } from '../accounts.js';
 
