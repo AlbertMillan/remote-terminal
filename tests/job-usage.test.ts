@@ -25,7 +25,8 @@ const { recordRunStart, recordRunEnd, usageByProject, invalidateUsageCache } = a
   '../src/server/usage/store.js'
 );
 // The board's labels: what the user actually reads off the numbers.
-const { formatCost, formatTokens, usageTooltip } = await import('../src/client/job-board.js');
+const { usageTooltip } = await import('../src/client/job-board.js');
+const { formatCost, formatTokens } = await import('../src/client/format.js');
 
 const CWD = 'C:\\p\\alpha';
 const SESSION = 'sess-1';

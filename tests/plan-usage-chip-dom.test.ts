@@ -5,11 +5,11 @@ import {
   formatCountdown,
   levelOf,
   renderPlanUsage,
-  formatTokens,
   type AccountPlanUsage,
   type PlanUsage,
   type WindowReading,
 } from '../src/client/plan-usage-chip.js';
+import { formatTokens } from '../src/client/format.js';
 
 /** renderPlanUsage with its markup as strings. */
 const renderText = (...args: Parameters<typeof renderPlanUsage>) => {

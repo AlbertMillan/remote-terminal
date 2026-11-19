@@ -1,4 +1,5 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { failureMessage, requestJson } from './api.js';
 import {
   hasSpend,
   formatUsageCost,
@@ -38,11 +39,7 @@ export type {
   JobDoc,
 };
 export { hasSpend, formatUsageCost, usageTooltip, usageOf, isQueued, elapsedSince, BODYLESS_POST, jsonPost };
-export {
-  formatTokens,
-  formatCost,
-  projectUsageTooltip,
-} from './job-board-types.js';
+export { projectUsageTooltip } from './job-board-types.js';
 
 /**
  * Client for the job pipeline: dispatching a feature, watching its stages, and
@@ -564,42 +561,26 @@ ${usageTooltip(usageOf(s))}` : '')
   // --- Actions -----------------------------------------------------------
 
   async dispatch(cwd: string, featureId: string | null, title: string): Promise<boolean> {
-    try {
-      const res = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, featureId, title }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        this.flash(data.error || `Could not dispatch (${res.status})`);
-        return false;
-      }
-      await this.load(cwd);
-      return true;
-    } catch (error) {
-      this.flash(error instanceof Error ? error.message : 'Could not dispatch');
+    const result = await requestJson('/api/jobs', jsonPost({ cwd, featureId, title }));
+    if (!result.ok) {
+      this.flash(failureMessage(result, 'Could not dispatch'));
       return false;
     }
+    await this.load(cwd);
+    return true;
   }
 
   private async act(jobId: string, action: string, body?: Record<string, unknown>): Promise<boolean> {
-    try {
-      const res = await fetch(
-        `/api/jobs/${encodeURIComponent(jobId)}/${action}`,
-        body ? jsonPost(body) : BODYLESS_POST
-      );
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        this.flash(data.error || `Request failed (${res.status})`);
-        return false;
-      }
-      if (this.cwd) await this.load(this.cwd);
-      return true;
-    } catch (error) {
-      this.flash(error instanceof Error ? error.message : 'Request failed');
+    const result = await requestJson(
+      `/api/jobs/${encodeURIComponent(jobId)}/${action}`,
+      body ? jsonPost(body) : BODYLESS_POST
+    );
+    if (!result.ok) {
+      this.flash(failureMessage(result, 'Request failed'));
       return false;
     }
+    if (this.cwd) await this.load(this.cwd);
+    return true;
   }
 
   /**

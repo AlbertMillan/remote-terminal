@@ -1,4 +1,7 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { failureMessage, requestJson } from './api.js';
+import { timeAgo } from './format.js';
+import { jsonPost } from './job-board-types.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog } from './track-branch-now-dialog.js';
 import { installTrackDependencies } from './track-picker.js';
@@ -311,8 +314,8 @@ export class ProjectWorkspace {
       body.className = 'project-item-body';
 
       const meta: string[] = [];
-      if (project.lastActivity) meta.push(this.relativeTime(project.lastActivity));
-      else if (project.lastModified) meta.push(`~${this.relativeTime(project.lastModified)}`);
+      if (project.lastActivity) meta.push(timeAgo(project.lastActivity));
+      else if (project.lastModified) meta.push(`~${timeAgo(project.lastModified)}`);
       if (project.vcs.kind !== 'git') meta.push(project.vcs.kind === 'none' ? 'no repo' : 'plastic');
       if (project.nested.length > 0) meta.push(`+${project.nested.length} dirs`);
       if (!project.hasDoc) meta.push('no index');
@@ -375,27 +378,18 @@ export class ProjectWorkspace {
     const previous = project.favorite;
     project.favorite = !previous;
     this.renderList();
-    try {
-      const res = await fetch('/api/projects/favorite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, favorite: !previous }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-    } catch (error) {
-      console.error('Failed to save favourite:', error);
-      this.flash(error instanceof Error ? error.message : 'Could not save favourite.');
+    const result = await requestJson('/api/projects/favorite', jsonPost({ cwd, favorite: !previous }));
+    if (!result.ok) {
+      const message = failureMessage(result, 'Could not save favourite.');
+      console.error('Failed to save favourite:', message);
+      this.flash(message);
       // A reload while the request was out replaces the board, so roll back the
       // row that is on screen now, not the object this call started with.
       const current = this.getProject(cwd);
       if (current) current.favorite = previous;
-    } finally {
-      this.favoriteBusy.delete(cwd);
-      this.renderList();
     }
+    this.favoriteBusy.delete(cwd);
+    this.renderList();
   }
 
   /**
@@ -409,17 +403,6 @@ export class ProjectWorkspace {
     if (project.counts.in_progress > 0) return 'fresh';
     if (project.counts.total > 0 && project.counts.done === project.counts.total) return 'shipped';
     return 'recent';
-  }
-
-  private relativeTime(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return '';
-    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.round(hours / 24);
-    return days < 30 ? `${days}d ago` : `${Math.round(days / 30)}mo ago`;
   }
 
   // --- Detail: features --------------------------------------------------
@@ -608,34 +591,22 @@ export class ProjectWorkspace {
     method: 'POST' | 'PATCH' | 'DELETE',
     body: Record<string, unknown>
   ): Promise<boolean> {
-    try {
-      const res = await fetch(path, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (res.status === 409) {
-        // Two kinds: the file moved underneath (`conflict`), or the project is
-        // busy — a branched track's file is written under the project lock,
-        // so a Land in progress refuses the write with its own reason.
-        const data = (await res.json().catch(() => ({}))) as { error?: string; conflict?: boolean };
-        await this.reload();
-        this.flash(
-          data.conflict || !data.error ? 'PROJECT.md changed on disk — reloaded. Try again.' : data.error
-        );
-        return false;
-      }
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        this.flash(data.error || `Request failed (${res.status})`);
-        return false;
-      }
+    const result = await requestJson<{ conflict?: boolean }>(path, { ...jsonPost(body), method });
+    if (result.status === 409) {
+      // Two kinds: the file moved underneath (`conflict`), or the project is
+      // busy — a branched track's file is written under the project lock,
+      // so a Land in progress refuses the write with its own reason.
+      const { conflict, error } = result.data;
       await this.reload();
-      return true;
-    } catch (error) {
-      this.flash(error instanceof Error ? error.message : 'Request failed');
+      this.flash(conflict || !error ? 'PROJECT.md changed on disk — reloaded. Try again.' : error);
       return false;
     }
+    if (!result.ok) {
+      this.flash(failureMessage(result, 'Request failed'));
+      return false;
+    }
+    await this.reload();
+    return true;
   }
 
   async addFeature(cwd: string, title: string, priority: string, track?: string): Promise<boolean> {
@@ -792,20 +763,12 @@ export class ProjectWorkspace {
   private async trackRequest<T>(path: string, body: Record<string, unknown>): Promise<T | null> {
     this.trackRequestsInFlight++;
     try {
-      const res = await fetch(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-      if (!res.ok) {
-        this.flash(data.error || `Request failed (${res.status})`);
+      const result = await requestJson<T & object>(path, jsonPost(body));
+      if (!result.ok) {
+        this.flash(failureMessage(result, 'Request failed'));
         return null;
       }
-      return data;
-    } catch (error) {
-      this.flash(error instanceof Error ? error.message : 'Request failed');
-      return null;
+      return result.data;
     } finally {
       this.trackRequestsInFlight--;
     }
@@ -838,23 +801,16 @@ export class ProjectWorkspace {
     this.failedMigrations.delete(cwd);
     this.refreshDetail(cwd);
     try {
-      const res = await fetch('/api/projects/migrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        outcome?: string;
-        detail?: string | null;
-        error?: string;
-      };
-      if (!res.ok || data.outcome === 'error') {
-        this.failedMigrations.set(cwd, data.detail || data.error || 'Generation failed');
-      } else if (data.detail) {
-        this.flash(data.detail);
+      const result = await requestJson<{ outcome?: string; detail?: string | null }>(
+        '/api/projects/migrate',
+        jsonPost({ cwd })
+      );
+      const { outcome, detail, error } = result.data;
+      if (!result.ok || outcome === 'error') {
+        this.failedMigrations.set(cwd, detail || error || 'Generation failed');
+      } else if (detail) {
+        this.flash(detail);
       }
-    } catch (error) {
-      this.failedMigrations.set(cwd, error instanceof Error ? error.message : 'Generation failed');
     } finally {
       this.busy.delete(cwd);
       await this.reload();
@@ -879,18 +835,12 @@ export class ProjectWorkspace {
     if (this.accountBusy.has(cwd)) return;
     this.accountBusy.add(cwd);
     try {
-      const res = await fetch('/api/projects/account', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, account }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || `HTTP ${res.status}`);
+      const result = await requestJson('/api/projects/account', jsonPost({ cwd, account }));
+      if (!result.ok) {
+        const message = failureMessage(result, 'Could not save the project account.');
+        console.error('Failed to save project account:', message);
+        this.flash(message);
       }
-    } catch (error) {
-      console.error('Failed to save project account:', error);
-      this.flash(error instanceof Error ? error.message : 'Could not save the project account.');
     } finally {
       this.accountBusy.delete(cwd);
       await this.reload();

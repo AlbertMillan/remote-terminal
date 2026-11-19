@@ -1,4 +1,6 @@
 import { html, joinHtml, setHtml } from './html-utils.js';
+import { failureMessage, requestJson } from './api.js';
+import { jsonPost } from './job-board-types.js';
 
 /**
  * The Track picker in the New Session dialog.
@@ -27,22 +29,12 @@ export interface PickedTrack {
  * can fix the install itself or work without tests. Never rejects.
  */
 export async function installTrackDependencies(cwd: string, track: string): Promise<string | undefined> {
-  let detail: string;
-  try {
-    const res = await fetch('/api/projects/track/install', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, track }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      install?: { ok: boolean; detail: string };
-      error?: string;
-    };
-    if (res.ok && data.install?.ok) return undefined;
-    detail = data.install?.detail || data.error || `request failed (${res.status})`;
-  } catch (error) {
-    detail = error instanceof Error ? error.message : 'request failed';
-  }
+  const result = await requestJson<{ install?: { ok: boolean; detail: string } }>(
+    '/api/projects/track/install',
+    jsonPost({ cwd, track })
+  );
+  if (result.ok && result.data.install?.ok) return undefined;
+  const detail = result.data.install?.detail || failureMessage(result, 'request failed');
   return `claude-remote: dependencies were not installed in this worktree.\n${detail}\nRun the lockfile's install here (npm ci) before running tests.`;
 }
 
@@ -179,28 +171,18 @@ export class TrackPicker {
     }
     // Held across the awaits: editing the directory meanwhile hides the list.
     const project = this.project as string;
-    try {
-      const res = await fetch('/api/projects/track/branch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: project, track }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        branch?: { worktreePath: string };
-        needsInstall?: boolean;
-        error?: string;
-      };
-      if (!res.ok || !data.branch) {
-        this.showError(data.error || `Could not branch the track (${res.status})`);
-        return false;
-      }
-      if (!data.needsInstall) return { track, worktreePath: data.branch.worktreePath };
-      this.showStatus('Installing dependencies…');
-      const notice = await installTrackDependencies(project, track);
-      return { track, worktreePath: data.branch.worktreePath, notice };
-    } catch (error) {
-      this.showError(error instanceof Error ? error.message : 'Could not branch the track');
+    const result = await requestJson<{ branch?: { worktreePath: string }; needsInstall?: boolean }>(
+      '/api/projects/track/branch',
+      jsonPost({ cwd: project, track })
+    );
+    const branch = result.data.branch;
+    if (!result.ok || !branch) {
+      this.showError(failureMessage(result, 'Could not branch the track'));
       return false;
     }
+    if (!result.data.needsInstall) return { track, worktreePath: branch.worktreePath };
+    this.showStatus('Installing dependencies…');
+    const notice = await installTrackDependencies(project, track);
+    return { track, worktreePath: branch.worktreePath, notice };
   }
 }

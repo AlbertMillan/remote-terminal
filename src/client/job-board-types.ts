@@ -1,3 +1,5 @@
+import { formatCost, formatTokens } from './format.js';
+
 /**
  * Types and pure formatting helpers shared by the job board.
  *
@@ -64,23 +66,6 @@ export function hasSpend(usage: StageUsage): boolean {
     usage.runCount > 0 ||
     usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens > 0
   );
-}
-
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(Math.round(n));
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
-/**
- * Cost is the headline because a token total is not a meaningful one: cache
- * reads dwarf real input and output, so "31k tokens" reads as effort when it
- * is mostly the cache doing its job.
- */
-export function formatCost(usd: number): string {
-  if (usd <= 0) return '$0.00';
-  if (usd < 0.01) return '<$0.01';
-  return `$${usd.toFixed(2)}`;
 }
 
 /**

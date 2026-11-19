@@ -1,4 +1,5 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { shortAge } from './format.js';
 
 /**
  * Cross-project overview: what is in flight and what is waiting on you.
@@ -165,7 +166,7 @@ export class RollupView {
             ${item.detail && html`<div class="rv-item-detail">${item.detail}</div>`}
           </div>
           <span class="rv-item-project">${item.projectName}</span>
-          <span class="rv-item-age">${this.age(item.since)}</span>
+          <span class="rv-item-age">${shortAge(item.since)}</span>
         </li>`
     );
 
@@ -230,16 +231,6 @@ export class RollupView {
         <h3 class="project-log-subhead">All projects</h3>
         <ul class="rv-projects">${rows}</ul>
       </section>`;
-  }
-
-  private age(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (!iso || Number.isNaN(then)) return '';
-    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return `${hours}h`;
-    return `${Math.round(hours / 24)}d`;
   }
 
   /** One delegated listener; rows are re-rendered on every poll. */

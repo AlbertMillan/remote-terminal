@@ -1,4 +1,5 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { formatTokens } from './format.js';
 
 /**
  * The plan-usage chip: how much of each Claude login's 5-hour and weekly
@@ -82,13 +83,6 @@ export function formatCountdown(ms: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m`;
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-}
-
-/** "950", "12.4k", "3.1M": token counts at a glance. */
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(Math.round(n));
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
 }
 
 export function clock(ms: number, withDay: boolean): string {

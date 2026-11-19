@@ -1,4 +1,6 @@
-import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { html, joinHtml, type SafeHtml } from './html-utils.js';
+import { failureMessage, requestJson } from './api.js';
+import { openDialog } from './dialog.js';
 
 /**
  * The Delete track confirm dialog.
@@ -205,39 +207,29 @@ export async function openTrackDeleteDialog(
   /** Called once the plan has loaded (or failed to): the caller's loading state ends here. */
   onPlanned: () => void = () => {}
 ): Promise<string | null> {
-  let plan: TrackDeletePlan;
-  try {
-    const res = await fetch(
-      `/api/projects/track/delete-plan?cwd=${encodeURIComponent(cwd)}&track=${encodeURIComponent(track)}`
-    );
-    const data = (await res.json().catch(() => ({}))) as { plan?: TrackDeletePlan; error?: string };
-    if (!res.ok || !data.plan) {
-      flash(data.error || `Could not plan the delete (${res.status})`);
-      return null;
-    }
-    plan = data.plan;
-  } catch (error) {
-    flash(error instanceof Error ? error.message : 'Could not plan the delete');
+  const planned = await requestJson<{ plan?: TrackDeletePlan }>(
+    `/api/projects/track/delete-plan?cwd=${encodeURIComponent(cwd)}&track=${encodeURIComponent(track)}`
+  );
+  onPlanned();
+  const plan = planned.data.plan;
+  if (!planned.ok || !plan) {
+    flash(failureMessage(planned, 'Could not plan the delete'));
     return null;
-  } finally {
-    onPlanned();
   }
 
-  const modal = document.createElement('div');
-  modal.className = 'modal td-modal';
-  setHtml(
-    modal,
+  const { modal, close, closed } = openDialog<string | null>(
+    'td-modal',
     html`
     <div class="modal-content td-content" role="dialog" aria-modal="true" aria-labelledby="td-title">
       <h3 id="td-title">Delete track “${track}”?</h3>
       <div class="td-body">${renderTrackDeletePlan(plan)}</div>
       <div class="modal-actions">
-        <button class="btn-secondary td-cancel">Cancel</button>
+        <button class="btn-secondary td-cancel" data-cancel>Cancel</button>
         <button class="btn-danger td-confirm">Delete track</button>
       </div>
-    </div>`
+    </div>`,
+    null
   );
-  document.body.appendChild(modal);
 
   const confirmBtn = modal.querySelector('.td-confirm') as HTMLButtonElement;
   const errorEl = modal.querySelector('.td-error') as HTMLElement;
@@ -256,54 +248,32 @@ export async function openTrackDeleteDialog(
   refresh();
   modal.addEventListener('change', refresh);
 
-  return new Promise((resolve) => {
-    const close = (result: string | null): void => {
-      modal.remove();
-      document.removeEventListener('keydown', onKey);
-      resolve(result);
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close(null);
-    };
-    document.addEventListener('keydown', onKey);
-    modal.querySelector('.td-cancel')?.addEventListener('click', () => close(null));
-
-    confirmBtn.addEventListener('click', async () => {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Deleting…';
-      try {
-        const res = await fetch('/api/projects/track', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cwd,
-            track,
-            token: plan.token,
-            revert: ticked('td-revert'),
-            deleteSpecs: ticked('td-spec'),
-            restoreFiles: ticked('td-restore'),
-            revertGuessed: ticked('td-revert-guess'),
-          }),
-        });
-        const data = (await res.json().catch(() => ({}))) as {
-          detail?: string;
-          error?: string;
-          conflicts?: string[];
-        };
-        if (!res.ok) {
-          const files = data.conflicts?.length ? ` Conflicting: ${data.conflicts.join(', ')}.` : '';
-          errorEl.textContent = `${data.error || `Delete failed (${res.status})`}${files}`;
-          confirmBtn.textContent = 'Delete track';
-          // A stale plan can't be retried as-is; the user reopens it.
-          confirmBtn.disabled = res.status === 409;
-          return;
-        }
-        close(data.detail || `Deleted “${track}”.`);
-      } catch (error) {
-        errorEl.textContent = error instanceof Error ? error.message : 'Delete failed';
-        confirmBtn.textContent = 'Delete track';
-        confirmBtn.disabled = false;
-      }
+  confirmBtn.addEventListener('click', async () => {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Deleting…';
+    const result = await requestJson<{ detail?: string; conflicts?: string[] }>('/api/projects/track', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cwd,
+        track,
+        token: plan.token,
+        revert: ticked('td-revert'),
+        deleteSpecs: ticked('td-spec'),
+        restoreFiles: ticked('td-restore'),
+        revertGuessed: ticked('td-revert-guess'),
+      }),
     });
+    if (!result.ok) {
+      const conflicts = result.data.conflicts;
+      const files = conflicts?.length ? ` Conflicting: ${conflicts.join(', ')}.` : '';
+      errorEl.textContent = `${failureMessage(result, 'Delete failed')}${files}`;
+      confirmBtn.textContent = 'Delete track';
+      // A stale plan can't be retried as-is; the user reopens it.
+      confirmBtn.disabled = result.status === 409;
+      return;
+    }
+    close(result.data.detail || `Deleted “${track}”.`);
   });
+  return closed;
 }

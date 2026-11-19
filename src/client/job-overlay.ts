@@ -1,6 +1,7 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import type { JobStatus, StageName, StageStatus } from './job-board.js';
 import { parseDecision, stripMarks } from './decision-format.js';
+import { formatCost, shortAge } from './format.js';
 
 /**
  * The live job panel over the main area.
@@ -379,14 +380,14 @@ export class JobOverlay {
               title="Open ${job.projectName} and show this job">
         <span class="jo-card-top">
           <span class="jo-project">${job.projectName}</span>
-          <span class="jo-age">${this.age(job.createdAt)}</span>
+          <span class="jo-age">${shortAge(job.createdAt)}</span>
         </span>
         <span class="jo-title">${job.title}</span>
         <span class="jo-strip">${strip}</span>
         <span class="jo-foot">
           ${stageLabel ? html`<span class="jo-stage">${stageLabel}</span>` : ''}
           ${chip}
-          <span class="jo-cost">${this.cost(job.costUsd)}</span>
+          <span class="jo-cost">${job.costUsd ? formatCost(job.costUsd) : ''}</span>
         </span>
         ${detail ? html`<span class="jo-detail">${detail}</span>` : ''}
       </button>`;
@@ -424,17 +425,4 @@ export class JobOverlay {
     }
   }
 
-  private cost(usd: number): string {
-    if (!usd) return '';
-    return usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`;
-  }
-
-  private age(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return '';
-    const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.round(mins / 60);
-    return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
-  }
 }

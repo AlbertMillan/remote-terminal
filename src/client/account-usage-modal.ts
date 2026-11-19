@@ -1,9 +1,9 @@
 import { html, setHtml, type SafeHtml } from './html-utils.js';
+import { formatCost, formatTokens } from './format.js';
 import {
   accountColourClass,
   clock,
   formatCountdown,
-  formatTokens,
   levelOf,
   type AccountPlanUsage,
   type PlanUsage,
@@ -64,7 +64,7 @@ function tokenTable(five: WindowTokens | null | undefined, week: WindowTokens | 
     row('Output', (t) => formatTokens(t.outputTokens)),
     row('Cache read', (t) => formatTokens(t.cacheReadTokens)),
     row('Cache write', (t) => formatTokens(t.cacheWriteTokens)),
-    row('Est. cost', (t) => `$${t.costUsd.toFixed(2)}${t.unpriced ? '+' : ''}`),
+    row('Est. cost', (t) => `${formatCost(t.costUsd)}${t.unpriced ? '+' : ''}`),
     row('Sessions', (t) => String(t.sessions)),
     row('Job runs', (t) => String(t.jobRuns)),
   ]}</tbody></table></div><p class="pu-detail">Est. at API list price; from the transcripts of projects with a PROJECT.md.</p>`;
