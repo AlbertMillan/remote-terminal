@@ -12,7 +12,8 @@ import {
   retryJob,
 } from './runner.js';
 import { getJobWithStages, listJobs, listJobsForProject } from './store.js';
-import { diffAgainst, diffStat, fileDiff, hasRemote } from './worktree.js';
+import { diffAgainst, diffStat, fileDiff } from './worktree.js';
+import { hasRemote } from '../utils/git.js';
 import { listJobDocs, readDoc, resolveInWorktree } from './docs.js';
 import { specSlugFor } from './stages/design.js';
 import { COMPANION_DIR } from '../projects/project-store.js';
@@ -259,7 +260,7 @@ export function specPathOf(job: {
  */
 async function baseBranchFor(job: { baseBranch: string | null; projectCwd: string }): Promise<string> {
   if (job.baseBranch) return job.baseBranch;
-  const { currentBranch } = await import('./worktree.js');
+  const { currentBranch } = await import('../utils/git.js');
   return (await currentBranch(job.projectCwd)) || 'main';
 }
 

@@ -3,7 +3,7 @@ import { open } from 'fs/promises';
 import { basename, isAbsolute, join, relative, resolve } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { git, gitStatusEntries, type GitStatusEntry } from '../agent/claude-run.js';
+import { git, gitStatusEntries, type GitStatusEntry } from '../utils/git.js';
 import { parsePhasesBlock, type PhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
 import { readProjectPlan } from './project-plan.js';

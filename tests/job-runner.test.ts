@@ -51,11 +51,15 @@ vi.mock('../src/server/jobs/worktree.js', () => ({
   describeLinksLeft: (path: string, links: string[]) => `links left in ${path}: ${links.join(', ')}`,
   worktreePathFor: (id: string) => `C:/wt/${id}`,
   commitAll: vi.fn(async () => true),
-  currentBranch: vi.fn(async () => 'SHOULD-NOT-BE-USED'),
   diffStat: vi.fn(async () => ({ files: 0, insertions: 0, deletions: 0 })),
-  hasRemote: vi.fn(async () => false),
   worktreeRoot: () => 'C:/wt',
   WorktreeError: class WorktreeError extends Error {},
+}));
+
+vi.mock('../src/server/utils/git.js', async (importActual) => ({
+  ...(await importActual<typeof import('../src/server/utils/git.js')>()),
+  currentBranch: vi.fn(async () => 'SHOULD-NOT-BE-USED'),
+  hasRemote: vi.fn(async () => false),
 }));
 
 vi.mock('../src/server/jobs/stages/design.js', () => ({

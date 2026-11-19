@@ -1,9 +1,7 @@
-import { execFile } from 'child_process';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
-import { promisify } from 'util';
 import { createLogger } from '../utils/logger.js';
-import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git, runGit } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
 import { loadRegistry, type RegistryProject } from './registry.js';
@@ -20,7 +18,6 @@ import {
   specsOf,
 } from './track-plan.js';
 
-const execFileAsync = promisify(execFile);
 const logger = createLogger('track-branches');
 import { TrackBranchError, liveJobsOf, reattachIfMissing } from './track-branches.js';
 
@@ -107,19 +104,10 @@ async function codeCommitsBetween(cwd: string, from: string, to: string, docRel:
  * can't do it (`--write-tree` needs 2.38+) or fails.
  */
 async function dryRunConflicts(cwd: string, ours: string, theirs: string): Promise<string[] | null> {
-  let stdout: string;
-  try {
-    ({ stdout } = await execFileAsync('git', ['merge-tree', '--write-tree', '--name-only', ours, theirs], {
-      cwd,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-    }));
-  } catch (error) {
-    // Exit 1 is "conflicts", with the same output; anything else is a failure.
-    const e = error as { code?: unknown; stdout?: string };
-    if (e.code !== 1 || typeof e.stdout !== 'string') return null;
-    stdout = e.stdout;
-  }
+  const result = await runGit(cwd, ['merge-tree', '--write-tree', '--name-only', ours, theirs]);
+  // Exit 1 is "conflicts", with the same output; anything else is a failure.
+  if (!result.ok && result.code !== 1) return null;
+  const stdout = result.stdout;
   // The tree's oid, then one conflicted path per line, then a blank line and
   // git's informational messages.
   const lines = stdout.split('\n').map((l) => l.replace(/\r$/, ''));

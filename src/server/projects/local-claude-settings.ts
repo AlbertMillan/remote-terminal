@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
-import { git } from '../agent/claude-run.js';
+import { git } from '../utils/git.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('local-claude-settings');

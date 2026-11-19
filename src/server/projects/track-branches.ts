@@ -3,16 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { dirname, join, isAbsolute } from 'path';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
-import { git } from '../agent/claude-run.js';
+import { currentBranch, git } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import { pathKey } from '../sessions/project-discovery.js';
-import {
-  createWorktree,
-  currentBranch,
-  ensureGitRepo,
-  removeWorktree,
-  worktreeRoot,
-} from '../jobs/worktree.js';
+import { createWorktree, ensureGitRepo, removeWorktree, worktreeRoot } from '../jobs/worktree.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive } from '../jobs/types.js';
 import { loadRegistry, type RegistryProject } from './registry.js';

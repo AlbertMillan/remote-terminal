@@ -1,8 +1,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../../utils/logger.js';
-import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
-import { hasRemote } from '../worktree.js';
+import { COMMIT_IDENTITY, git, hasRemote } from '../../utils/git.js';
 import { mutateProjectDoc, readProjectDoc } from '../../projects/project-store.js';
 import { docPathFor, type RegistryProject } from '../../projects/registry.js';
 import { findFeature, updateFeature } from '../../projects/project-doc-format.js';

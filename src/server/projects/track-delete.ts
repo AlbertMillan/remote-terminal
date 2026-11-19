@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { COMMIT_IDENTITY, git, gitStatusEntries, isGitRepo } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git, gitStatusEntries, isGitRepo } from '../utils/git.js';
 import { sessionsInWorktree } from '../utils/paths.js';
 import { listJobsForProject } from '../jobs/store.js';
 import { isLive, type JobWithStages } from '../jobs/types.js';

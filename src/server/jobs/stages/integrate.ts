@@ -1,5 +1,5 @@
 import { createLogger } from '../../utils/logger.js';
-import { git } from '../../agent/claude-run.js';
+import { git } from '../../utils/git.js';
 import { diffStat } from '../worktree.js';
 
 const logger = createLogger('stage-integrate');

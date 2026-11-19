@@ -13,14 +13,8 @@ import {
   startStage,
   updateJob,
 } from './store.js';
-import {
-  commitAll,
-  createWorktree,
-  currentBranch,
-  describeLinksLeft,
-  removeWorktree,
-  WorktreeError,
-} from './worktree.js';
+import { commitAll, createWorktree, describeLinksLeft, removeWorktree, WorktreeError } from './worktree.js';
+import { currentBranch } from '../utils/git.js';
 import { runDesignStage } from './stages/design.js';
 import { runImplementStage } from './stages/implement.js';
 import { runIntegrateStage } from './stages/integrate.js';

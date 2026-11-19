@@ -1,15 +1,12 @@
-import { execFile } from 'child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { lstat, readdir, rm, unlink } from 'fs/promises';
 import { dirname, join } from 'path';
-import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { git, isGitRepo } from '../agent/claude-run.js';
+import { currentBranch, git, isGitRepo, runGit } from '../utils/git.js';
 import { detectVcs } from '../projects/vcs.js';
 
 const logger = createLogger('worktree');
-const execFileAsync = promisify(execFile);
 
 /**
  * Isolated working copies for pipeline jobs.
@@ -100,19 +97,6 @@ export async function ensureGitRepo(cwd: string): Promise<{ initialised: boolean
   return { initialised: true };
 }
 
-/** The repo's current branch, used as the base and merge target. */
-export async function currentBranch(cwd: string): Promise<string | null> {
-  const out = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const name = out?.trim();
-  return name && name !== 'HEAD' ? name : null;
-}
-
-/** True when the repo has a remote configured, so a push is meaningful. */
-export async function hasRemote(cwd: string): Promise<boolean> {
-  const out = await git(cwd, ['remote']);
-  return !!out?.trim();
-}
-
 export interface CreatedWorktree {
   path: string;
   branch: string;
@@ -161,7 +145,8 @@ export async function createWorktree(
   const existed = await branchExists(cwd, branch);
   // core.longpaths: a deep file in the checkout otherwise fails it half-way on
   // Windows. It does not lift git's own limit on the worktree's path.
-  const added = await gitWithStderr(cwd, [
+  // runGit keeps stderr: a failed `worktree add` is only explainable by what git said.
+  const added = await runGit(cwd, [
     '-c',
     'core.longpaths=true',
     'worktree',
@@ -187,17 +172,6 @@ export async function createWorktree(
 
 async function branchExists(cwd: string, branch: string): Promise<boolean> {
   return (await git(cwd, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`])) !== null;
-}
-
-/** git, keeping stderr: a failed `worktree add` is only explainable by what git said. */
-async function gitWithStderr(cwd: string, args: string[]): Promise<{ ok: boolean; stderr: string }> {
-  try {
-    await execFileAsync('git', args, { cwd, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
-    return { ok: true, stderr: '' };
-  } catch (error) {
-    const stderr = (error as { stderr?: string }).stderr;
-    return { ok: false, stderr: (stderr || (error as Error).message || '').trim() };
-  }
 }
 
 /**

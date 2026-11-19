@@ -2,7 +2,8 @@ import { existsSync } from 'fs';
 import { basename } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { git, isGitRepo, runClaude } from '../agent/claude-run.js';
+import { runClaude } from '../agent/claude-run.js';
+import { git, isGitRepo } from '../utils/git.js';
 import { docPathFor, type RegistryProject } from './registry.js';
 import {
   COMPANION_DIR,

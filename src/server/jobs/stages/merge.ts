@@ -1,6 +1,5 @@
 import { createLogger } from '../../utils/logger.js';
-import { COMMIT_IDENTITY, git } from '../../agent/claude-run.js';
-import { hasRemote } from '../worktree.js';
+import { COMMIT_IDENTITY, git, hasRemote, offBranch } from '../../utils/git.js';
 import { jobMergeMessageArgs } from '../merge-trailers.js';
 import { commitWorktreePlanning } from '../../projects/track-plan.js';
 
@@ -67,8 +66,8 @@ export async function runMergeStage(opts: {
     );
   }
 
-  const current = (await git(projectCwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim();
-  if (current !== baseBranch) {
+  const current = await offBranch(projectCwd, baseBranch);
+  if (current !== null) {
     throw new Error(
       `The project is on "${current}" but this job branched from "${baseBranch}". ` +
         `Switch back to ${baseBranch} before merging.`

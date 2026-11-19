@@ -1,11 +1,9 @@
-import { execFile } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git, gitStatusEntries } from '../utils/git.js';
 import { resolveInWorktree } from '../jobs/docs.js';
 import type { RegistryProject } from './registry.js';
 import { readProjectDoc, writeProjectDoc } from './project-store.js';
@@ -22,7 +20,6 @@ import {
   type Track,
 } from './project-doc-format.js';
 
-const execFileAsync = promisify(execFile);
 const logger = createLogger('track-plan');
 
 /**
@@ -42,29 +39,6 @@ const logger = createLogger('track-plan');
  */
 
 // --- Status --------------------------------------------------------------
-
-export interface StatusEntry {
-  path: string;
-  /** Porcelain X: what is staged. ' ' when nothing, '?' for untracked. */
-  staged: string;
-  untracked: boolean;
-}
-
-/** `git status --porcelain` with every untracked file listed (never a bare `dir/`). */
-export async function statusEntries(cwd: string): Promise<StatusEntry[] | null> {
-  const out = await git(cwd, ['status', '--porcelain', '--untracked-files=all']);
-  if (out === null) return null;
-  const entries: StatusEntry[] = [];
-  for (const line of out.split('\n')) {
-    if (!line.trim()) continue;
-    let p = line.slice(3).trim();
-    const arrow = p.indexOf(' -> ');
-    if (arrow !== -1) p = p.slice(arrow + 4);
-    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-    entries.push({ path: p, staged: line[0], untracked: line.startsWith('??') });
-  }
-  return entries;
-}
 
 /**
  * PROJECT.md itself, or a markdown file in its companion `project/` folder
@@ -126,7 +100,7 @@ export async function commitWorktreePlanning(
   docRel: string,
   message: string
 ): Promise<string[] | null> {
-  const entries = await statusEntries(worktreePath);
+  const entries = await gitStatusEntries(worktreePath, { allUntracked: true });
   if (entries === null) return [`(could not read the repository state at ${worktreePath})`];
   if (entries.length === 0) return null;
   const other = entries.filter((e) => !isPlanningPath(e.path, docRel)).map((e) => e.path);
@@ -140,18 +114,8 @@ export async function commitWorktreePlanning(
 
 // --- Commits through a temporary index ------------------------------------
 
-async function gitWithIndex(cwd: string, indexFile: string, args: string[]): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('git', args, {
-      cwd,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, GIT_INDEX_FILE: indexFile },
-    });
-    return stdout;
-  } catch {
-    return null;
-  }
+function gitWithIndex(cwd: string, indexFile: string, args: string[]): Promise<string | null> {
+  return git(cwd, args, { env: { GIT_INDEX_FILE: indexFile } });
 }
 
 export interface PathChange {
@@ -349,7 +313,7 @@ export async function moveSectionOffMain(opts: {
     return true;
   });
 
-  const status = new Map(((await statusEntries(cwd)) ?? []).map((e) => [e.path.toLowerCase(), e]));
+  const status = new Map(((await gitStatusEntries(cwd, { allUntracked: true })) ?? []).map((e) => [e.path.toLowerCase(), e]));
   const specs = specsOf(mainSection).filter((s) => resolveInWorktree(cwd, s) && resolveInWorktree(worktreePath, s));
   const specsCopied: string[] = [];
   for (const spec of specs) {

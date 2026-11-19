@@ -13,7 +13,8 @@ import {
   entryBodyOnly,
   findEntryForSession,
 } from './session-log-format.js';
-import { git, isGitRepo, runClaude } from '../agent/claude-run.js';
+import { runClaude } from '../agent/claude-run.js';
+import { git, isGitRepo } from '../utils/git.js';
 import { worktreeOwner, type WorktreeOwner } from '../projects/worktree-owner.js';
 import { loadRegistry } from '../projects/registry.js';
 import { worktreeRoot } from '../jobs/worktree.js';

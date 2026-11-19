@@ -1,8 +1,8 @@
 import { createLogger } from '../utils/logger.js';
-import { COMMIT_IDENTITY, git } from '../agent/claude-run.js';
+import { COMMIT_IDENTITY, git, gitStatusEntries, hasRemote, offBranch, type GitStatusEntry } from '../utils/git.js';
 import { deletePeerNotes } from '../sessions/prompt-file.js';
 import { sessionsInWorktree } from '../utils/paths.js';
-import { describeLinksLeft, hasRemote, removeWorktree } from '../jobs/worktree.js';
+import { describeLinksLeft, removeWorktree } from '../jobs/worktree.js';
 import { type RegistryProject } from './registry.js';
 import { getActiveTrackBranch, markLanded, type TrackBranch } from './track-store.js';
 import { isInstalling } from './project-deps.js';
@@ -14,8 +14,6 @@ import {
   mergeTrapAdvice,
   nameFiles,
   returnSectionToMain,
-  statusEntries,
-  type StatusEntry,
 } from './track-plan.js';
 
 const logger = createLogger('track-branches');
@@ -193,7 +191,7 @@ export async function landTrack(
 export async function landPreflight(
   project: RegistryProject,
   trackName: string
-): Promise<{ track: TrackBranch; mainEntries: StatusEntry[] }> {
+): Promise<{ track: TrackBranch; mainEntries: GitStatusEntry[] }> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
   const docRel = docRelOf(project);
@@ -217,15 +215,15 @@ export async function landPreflight(
   }
 
   await reattachIfMissing(project, track);
-  const current = (await git(project.cwd, ['rev-parse', '--abbrev-ref', 'HEAD']))?.trim();
-  if (current !== track.baseBranch) {
+  const current = await offBranch(project.cwd, track.baseBranch);
+  if (current !== null) {
     throw new TrackBranchError(
       `The project is on "${current}" but this track branched from "${track.baseBranch}". ` +
         `Switch back to ${track.baseBranch} before landing.`,
       409
     );
   }
-  const mainEntries = await statusEntries(project.cwd);
+  const mainEntries = await gitStatusEntries(project.cwd, { allUntracked: true });
   if (mainEntries === null) {
     throw new TrackBranchError(`Could not read the repository state at ${project.cwd}`, 500);
   }

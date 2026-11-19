@@ -1,18 +1,17 @@
-import { spawn, execFile } from 'child_process';
+import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
-import { promisify } from 'util';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { recordRunEnd, recordRunStart, type RunTag } from '../usage/store.js';
 import { emitRunSettled } from './run-events.js';
 import { accountEnv, assertAccountReady, defaultAccount, projectAccount } from '../accounts.js';
+import { git, gitStatusEntries, type GitStatusEntry } from '../utils/git.js';
 
 export type { RunTag } from '../usage/store.js';
 
 const logger = createLogger('claude-run');
-const execFileAsync = promisify(execFile);
 
 /**
  * The one hardened path for headless `claude -p` runs: session-log generation,
@@ -106,40 +105,6 @@ export function activeRunCount(): number {
   let total = 0;
   for (const lane of lanes.values()) total += lane.active;
   return total;
-}
-
-// ---------------------------------------------------------------------------
-// Git helpers (read-only). All non-throwing — absence of git is a valid state.
-// ---------------------------------------------------------------------------
-
-/**
- * `-c` flags for commits claude-remote makes itself (merges, ticks, lands,
- * deletes), so they work on a machine with no git identity configured and are
- * recognisable in the log. Spread before the subcommand: `git(cwd, [...COMMIT_IDENTITY, 'commit', …])`.
- */
-export const COMMIT_IDENTITY = [
-  '-c',
-  'user.name=claude-remote',
-  '-c',
-  'user.email=claude-remote@localhost',
-];
-
-export async function git(cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('git', args, {
-      cwd,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return stdout;
-  } catch {
-    return null;
-  }
-}
-
-export async function isGitRepo(cwd: string): Promise<boolean> {
-  const out = await git(cwd, ['rev-parse', '--is-inside-work-tree']);
-  return out?.trim() === 'true';
 }
 
 // ---------------------------------------------------------------------------
@@ -418,36 +383,6 @@ export function spawnClaude(
 }
 
 // --- Post-run edit-scope enforcement --------------------------------------
-
-export interface GitStatusEntry {
-  path: string;
-  untracked: boolean;
-}
-
-export async function gitStatusEntries(
-  cwd: string,
-  opts: { allUntracked?: boolean } = {}
-): Promise<GitStatusEntry[] | null> {
-  // By default git collapses a new directory to one `?? dir/` entry. Callers
-  // that match individual files (attribution, Delete track) need every file.
-  const out = await git(cwd, [
-    'status',
-    '--porcelain',
-    ...(opts.allUntracked ? ['--untracked-files=all'] : []),
-  ]);
-  if (out === null) return null; // not a git repo / git unavailable
-  const entries: GitStatusEntry[] = [];
-  for (const line of out.split('\n')) {
-    if (!line.trim()) continue;
-    const untracked = line.startsWith('??');
-    let p = line.slice(3).trim();
-    const arrow = p.indexOf(' -> '); // rename: keep the new path
-    if (arrow !== -1) p = p.slice(arrow + 4);
-    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1); // git quotes odd paths
-    entries.push({ path: p, untracked });
-  }
-  return entries;
-}
 
 function globToRegExp(glob: string): RegExp {
   let s = glob.replace(/\\/g, '/').replace(/[.+^${}()|[\]]/g, '\\$&');
