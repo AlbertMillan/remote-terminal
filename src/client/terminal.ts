@@ -2,6 +2,7 @@ import { dragHasFiles, filesFromTransfer } from './pasted-file.js';
 import { registerFileLinks, type LinkHost } from './file-links.js';
 import { isFilterShortcut } from './session-list-view.js';
 import { resetWrapOnLineStart } from './wrap-reset.js';
+import { attachTouchScroll } from './touch-scroll.js';
 
 // Terminal management using xterm.js
 
@@ -32,6 +33,9 @@ interface ITerminal {
   onResize(callback: (size: { cols: number; rows: number }) => void): void;
   loadAddon(addon: ITerminalAddon): void;
   attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean): void;
+  scrollLines(amount: number): void;
+  /** `mouseTrackingMode` is not `'none'` while the program asked for mouse reports. */
+  readonly modes: { readonly mouseTrackingMode: 'none' | 'x10' | 'vt200' | 'drag' | 'any' };
   parser: {
     registerCsiHandler(id: { final: string }, handler: (params: (number | number[])[]) => boolean): unknown;
   };
@@ -105,6 +109,8 @@ export class TerminalManager {
   private resizeObserver: ResizeObserver | null = null;
   /** Removes the file paste/drop listeners with the terminal. */
   private fileListeners: AbortController | null = null;
+  /** Removes the drag-to-scroll listeners (touch-scroll.ts) with the terminal. */
+  private touchScroll: AbortController | null = null;
   private navigateSessionCallback: ((direction: 'prev' | 'next') => void) | null = null;
   private newSessionCallback: (() => void) | null = null;
   private findSessionCallback: (() => void) | null = null;
@@ -199,6 +205,8 @@ export class TerminalManager {
 
     // Set up custom scrollbar (native xterm scrollbar is behind canvas layer)
     this.setupScrollbar();
+
+    this.setupTouchScroll();
 
     // Handle terminal input
     this.terminal.onData((data: string) => {
@@ -389,6 +397,42 @@ export class TerminalManager {
     update();
   }
 
+  /**
+   * Finger drags scroll by whole rows (touch-scroll.ts). While the program tracks the mouse
+   * (Claude Code's fullscreen renderer) a row of drag is one wheel event at the finger:
+   * xterm encodes it in whichever mouse protocol the program asked for. Otherwise it moves
+   * the scrollback.
+   */
+  private setupTouchScroll(): void {
+    const container = this.container;
+    const terminal = this.terminal;
+    if (!container || !terminal) return;
+    this.touchScroll = new AbortController();
+    attachTouchScroll(container, {
+      rowHeight: () => {
+        const screen = container.querySelector('.xterm-screen');
+        return screen && terminal.rows > 0 ? screen.clientHeight / terminal.rows : 0;
+      },
+      scrollRows: (rows, x, y) => {
+        if (terminal.modes.mouseTrackingMode === 'none') {
+          terminal.scrollLines(rows);
+          return;
+        }
+        const target = container.querySelector('.xterm-screen') ?? container;
+        for (let i = 0; i < Math.abs(rows); i++) {
+          target.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: Math.sign(rows),
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+            clientX: x,
+            clientY: y,
+            bubbles: true,
+            cancelable: true,
+          }));
+        }
+      },
+    }, this.touchScroll.signal);
+  }
+
   focus(): void {
     if (this.terminal) {
       this.terminal.focus();
@@ -408,6 +452,8 @@ export class TerminalManager {
   dispose(): void {
     this.fileListeners?.abort();
     this.fileListeners = null;
+    this.touchScroll?.abort();
+    this.touchScroll = null;
     this.container?.classList.remove('file-drag-over');
     if (this.scrollbar) {
       this.scrollbar.abortController.abort();

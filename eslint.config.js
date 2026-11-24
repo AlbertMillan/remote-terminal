@@ -76,6 +76,8 @@ export default [
         HTMLLIElement: 'readonly',
         KeyboardEvent: 'readonly',
         MouseEvent: 'readonly',
+        WheelEvent: 'readonly',
+        TouchEvent: 'readonly',
         Event: 'readonly',
         DataTransfer: 'readonly',
         File: 'readonly',
@@ -87,6 +89,9 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
+        performance: 'readonly',
       },
     },
     plugins: {
