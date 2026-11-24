@@ -51,6 +51,19 @@ function defaultUrl(): string {
 }
 
 /**
+ * Claude Code's classic renderer, unless the server's own env picked one.
+ *
+ * Its fullscreen renderer (rolled out per account, on by default for some) runs in the
+ * alternate screen with mouse tracking: it keeps no scrollback for the terminal to scroll
+ * and moves only on wheel reports. The Android app's terminal sends none, so a drag
+ * there did nothing, and every client lost native scrolling and fling. `0` keeps the
+ * main-screen renderer; `1` forces fullscreen, so a server started with it set keeps it.
+ */
+function rendererEnv(): Record<string, string> {
+  return process.env.CLAUDE_CODE_NO_FLICKER === undefined ? { CLAUDE_CODE_NO_FLICKER: '0' } : {};
+}
+
+/**
  * The env for a new PTY of session `id`. Issues a fresh token and revokes the
  * session's previous one, so a token never outlives its PTY.
  */
@@ -60,6 +73,7 @@ export function sessionEnv(id: string): Record<string, string> {
   tokens.set(token, id);
   tokenOf.set(id, token);
   return {
+    ...rendererEnv(),
     CLAUDE_REMOTE_SESSION_ID: id,
     CLAUDE_REMOTE_TOKEN: token,
     CLAUDE_REMOTE_URL: serverUrl ?? defaultUrl(),

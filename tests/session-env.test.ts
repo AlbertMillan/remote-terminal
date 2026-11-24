@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -124,7 +124,7 @@ vi.mock('../src/server/projects/worktree-owner.js', () => ({
 }));
 
 import { createSessionManager } from '../src/server/sessions/manager.js';
-import { configureSessionEnv, loopbackUrl, sessionForToken } from '../src/server/sessions/session-env.js';
+import { configureSessionEnv, loopbackUrl, sessionEnv, sessionForToken } from '../src/server/sessions/session-env.js';
 import { injectCommand } from '../src/server/sessions/session-open.js';
 import { promptPathFor, writePromptFile } from '../src/server/sessions/prompt-file.js';
 import type { ActiveSession } from '../src/server/sessions/types.js';
@@ -314,5 +314,21 @@ describe('loopbackUrl', () => {
     expect(loopbackUrl('http', '127.0.0.1', 4399)).toBe('http://127.0.0.1:4399');
     expect(loopbackUrl('http', '::1', 4220)).toBe('http://[::1]:4220');
     expect(loopbackUrl('https', '0.0.0.0', 4220)).toBe('https://localhost:4220');
+  });
+});
+
+describe("Claude Code's renderer", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps the classic one, whose scrollback every client can scroll natively', () => {
+    vi.stubEnv('CLAUDE_CODE_NO_FLICKER', undefined);
+    expect(sessionEnv('renderer-default').CLAUDE_CODE_NO_FLICKER).toBe('0');
+  });
+
+  it("leaves the choice to a server started with it set", () => {
+    vi.stubEnv('CLAUDE_CODE_NO_FLICKER', '1');
+    expect(sessionEnv('renderer-chosen')).not.toHaveProperty('CLAUDE_CODE_NO_FLICKER');
   });
 });
