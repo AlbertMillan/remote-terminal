@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { join, matchesGlob } from 'path';
 import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { stampSessionLogged } from '../db/queries.js';
@@ -80,6 +80,71 @@ export function anyDirtyFileTouchedSince(cwd: string, porcelain: string, sinceIs
   return false;
 }
 
+// Past this many matches the list stops saving the run anything, and the
+// prompt falls back to letting the model Glob.
+const MAX_LISTED_PLAN_DOCS = 40;
+
+/**
+ * Expand `planGlobs` against a checkout, so the prompt can name the plan docs
+ * instead of having every run search for them (it was the bulk of a session-log
+ * run's tool calls). Driven only by the configured globs, so a new project needs
+ * nothing here. Case-insensitive, as the model's Glob is on Windows. Returns
+ * null when the list is too long or the walk fails: the caller then asks the
+ * model to Glob, which is what every run did before.
+ */
+export function resolvePlanDocs(root: string, planGlobs: string[], exclude: string[] = []): string[] | null {
+  const found = new Set<string>();
+  const skip = new Set(exclude.map((e) => e.toLowerCase()));
+  try {
+    for (const pattern of planGlobs) {
+      const parts = pattern.split('/');
+      const fixed: string[] = [];
+      for (const p of parts) {
+        if (/[*?[{]/.test(p)) break;
+        fixed.push(p);
+      }
+      const recursive = pattern.includes('**') || parts.length - fixed.length > 1;
+      const lowerPattern = pattern.toLowerCase();
+      const walk = (relDir: string[]): void => {
+        let entries;
+        try {
+          entries = readdirSync(join(root, ...relDir), { withFileTypes: true });
+        } catch {
+          return; // the pattern's fixed prefix doesn't exist in this project
+        }
+        for (const e of entries) {
+          const rel = [...relDir, e.name];
+          if (e.isDirectory()) {
+            if (recursive && e.name !== 'node_modules' && !e.name.startsWith('.')) walk(rel);
+            continue;
+          }
+          const relPath = rel.join('/');
+          if (!skip.has(relPath.toLowerCase()) && matchesGlob(relPath.toLowerCase(), lowerPattern)) {
+            found.add(relPath);
+            if (found.size > MAX_LISTED_PLAN_DOCS) throw new Error('too many plan docs');
+          }
+        }
+      };
+      walk(fixed);
+    }
+  } catch {
+    return null;
+  }
+  return [...found].sort();
+}
+
+/** The prompt's sentence naming the plan docs: the resolved list, or the Glob instruction it replaces. */
+function planDocsSentence(root: string, planGlobs: string[], fileName: string): string {
+  const docs = resolvePlanDocs(root, planGlobs, [fileName]);
+  if (docs === null) {
+    return `Use Glob to find this project's plan/design docs (patterns: ${planGlobs.join(', ')}) and read them.`;
+  }
+  if (docs.length === 0) {
+    return `This project has no plan/design docs (nothing matches ${planGlobs.join(', ')}); do not search for others.`;
+  }
+  return `This project's plan/design docs, already resolved from the patterns ${planGlobs.join(', ')}, are (relative to ${root}): ${docs.join(', ')}. Read these directly; do not Glob or Grep for others.`;
+}
+
 /** The project's plan file, relative to its root: the registry's `doc`, else PROJECT.md. */
 function planDocFor(projectCwd: string): string {
   try {
@@ -118,7 +183,7 @@ export type LogOutcome = 'generated' | 'skipped' | 'disabled' | 'error';
 // prose) and several parallel tracks per project, so the model interprets them
 // into one consistent schema the dashboard renders.
 function phasesInstruction(
-  planGlobs: string[],
+  planDocs: string,
   currentSessionId: string | null,
   worktree: { path: string; docRel: string } | null = null
 ): string {
@@ -139,7 +204,7 @@ worktree as the path). For this session's track the worktree's copy is current. 
 `
     : '';
   return `MAINTAIN THE PHASES MANIFEST (this powers the project dashboard — do it every run):
-Use Glob to find this project's plan/design docs (patterns: ${planGlobs.join(', ')}) and read them.
+${planDocs}
 ${worktreeDocs}Extract the development stages/phases. Docs differ: numbered "Phase N", "M1/M2" milestones,
 "SU-N"/"DS-N" stages, "✅ shipped" suffixes, a status blockquote, or plain prose — interpret
 each and normalize into this EXACT block, written once right AFTER the "# Session Log" header
@@ -201,7 +266,7 @@ function buildPrompt(opts: {
     : `Read CLAUDE.md (if present) for project context, and the session transcript at ${transcriptPath} if you need to understand intent.`;
 
   const planInstruction = editPlanFiles
-    ? `4. Find plan/design docs (glob patterns: ${planGlobs.join(', ')}) with Glob, and for objectives this session completed, tick their checkboxes ("- [ ]" -> "- [x]"). Only flip boxes you are confident are done.`
+    ? `4. In the plan/design docs named in step 5, for objectives this session completed, tick their checkboxes ("- [ ]" -> "- [x]"). Only flip boxes you are confident are done.`
     : '4. Do not modify plan or design files.';
 
   const skeleton = buildEntrySkeleton({
@@ -259,7 +324,7 @@ Your job:
 2. Use the git diff and recent commits below as the ground truth for what actually changed.
 ${writeInstruction}
 ${planInstruction}
-5. ${phasesInstruction(planGlobs, ctx.claudeSessionId, worktree ? { path: ctx.cwd, docRel: planDocRel } : null)}
+5. ${phasesInstruction(planDocsSentence(projectCwd, planGlobs, fileName), ctx.claudeSessionId, worktree ? { path: ctx.cwd, docRel: planDocRel } : null)}
 
 STRICT CONSTRAINTS:
 - Modify ONLY ${fileName}${editPlanFiles ? ' and the plan/design files you tick checkboxes in' : ''}. Touch no other file.
@@ -430,7 +495,7 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
     // Edits allowed only to the log file (+ plan files when checkbox-ticking is on).
     const allowedWrites = editPlanFiles ? [fileName, ...cfg.planGlobs] : [fileName];
     // Under the session's own login: its transcript is in that account's folder.
-    await runClaude(projectCwd, prompt, allowedWrites, { tag: { projectCwd, kind: 'session-log' }, account: ctx.account });
+    await runClaude(projectCwd, prompt, allowedWrites, { tag: { projectCwd, kind: 'session-log' }, account: ctx.account, model: cfg.model || undefined });
 
     // Verify the run actually wrote the log. A run can exit 0 without writing
     // (e.g. it got derailed), so don't report success or stamp on a no-write —
@@ -504,7 +569,7 @@ ONE entry in EXACTLY this format (fill the marker JSON's blockers/openItems with
 
 ${skeleton}
 
-${phasesInstruction(planGlobs, null)}
+${phasesInstruction(planDocsSentence(cwd, planGlobs, fileName), null)}
 
 STRICT CONSTRAINTS:
 - Create/modify ONLY ${fileName}. Touch no other file.
@@ -564,7 +629,7 @@ export async function generateProjectBackfill(opts: { cwd: string; transcriptPat
     });
 
     logger.info({ cwd }, 'project-log: backfilling project');
-    await runClaude(cwd, prompt, [cfg.fileName], { tag: { projectCwd: cwd, kind: 'session-log' } });
+    await runClaude(cwd, prompt, [cfg.fileName], { tag: { projectCwd: cwd, kind: 'session-log' }, model: cfg.model || undefined });
 
     // A run can exit 0 without writing the file (derailed); report error so the
     // dashboard surfaces it instead of silently flipping to "done".
@@ -589,7 +654,7 @@ function buildResyncPrompt(cwd: string, fileName: string, planGlobs: string[]): 
 Your ONLY job is to update the phases manifest block to reflect the CURRENT plan docs.
 Do NOT add, edit, reorder, or remove any dated log entries.
 
-${phasesInstruction(planGlobs, null)}
+${phasesInstruction(planDocsSentence(cwd, planGlobs, fileName), null)}
 
 STRICT CONSTRAINTS:
 - Modify ONLY the <!-- claude-remote-phases ... --> block inside ${fileName}. Touch no other file and no log entry.
@@ -612,6 +677,7 @@ export async function resyncProjectPhases(cwd: string): Promise<LogOutcome> {
     logger.info({ cwd }, 'project-log: re-syncing phases');
     await runClaude(cwd, buildResyncPrompt(cwd, cfg.fileName, cfg.planGlobs), [cfg.fileName], {
       tag: { projectCwd: cwd, kind: 'session-log' },
+      model: cfg.model || undefined,
     });
     // A no-op re-sync (already current) is still success; just confirm the file survived.
     if (!existsSync(logPath)) {

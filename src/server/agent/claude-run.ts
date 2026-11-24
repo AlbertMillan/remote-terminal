@@ -210,6 +210,11 @@ export interface SpawnOptions {
    * when unset; a bare spawnClaude uses the default account.
    */
   account?: string;
+  /**
+   * `--model` for this run; unset keeps the CLI's default. Passed through a
+   * shell (`shell: true`), so anything but a plain model name is ignored.
+   */
+  model?: string;
 }
 
 export interface RunOptions extends SpawnOptions {
@@ -272,6 +277,9 @@ export function builtinToolsFor(allowed: string[]): string[] {
  * the parsed result on a clean exit; rejects on non-zero exit / spawn error /
  * timeout.
  */
+// A model name or alias (`sonnet`, `claude-sonnet-5-5`, `opus[1m]`): nothing a shell would act on.
+const SAFE_MODEL = /^[A-Za-z0-9._\-[\]]+$/;
+
 export function spawnClaude(
   cwd: string,
   prompt: string,
@@ -322,6 +330,7 @@ export function spawnClaude(
         // A new session named up front, so the usage ledger can attribute its
         // transcript from the first line — before any envelope exists.
         ...(!options.resumeSessionId && options.sessionId ? ['--session-id', options.sessionId] : []),
+        ...(options.model && SAFE_MODEL.test(options.model) ? ['--model', options.model] : []),
         '--output-format',
         'json',
       ],

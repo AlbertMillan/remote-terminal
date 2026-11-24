@@ -57,6 +57,10 @@ export interface Config {
     timeoutMs: number; // kill a generation run after this long
     minTurnsToLog: number; // tiebreaker floor on transcript user-turns
     claudeCommand: string; // executable used for headless generation
+    // `--model` for the generation runs; empty means the CLI's default (Opus).
+    // The task is a diff summarised into a fixed format: a smaller model is
+    // plenty, and these are the most frequent headless runs there are.
+    model: string;
   };
   jobs: {
     // Kill a pipeline stage's `claude -p` run after this long.
@@ -123,6 +127,7 @@ const defaultConfig: Config = {
     timeoutMs: 180000,
     minTurnsToLog: 2,
     claudeCommand: 'claude',
+    model: 'sonnet',
   },
   jobs: {
     stageTimeoutMs: 1_200_000, // 20 minutes

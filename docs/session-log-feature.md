@@ -239,9 +239,16 @@ Single config block (`~/.claude-remote/config.json`), feature **off by default**
   "planGlobs": ["*plan*.md", "*design*.md", "docs/**/*.md"],
   "maxConcurrent": 1,
   "timeoutMs": 180000,
-  "minTurnsToLog": 2
+  "minTurnsToLog": 2,
+  "model": "sonnet"            // --model for every generation run; "" = CLI default (Opus)
 }
 ```
+
+The server expands `planGlobs` itself (`resolvePlanDocs`) and the prompt names the
+matching files, so a run reads them instead of searching. Searching was most of a
+run's tool calls (Nov 2026 profile: 174 Glob + 301 Grep over 172 runs). Driven only by
+the globs, so a new project needs no change; past 40 matches it falls back to asking
+the model to Glob.
 
 When `enabled` is false, `maybeLogSession` and the startup sweep are no-ops — the
 feature is fully inert, no behavioral change anywhere.
