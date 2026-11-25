@@ -60,6 +60,19 @@ class RemoteTerminalSession(
     }
 
     /**
+     * Output drawn at another grid (the server's catch-up snapshot at the PTY's size): fed at
+     * that size, then reflowed back to ours. The PTY is not told: its size stays where another
+     * viewer put it until this phone is used (ViewerResync).
+     */
+    fun replayAt(columns: Int, rows: Int, data: String) {
+        val ours = emulator.columns to emulator.rows
+        emulator.resize(columns.coerceAtLeast(4), rows.coerceAtLeast(4))
+        feed(data)
+        emulator.resize(ours.first, ours.second)
+        sink.screenUpdated()
+    }
+
+    /**
      * Paste text as a terminal paste: line breaks become Enter (CR), and when the program
      * asked for bracketed paste (Claude Code does) the text is bracketed, so a multi-line
      * paste or share lands in the prompt instead of submitting at every line.

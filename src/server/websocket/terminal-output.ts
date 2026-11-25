@@ -14,8 +14,13 @@
  *   (browser, PiP, Android) handles it as it handles any output.
  */
 
-/** RIS: a full terminal reset, scrollback included, before the snapshot redraws it. */
-export const RESET = '\x1bc';
+import { CATCH_UP_RESET } from '../../shared/protocol.js';
+
+/**
+ * RIS: a full terminal reset, scrollback included, before the snapshot redraws it. Clients
+ * recognise a catch-up by it (a viewer of another size replays the snapshot at the PTY's).
+ */
+export const RESET = CATCH_UP_RESET;
 
 export interface OutputSocket {
   readonly readyState: number;

@@ -106,6 +106,7 @@
     { "type": "session.error", "id": "2", "payload": { "message": "Too many sessions" } },
     { "type": "terminal.data", "payload": { "sessionId": "s-1", "data": "\u001b[32mok\u001b[0m\r\n" } },
     { "type": "terminal.exit", "payload": { "sessionId": "s-1", "exitCode": 0 } },
+    { "type": "terminal.resized", "payload": { "sessionId": "s-1", "cols": 48, "rows": 30 } },
     { "type": "category.created", "payload": { "category": "$category" } },
     { "type": "category.renamed", "payload": { "categoryId": "c-1", "name": "Work" } },
     { "type": "category.deleted", "payload": { "categoryId": "c-1" } },

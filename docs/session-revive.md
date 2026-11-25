@@ -26,6 +26,22 @@ was the alternative (reusing `session.open`) and it leaves a dead row behind eve
   the last attach. Attach subscribes and queues its snapshot in one tick, holding live output
   until the snapshot is sent (`heldData`), so no byte is lost or doubled. Rows stored before
   this format are raw logs; `storedToReplay()` tells them apart by `SNAPSHOT_MARKER`.
+- **Several viewers share one PTY size.** The last `terminal.resize` sets it. A viewer
+  still attached at another size (the PC tab while the phone views the session) gets output
+  drawn for the other width, and it lands in its own scrollback in the wrong cells: words
+  strewn at multiples of the phone's width, status-line fragments mid-history. So a resize
+  that changes the size sends `terminal.resized` to the session's other viewers
+  (`notifyResized()`). A viewer of another size marks itself outsized and **re-attaches on
+  its next use** (web: focus, visible, pointerdown, wheel, keystroke; app: input, back to
+  the foreground), which replays the mirror and sends its own size back. Never at once, or
+  two open viewers take the size from each other forever. The state lives in
+  `src/client/viewer-resync.ts` and the app's `ViewerResync.kt`; a fresh snapshot clears it.
+- **Snapshots are replayed at the size they were drawn at, then reflowed** (web client and
+  app alike). On the web the fit waits for the write's callback: xterm parses writes later
+  but resizes at once, so a fit right after `write()` parses the snapshot at the wrong size.
+  The backpressure catch-up (`CATCH_UP_RESET` + snapshot, `terminal-output.ts`) is drawn at
+  the PTY's size too: an outsized viewer replays it at the size `terminal.resized` named and
+  reflows locally (`fitLocally()`, `replayAt()`), without sending a resize.
 - **No `maxSessions` check for a stale row.** A stale row is already `status != 'terminated'`
   and so counts toward `countActiveSessions()`. Re-checking the cap here would make every
   session unrevivable after a restart at the limit.

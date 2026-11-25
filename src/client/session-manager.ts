@@ -25,6 +25,8 @@ import { StopRequests, currentAfterRevive, isLive } from './session-stop.js';
 import { AccountMenu } from './account-menu.js';
 import { SessionListView, openMobileSidebar } from './session-list-view.js';
 import { MobileNav } from './mobile-nav.js';
+import { ViewerResync } from './viewer-resync.js';
+import { CATCH_UP_RESET } from '../shared/protocol.js';
 import type {
   SessionInfo,
   SessionMovedPayload,
@@ -57,6 +59,8 @@ class SessionManager {
   private currentSessionId: string | null = null;
   private previousSessionId: string | null = null; // For reconnection (issue #7)
   private attachingSessionId: string | null = null; // Prevents duplicate attach requests
+  /** Another viewer resized the session on screen: re-attach on our next use (viewer-resync.ts). */
+  private viewerResync = new ViewerResync();
   private terminalMgr: TerminalManager; // Use imported module instead of window (issue #12)
 
   /** Badges, notification preferences and desktop notifications (session-notifications.ts). */
@@ -215,6 +219,16 @@ class SessionManager {
   }
 
   private setupEventListeners(): void {
+    // Using this browser again after another viewer resized the session (viewer-resync.ts).
+    const resync = () => this.resyncIfOutsized();
+    window.addEventListener('focus', resync);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') resync();
+    });
+    const terminalContainer = document.getElementById('terminal-container');
+    terminalContainer?.addEventListener('pointerdown', resync, { capture: true });
+    terminalContainer?.addEventListener('wheel', resync, { capture: true, passive: true });
+
     // Mobile menu toggle
     const mobileMenuBtn = document.getElementById('mobile-menu-btn');
     const sidebar = document.getElementById('sidebar');
@@ -412,6 +426,8 @@ class SessionManager {
       this.currentSessionId = null;
     }
     this.attachingSessionId = null;
+    // The reconnect re-attaches from scratch, which replays the screen anyway.
+    this.viewerResync.reset();
     // No answer is coming for a stop sent before the drop; keeping it would make the
     // next click on that session's Stop wait forever.
     this.stopRequests.clear();
@@ -500,6 +516,9 @@ class SessionManager {
         break;
       case 'terminal.exit':
         this.handleTerminalExit(message.payload);
+        break;
+      case 'terminal.resized':
+        this.handleTerminalResized(message.payload);
         break;
       case 'jobs.summary':
         this.jobOverlay.update(message.payload);
@@ -645,8 +664,10 @@ class SessionManager {
   }
 
   private handleSessionAttached(payload: { session: SessionInfo; scrollback: string }): void {
-    // Guard against duplicate attach responses (e.g., from race conditions)
-    const isAlreadyAttached = this.currentSessionId === payload.session.id;
+    // Guard against duplicate attach responses (e.g., from race conditions), unless this is
+    // our own re-attach after another viewer resized the session (viewer-resync.ts).
+    const { rebuild, linesFromBottom } = this.viewerResync.attached(payload.session.id, this.currentSessionId);
+    const isAlreadyAttached = !rebuild;
 
     this.currentSessionId = payload.session.id;
     this.attachingSessionId = null; // Clear in-flight flag
@@ -685,7 +706,9 @@ class SessionManager {
 
       // Write scrollback at the session's original dimensions so escape
       // sequences (cursor positioning, line wrapping) render correctly.
-      // Then fit to the current container and let xterm.js reflow.
+      // Then fit to the current container and let xterm.js reflow -- once the snapshot is
+      // parsed: xterm parses writes later but resizes at once, so a fit right after write()
+      // would parse the snapshot at our size instead.
       if (payload.scrollback) {
         const sessionCols = payload.session.cols;
         const sessionRows = payload.session.rows;
@@ -696,8 +719,11 @@ class SessionManager {
           this.terminalMgr.resize(sessionCols, sessionRows);
         }
 
-        this.terminalMgr.write(payload.scrollback);
-        this.terminalMgr.fit();
+        this.terminalMgr.write(payload.scrollback, () => {
+          this.terminalMgr.fit();
+          // A re-attach started by a scroll: back to about where the view was.
+          this.terminalMgr.scrollUp(linesFromBottom);
+        });
       }
 
       const notice = this.attachNotices.get(payload.session.id);
@@ -706,7 +732,8 @@ class SessionManager {
         this.terminalMgr.writeln(`\x1b[33m${notice.replace(/\r?\n/g, '\r\n')}\x1b[0m`);
       }
 
-      // Send initial resize
+      // Send initial resize. With a snapshot at another size this is still the session's
+      // (a no-op server-side); the fit after it is parsed sends ours.
       const dims = this.terminalMgr.getDimensions();
       this.sendTerminalResize(dims.cols, dims.rows);
     }
@@ -780,9 +807,35 @@ class SessionManager {
   }
 
   private handleTerminalData(payload: { sessionId: string; data: string }): void {
-    if (payload.sessionId === this.currentSessionId && this.terminalMgr) {
-      this.terminalMgr.write(payload.data);
+    if (payload.sessionId !== this.currentSessionId || !this.terminalMgr) return;
+    const ptySize = this.viewerResync.ptySize(this.currentSessionId);
+    if (ptySize && payload.data.startsWith(CATCH_UP_RESET)) {
+      // The server's catch-up snapshot is drawn at the PTY's size, which another viewer set:
+      // replay it there, then reflow to ours without taking the size (that waits for our
+      // next use, viewer-resync.ts).
+      this.terminalMgr.resizeLocally(ptySize.cols, ptySize.rows);
+      this.terminalMgr.write(payload.data, () => this.terminalMgr.fitLocally());
+      return;
     }
+    this.terminalMgr.write(payload.data);
+  }
+
+  private handleTerminalResized(payload: { sessionId: string; cols: number; rows: number }): void {
+    const size = { cols: payload.cols, rows: payload.rows };
+    this.viewerResync.resized(payload.sessionId, size, this.currentSessionId, this.terminalMgr.getDimensions());
+  }
+
+  /**
+   * Re-attach the session on screen if another viewer resized it: the snapshot replays the
+   * server's ScreenMirror (drawn at every size in order), and the attach then sends our size,
+   * so the PTY comes back to this browser with clean scrollback.
+   */
+  private resyncIfOutsized(): void {
+    const canAttach = !this.attachingSessionId && this.currentIsLive();
+    const sessionId = this.viewerResync.take(this.currentSessionId, canAttach, this.terminalMgr.linesFromBottom());
+    if (!sessionId) return;
+    this.attachingSessionId = sessionId;
+    this.send('session.attach', { sessionId });
   }
 
   private handleTerminalExit(payload: { sessionId: string; exitCode: number }): void {
@@ -1077,6 +1130,7 @@ class SessionManager {
   sendTerminalData(data: string): void {
     if (this.currentIsLive()) {
       this.send('terminal.data', { sessionId: this.currentSessionId, data });
+      this.resyncIfOutsized();
     }
   }
 

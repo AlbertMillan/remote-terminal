@@ -297,6 +297,13 @@ object ServerType {
     const val SESSION_ERROR = "session.error"
     const val TERMINAL_DATA = "terminal.data"
     const val TERMINAL_EXIT = "terminal.exit"
+    const val TERMINAL_RESIZED = "terminal.resized"
+
+    /**
+     * RIS. A `terminal.data` starting with it is the server's catch-up for a socket that fell
+     * behind: a snapshot drawn at the PTY's size (`CATCH_UP_RESET` in shared/protocol.ts).
+     */
+    const val CATCH_UP_RESET = "\u001bc"
     const val CATEGORY_CREATED = "category.created"
     const val CATEGORY_RENAMED = "category.renamed"
     const val CATEGORY_DELETED = "category.deleted"
@@ -387,6 +394,7 @@ object Protocol {
         ServerType.SESSION_ERROR to s<SessionErrorPayload>(),
         ServerType.TERMINAL_DATA to s<TerminalDataPayload>(),
         ServerType.TERMINAL_EXIT to s<ExitPayload>(),
+        ServerType.TERMINAL_RESIZED to s<TerminalResizePayload>(),
         ServerType.CATEGORY_CREATED to s<CategoryCreatedPayload>(),
         ServerType.CATEGORY_RENAMED to s<CategoryRenamePayload>(),
         ServerType.CATEGORY_DELETED to s<CategoryIdPayload>(),

@@ -21,7 +21,9 @@ interface ITerminal {
   cols: number;
   rows: number;
   open(container: HTMLElement): void;
-  write(data: string): void;
+  /** Parsed later, not in this call: `callback` runs once it is. */
+  write(data: string, callback?: () => void): void;
+  readonly buffer: { readonly active: { readonly baseY: number; readonly viewportY: number } };
   /** Sends `data` as typed input, bracketed when the program enabled bracketed paste. */
   paste(data: string): void;
   writeln(data: string): void;
@@ -107,6 +109,8 @@ export class TerminalManager {
   private onDataCallback: ((data: string) => void) | null = null;
   private onResizeCallback: ((cols: number, rows: number) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  /** A local reflow only (fitLocally): onResize is not reported, so the PTY keeps its size. */
+  private silentResize = false;
   /** Removes the file paste/drop listeners with the terminal. */
   private fileListeners: AbortController | null = null;
   /** Removes the drag-to-scroll listeners (touch-scroll.ts) with the terminal. */
@@ -217,7 +221,7 @@ export class TerminalManager {
 
     // Handle resize
     this.terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-      if (this.onResizeCallback) {
+      if (this.onResizeCallback && !this.silentResize) {
         this.onResizeCallback(cols, rows);
       }
     });
@@ -264,9 +268,50 @@ export class TerminalManager {
     this.terminal.focus();
   }
 
-  write(data: string): void {
-    if (this.terminal) {
-      this.terminal.write(data);
+  /**
+   * xterm parses writes later, but applies resize() at once: whatever must follow the parse
+   * (a fit after replaying a snapshot at another size) goes in `done`. It runs only if this
+   * terminal is still the one on screen.
+   */
+  write(data: string, done?: () => void): void {
+    const terminal = this.terminal;
+    if (!terminal) return;
+    if (!done) {
+      terminal.write(data);
+      return;
+    }
+    terminal.write(data, () => {
+      if (this.terminal === terminal) done();
+    });
+  }
+
+  /** How many rows the view is scrolled up from the bottom. */
+  linesFromBottom(): number {
+    const active = this.terminal?.buffer.active;
+    return active ? Math.max(0, active.baseY - active.viewportY) : 0;
+  }
+
+  /** Scrolls the view `lines` rows up from where it is. */
+  scrollUp(lines: number): void {
+    if (lines > 0) this.terminal?.scrollLines(-lines);
+  }
+
+  /** fit() without telling the server: the PTY keeps the size another viewer gave it. */
+  fitLocally(): void {
+    this.silently(() => this.fit());
+  }
+
+  /** resize() without telling the server, as fitLocally(). */
+  resizeLocally(cols: number, rows: number): void {
+    this.silently(() => this.resize(cols, rows));
+  }
+
+  private silently(fn: () => void): void {
+    this.silentResize = true;
+    try {
+      fn();
+    } finally {
+      this.silentResize = false;
     }
   }
 

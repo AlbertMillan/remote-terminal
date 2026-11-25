@@ -79,6 +79,7 @@ export const SERVER_MESSAGE_TYPES = [
   'session.error',
   'terminal.data',
   'terminal.exit',
+  'terminal.resized',
   'category.created',
   'category.renamed',
   'category.deleted',

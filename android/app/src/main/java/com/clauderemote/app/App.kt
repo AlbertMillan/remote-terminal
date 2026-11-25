@@ -112,6 +112,8 @@ class App : Application() {
                 _foreground.value = true
                 backgroundClose?.cancel()
                 sendAppState()
+                // Back on screen is a use: catch up if another viewer resized the open session.
+                sessions.resumed()
                 if (settings.server == null) return
                 if (connection.state.value is Connection.State.Idle) connectToServer()
                 else connection.reconnectNow()

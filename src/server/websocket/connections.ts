@@ -126,6 +126,22 @@ export function detachFromSession(connection: ClientConnection): void {
   logger.debug({ clientId: connection.id, sessionId }, 'Client detached from session');
 }
 
+/**
+ * Tells every viewer of `sessionId` but `except` that its PTY is now `cols`x`rows`. Output
+ * after this is drawn at that size; a viewer of another size lands it in the wrong cells, so
+ * it re-attaches (replaying the ScreenMirror) when it is used again.
+ */
+export function notifyResized(sessionId: string, cols: number, rows: number, except: ClientConnection): void {
+  for (const conn of connections.values()) {
+    if (conn === except || conn.attachedSession !== sessionId || conn.ws.readyState !== WS_OPEN) continue;
+    // Best effort: output already drawn at the old size goes first, unless it is held (an
+    // attach waiting for its snapshot) or dropped (behind). The order is cosmetic: the
+    // viewer only marks itself outsized and re-attaches on use, which replaces it all.
+    conn.output?.flush();
+    conn.ws.send(createMessage('terminal.resized', { sessionId, cols, rows }));
+  }
+}
+
 /** How many browsers other than `except` are attached to any of `sessionIds`. */
 export function viewersOf(sessionIds: string[], except: ClientConnection): number {
   const ids = new Set(sessionIds);

@@ -83,6 +83,9 @@ class SessionStore(
     /** The open session while its re-attach after a reconnect is in flight. */
     private var reattaching: String? = null
 
+    /** Another viewer resized the open session: re-attach on the next use here ([ViewerResync]). */
+    private val viewerResync = ViewerResync()
+
     /** Whether `session.list` has answered since the last connect (rows before it are stale). */
     private var listFresh = false
 
@@ -92,6 +95,8 @@ class SessionStore(
     private fun onConnected() {
         listFresh = false
         settleWhenListed = null
+        // The re-attach below replays the screen anyway.
+        viewerResync.reset()
         connection.send(ClientType.SESSION_LIST)
         connection.send(ClientType.CATEGORY_LIST)
         reattaching = _open.value?.session?.id
@@ -237,6 +242,20 @@ class SessionStore(
         // Not attached on this socket yet: the server would only answer "Not attached".
         if (reattaching == sessionId) return
         connection.send(ClientType.TERMINAL_DATA, Protocol.encode(TerminalDataPayload(sessionId, data)))
+        resyncIfOutsized()
+    }
+
+    /** The app came back to the foreground: a use, as input is. */
+    fun resumed() = resyncIfOutsized()
+
+    /**
+     * Re-attach the open session if another viewer resized it: the snapshot replays the
+     * server's screen and show() sends this grid back.
+     */
+    private fun resyncIfOutsized() {
+        val onScreen = _open.value?.session?.id
+        val canAttach = _pending.value == null && reattaching == null
+        viewerResync.take(onScreen, canAttach)?.let { attach(it, force = true) }
     }
 
     override fun resize(sessionId: String, columns: Int, rows: Int) {
@@ -264,7 +283,18 @@ class SessionStore(
             ServerType.TERMINAL_DATA -> {
                 val data = Protocol.decode<TerminalDataPayload>(env.payload) ?: return
                 val open = _open.value ?: return
-                if (open.session.id == data.sessionId) open.terminal.feed(data.data)
+                if (open.session.id != data.sessionId) return
+                val pty = viewerResync.ptySize(open.session.id)
+                // The server's catch-up snapshot (RIS first, terminal-output.ts) is drawn at the
+                // PTY's size, which another viewer set: replay it there, keeping our grid.
+                if (pty != null && data.data.startsWith(ServerType.CATCH_UP_RESET)) open.terminal.replayAt(pty.columns, pty.rows, data.data)
+                else open.terminal.feed(data.data)
+            }
+            ServerType.TERMINAL_RESIZED -> {
+                val p = Protocol.decode<TerminalResizePayload>(env.payload) ?: return
+                viewerResync.resized(
+                    p.sessionId, ViewerResync.Size(p.cols, p.rows), _open.value?.session?.id, ViewerResync.Size(columns, rows),
+                )
             }
             ServerType.SESSION_ATTACHED -> {
                 val p = Protocol.decode<SessionAttachedPayload>(env.payload) ?: return
@@ -338,8 +368,14 @@ class SessionStore(
         val terminal = if (scrollback == null && current != null && current.session.id == session.id) {
             current.terminal.also { it.revived() }
         } else {
-            RemoteTerminalSession(session.id, columns, rows, this).also {
+            // The snapshot is drawn at the session's size: replay it there, then updateSize()
+            // below reflows to this grid, as the web client does. Fed at our grid instead,
+            // a snapshot drawn on a wider screen lands in the wrong cells.
+            val replay = !scrollback.isNullOrEmpty() && session.cols >= 4 && session.rows >= 4
+            RemoteTerminalSession(session.id, if (replay) session.cols else columns, if (replay) session.rows else rows, this).also {
                 if (!scrollback.isNullOrEmpty()) it.feed(scrollback)
+                // A fresh snapshot holds the whole screen: no stale outsized mark survives it.
+                viewerResync.attached(session.id)
             }
         }
         _open.value = Open(session, terminal)

@@ -258,6 +258,24 @@ export interface TerminalExitPayload {
   exitCode: number;
 }
 
+/**
+ * Another viewer resized the session's PTY. Output from now on is drawn at this size, so a
+ * viewer of another size must re-attach (replaying the server's screen) before it takes the
+ * size back, or its scrollback keeps text drawn for the other width.
+ */
+/**
+ * RIS (full reset, scrollback included). A `terminal.data` starting with it is the server's
+ * catch-up for a socket that fell behind (`terminal-output.ts`): the session's screen as a
+ * snapshot drawn at the PTY's size, which a viewer of another size replays at that size.
+ */
+export const CATCH_UP_RESET = '\x1bc';
+
+export interface TerminalResizedPayload {
+  sessionId: string;
+  cols: number;
+  rows: number;
+}
+
 export interface CategoryCreatedPayload {
   category: CategoryInfo;
 }
@@ -368,6 +386,7 @@ export interface ServerPayloads {
   'session.error': ErrorPayload;
   'terminal.data': TerminalDataPayload;
   'terminal.exit': TerminalExitPayload;
+  'terminal.resized': TerminalResizedPayload;
   'category.created': CategoryCreatedPayload;
   'category.renamed': CategoryRenamedPayload;
   'category.deleted': CategoryDeletedPayload;

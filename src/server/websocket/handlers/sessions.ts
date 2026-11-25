@@ -36,6 +36,7 @@ import {
   WS_OPEN,
   attachToSession,
   detachFromSession,
+  notifyResized,
   sessionToInfo,
   storedSessionFields,
   broadcastSessionUpdate,
@@ -360,7 +361,12 @@ export function handleTerminalResize(connection: ClientConnection, message: Clie
     return;
   }
 
-  sessionManager.resizeSession(payload.sessionId, cols, rows);
+  const before = sessionManager.getSession(payload.sessionId);
+  const changed = !!before && (before.cols !== cols || before.rows !== rows);
+  if (sessionManager.resizeSession(payload.sessionId, cols, rows) && changed) {
+    // Every viewer shares one PTY: the others now get output drawn at this size.
+    notifyResized(payload.sessionId, cols, rows, connection);
+  }
 }
 
 // Fork handlers
