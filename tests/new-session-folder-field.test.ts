@@ -53,6 +53,11 @@ describe('ghostFor', () => {
     expect(ghostFor('', c)).toBe('');
     expect(ghostFor('~/NodeProjects/ma', null)).toBe('');
   });
+
+  it('shows nothing once a folder is chosen, so Tab leaves the field', () => {
+    expect(ghostFor('~/NodeProjects/', c)).toBe('');
+    expect(ghostFor('~\\NodeProjects\\', c)).toBe('');
+  });
 });
 
 describe('tildeForm', () => {

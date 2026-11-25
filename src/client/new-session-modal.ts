@@ -81,11 +81,17 @@ function fold(path: string): string {
  * path inside the home folder compares in its `~/…` form, the form matches are named in.
  */
 export function ghostFor(value: string, completion: FolderCompletion | null): string {
-  if (!value || !completion || completion.mode !== 'path') return '';
+  // A value ending in a separator is a chosen folder: no ghost, so Tab can leave the field
+  // (`complete()`) instead of descending into its first child forever.
+  if (!value || endsInSeparator(value) || !completion || completion.mode !== 'path') return '';
   const top = completion.items[0];
   const typed = tildeForm(value, completion.home);
   if (!top || !fold(top.display).startsWith(fold(typed))) return '';
   return `${top.display.slice(typed.length)}/`;
+}
+
+export function endsInSeparator(value: string): boolean {
+  return /[\\/]$/.test(value);
 }
 
 /** A pasted absolute path inside the home folder, as `~/…`; anything else unchanged. */
@@ -421,7 +427,11 @@ export class NewSessionModal {
     void this.refreshDefaultAccount();
   }
 
-  /** Tab: fill the default folder, the highlighted row, or the ghost. Otherwise Tab moves on. */
+  /**
+   * Tab: fill the default folder, the highlighted row, or the ghost. Otherwise Tab moves on,
+   * as it does once the field holds a chosen folder (`…/`): typing a letter or an arrow key
+   * still descends, but Tab must not, or the dialog can't be finished from the keyboard.
+   */
   private complete(): boolean {
     const input = this.cwdInput;
     const c = this.completion;
@@ -435,6 +445,7 @@ export class NewSessionModal {
       this.pick(this.activeIndex, this.activeIndex < c.items.length);
       return true;
     }
+    if (endsInSeparator(input.value)) return false;
     if (ghostFor(input.value, c) || (c.mode === 'path' && c.items.length === 1)) {
       this.pick(0, true);
       return true;
