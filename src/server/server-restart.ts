@@ -8,6 +8,7 @@ import { createLogger } from './utils/logger.js';
 import { isAllowedWebSocketOrigin } from './websocket/origin.js';
 import { extractIpFromRequest, verifyTailscaleConnection } from './auth/tailscale.js';
 import { buildProject, type BuildResult } from './projects/project-build.js';
+import { deleteReviveList, writeReviveList } from './sessions/revive-on-boot.js';
 
 const logger = createLogger('server-restart');
 const execFileAsync = promisify(execFile);
@@ -21,8 +22,10 @@ const execFileAsync = promisify(execFile);
  * it could start the server again. The VBS hands off to restart-server.ps1 in its
  * own process tree, which stops this server, waits for the port and starts dist/.
  *
- * Sessions survive as stale rows and revive from the sidebar, exactly as after a
- * manual restart: nothing here marks them terminated.
+ * After a plain Restart, sessions survive as stale rows and revive from the sidebar,
+ * exactly as after a manual restart: nothing here marks them terminated. Build &
+ * restart also parks the running ones and lists them for the next boot to revive
+ * (sessions/revive-on-boot.ts, project/revive-after-build-restart.md).
  */
 
 /** Changes on every boot, so the client can tell the new server from the old one. */
@@ -32,7 +35,14 @@ export const BOOT_ID = randomUUID();
 const LAUNCHER_PORT = 4220;
 
 /** How long to let the 202 reach the browser before the server is killed. */
-const LAUNCH_DELAY_MS = 300;
+export const LAUNCH_DELAY_MS = 300;
+
+/**
+ * Still alive this long after launching restart-server.vbs, the restart failed (the script
+ * could not stop this process): recover as for a launcher that never started. The script
+ * kills the server within seconds when it works.
+ */
+export const RESTART_WATCHDOG_MS = 60_000;
 
 export interface RestartAvailability {
   canRestart: boolean;
@@ -48,10 +58,45 @@ export interface ServerRestartDeps {
   entryScript?: string;
   platform?: NodeJS.Platform;
   build?: (cwd: string) => Promise<BuildResult>;
-  launch?: (vbsPath: string) => void;
+  /** Starts restart-server.vbs; `onFailure` runs if it could not be started (the server stays up). */
+  launch?: (vbsPath: string, onFailure: () => void) => void;
   verify?: (ip: string) => Promise<unknown>;
   /** The build-state check; by default one built from dist/build-info.json at registration. */
   buildChecker?: BuildStateChecker;
+  /**
+   * The running sessions Build & restart parks for the next boot to revive. Without it
+   * (tests, or no session manager) Build & restart leaves sessions stale as Restart does.
+   */
+  sessions?: RestartSessions;
+}
+
+/** project/revive-after-build-restart.md */
+export interface RestartSessions {
+  /** Where the revive list is written: the data dir the next boot reads. */
+  dataDir: string;
+  /** The running sessions to bring back, forks excluded. */
+  targets(): string[];
+  /** Persist each one's scrollback and kill its shell; the ids parked. */
+  park(ids: string[]): Promise<string[]>;
+  /** Bring them back in this process: the launcher failed, so no new server will. */
+  revive(ids: string[]): void;
+}
+
+/**
+ * Build & restart's half of reviving sessions: write the list, then park them. Written
+ * first, and naming every running session: one that fails to park dies with the hard
+ * kill anyway and still comes back, only without its scrollback. Returns the listed ids.
+ */
+export async function parkSessionsForRestart(sessions: RestartSessions): Promise<string[]> {
+  const ids = sessions.targets();
+  if (ids.length === 0) {
+    deleteReviveList(sessions.dataDir);
+    return [];
+  }
+  writeReviveList(sessions.dataDir, ids);
+  const parked = await sessions.park(ids);
+  logger.info({ parked: parked.length, running: ids.length }, 'Parked sessions to revive after Build & restart');
+  return ids;
 }
 
 export function restartAvailability(deps: ServerRestartDeps): RestartAvailability {
@@ -305,9 +350,12 @@ export function restartHint(state: BuildState | undefined): string {
   return '';
 }
 
-function launchDetached(vbsPath: string): void {
+function launchDetached(vbsPath: string, onFailure: () => void): void {
   const child = spawn('wscript.exe', [vbsPath], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', (error) => logger.error({ error: error.message }, 'restart launcher failed to spawn'));
+  child.on('error', (error) => {
+    logger.error({ error: error.message }, 'restart launcher failed to spawn');
+    onFailure();
+  });
   child.unref();
 }
 
@@ -315,8 +363,9 @@ export function registerServerRestartRoutes(app: FastifyInstance, deps: ServerRe
   const build = deps.build ?? buildProject;
   const launch = deps.launch ?? launchDetached;
   const verify = deps.verify ?? verifyTailscaleConnection;
-  // Once set it never clears: a launched restart ends this process. A failed
-  // build clears it, since the server stays up.
+  // A launched restart ends this process, so it normally never clears. A failed
+  // build, a launcher that could not start, or the restart watchdog clears it,
+  // since the server stays up.
   let busy = false;
 
   // The build this process runs is the stamp in dist/ *now*, at boot — read
@@ -375,7 +424,40 @@ export function registerServerRestartRoutes(app: FastifyInstance, deps: ServerRe
 
     const vbsPath = join(deps.projectRoot, 'restart-server.vbs');
     logger.info({ withBuild }, 'restarting server');
-    setTimeout(() => launch(vbsPath), LAUNCH_DELAY_MS);
+    // Only Build & restart brings sessions back (project/revive-after-build-restart.md).
+    // They are parked after the 202 is sent, so the browser gets its answer first.
+    const sessions = withBuild ? deps.sessions : undefined;
+    setTimeout(() => {
+      void (async () => {
+        let listed: string[] = [];
+        if (sessions) {
+          try {
+            listed = await parkSessionsForRestart(sessions);
+          } catch (error) {
+            logger.warn({ error }, 'Could not park sessions for Build & restart; restarting anyway');
+          }
+        }
+        // No new server is coming: bring back what was parked, and allow a retry. Either the
+        // launcher never started, or this process outlived the watchdog (the script ran but
+        // could not stop it) — without the watchdog that leaves every session parked and
+        // every retry refused as "in progress". Once only, whichever comes first.
+        let recovered = false;
+        const recover = (why: string) => {
+          if (recovered) return;
+          recovered = true;
+          clearTimeout(watchdog);
+          logger.warn({ why }, 'Restart did not happen; the server stays up');
+          busy = false;
+          checker.invalidate();
+          if (!sessions) return;
+          deleteReviveList(sessions.dataDir);
+          sessions.revive(listed);
+        };
+        const watchdog = setTimeout(() => recover('still running after the restart was launched'), RESTART_WATCHDOG_MS);
+        watchdog.unref?.();
+        launch(vbsPath, () => recover('the launcher could not start'));
+      })();
+    }, LAUNCH_DELAY_MS);
     return reply.status(202).send({ restarting: true, built: withBuild, bootId: BOOT_ID });
   });
 }

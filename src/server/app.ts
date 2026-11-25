@@ -27,6 +27,7 @@ import { registerAccessGate } from './auth/access-gate.js';
 import { notificationService, type NotificationType } from './notifications/service.js';
 import { setClaudeSessionId, getSession as getSessionFromDb, getAllSessions as getAllSessionsFromDb } from './db/queries.js';
 import { cleanupOrphanedForkFiles, sweepUnloggedSessions } from './sessions/manager.js';
+import { reviveListed, reviveSessionsFromRestart } from './sessions/revive-on-boot.js';
 import { generateSessionLogForced, generateProjectBackfill, resyncProjectPhases } from './sessions/project-log.js';
 import { discoverProjects, findProjectByCwd, getProjectBoard } from './projects/project-discovery.js';
 import { hookCwdToStore, pathKey } from './utils/paths.js';
@@ -54,6 +55,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const logger = createLogger('app');
+
+/** Revive one parked session in place; throws its refusal (sessions/revivable.ts). */
+function reviveById(id: string): void {
+  sessionManager.reviveSession({ id });
+}
 
 export async function createApp(): Promise<FastifyInstance> {
   // Load configuration
@@ -184,6 +190,11 @@ export async function createApp(): Promise<FastifyInstance> {
     cliPath: join(projectRoot, 'scripts', 'cr-session.mjs'),
   });
 
+  // Sessions the last Build & restart parked come back before the server listens, so the
+  // browser's reload finds them live (project/revive-after-build-restart.md). After
+  // configureSessionEnv, or every revived PTY lacks the server URL and its CLI.
+  reviveSessionsFromRestart(config.persistence.dataDir, reviveById);
+
   logger.debug({ staticPath }, 'Serving static files from');
 
   // Register static file serving
@@ -241,7 +252,20 @@ export async function createApp(): Promise<FastifyInstance> {
   // File paths printed in a terminal, opened from the browser (sessions/session-files.ts).
   registerSessionFileRoutes(app);
   registerPlanUsageRoutes(app, { runningSessions: () => sessionManager.getRunningSessions() });
-  registerServerRestartRoutes(app, { projectRoot, port: config.server.port });
+  registerServerRestartRoutes(app, {
+    projectRoot,
+    port: config.server.port,
+    sessions: {
+      dataDir: config.persistence.dataDir,
+      targets: () => sessionManager.restartTargets(),
+      park: (ids) => sessionManager.parkForRestart(ids),
+      // A session that failed to park is still running: skip it, or its revive is refused.
+      revive: (ids) => {
+        const parked = ids.filter((id) => !sessionManager.isRunning(id));
+        for (const id of reviveListed(parked, reviveById)) broadcastSessionRow(id);
+      },
+    },
+  });
   registerServerSettingsRoutes(app);
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);

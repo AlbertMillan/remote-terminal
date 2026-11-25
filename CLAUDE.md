@@ -65,6 +65,8 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   parks sessions `idle`, never `terminated`, so they can revive.
 - Revive is **in place** (same id, name, order) and seeds from `restoreScrollbackRaw(id)`,
   or the persisted scrollback is dropped. No `maxSessions` check there.
+- Only Build & restart writes `revive-on-boot.json` (parking first, since the restart is a
+  hard kill); boot revives it after `configureSessionEnv()`, or the PTYs lack the CLI.
 - A rejected `session.attach` clears the client's `attachingSessionId`, or that session
   never gets a terminal again.
 - History delete unlinks a transcript only if **no surviving entry** references it (index

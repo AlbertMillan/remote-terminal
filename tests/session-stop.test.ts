@@ -289,3 +289,48 @@ describe('stopSession', () => {
     expect(ptys).toHaveLength(2);
   });
 });
+
+describe('Build & restart parking (project/revive-after-build-restart.md)', () => {
+  it('targets every running session but forks and exited shells', async () => {
+    running(PARENT);
+    running(CHILD, { spawnedBy: PARENT });
+    running(OTHER);
+    rows.get(OTHER)!.isFork = true;
+    const EXITED = '55555555-5555-4555-8555-555555555555';
+    running(EXITED);
+    // Its own shell exits, found through the session rather than by creation order.
+    const exitedPty = manager.getSession(EXITED)!.pty as unknown as FakePty;
+    for (const cb of [...exitedPty.exits]) cb({ exitCode: 0 });
+
+    expect(manager.restartTargets().sort()).toEqual([PARENT, CHILD].sort());
+  });
+
+  it('parks each idle with its scrollback, writes no session-log entry, and revive brings it back', async () => {
+    running(PARENT);
+    running(OTHER);
+    await settle();
+
+    expect(await manager.parkForRestart([PARENT, OTHER])).toEqual([PARENT, OTHER]);
+
+    expect(rows.get(PARENT)?.status).toBe('idle');
+    expect(manager.getSession(PARENT)).toBeUndefined();
+    expect(persistScrollback).toHaveBeenCalledWith(PARENT, expect.stringContaining('$'));
+    expect(generateSessionLog).not.toHaveBeenCalled();
+
+    manager.reviveSession({ id: PARENT });
+    expect(manager.getSession(PARENT)).toBeDefined();
+  });
+
+  it('one session failing to park does not stop the rest', async () => {
+    running(PARENT);
+    running(OTHER);
+    await settle();
+    persistScrollback.mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+
+    expect(await manager.parkForRestart([PARENT, OTHER])).toEqual([OTHER]);
+    expect(manager.getSession(PARENT)).toBeDefined();
+    expect(manager.getSession(OTHER)).toBeUndefined();
+  });
+});

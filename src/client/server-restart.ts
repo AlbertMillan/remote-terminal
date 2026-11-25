@@ -104,7 +104,7 @@ export class ServerRestartControl {
       const unsaved = this.unsavedTabs();
       text.textContent =
         (build
-          ? 'Run npm run build, then restart if it passes? Every open terminal will close.'
+          ? 'Run npm run build, then restart if it passes? Running sessions are resumed after the restart; a reply in progress is interrupted.'
           : 'Restart the server now? Every open terminal will close.') +
         (unsaved.length ? ` Unsaved changes on ${unsaved.join(', ')} will be lost.` : '');
     }

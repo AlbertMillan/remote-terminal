@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import Fastify from 'fastify';
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -9,12 +9,16 @@ import {
   BUILD_INPUTS,
   createBuildStateChecker,
   isServerRoot,
+  LAUNCH_DELAY_MS,
   readBuildStamp,
+  RESTART_WATCHDOG_MS,
   registerServerRestartRoutes,
   restartAvailability,
   restartHint,
+  type RestartSessions,
   type ServerRestartDeps,
 } from '../src/server/server-restart.js';
+import { reviveListPath, takeReviveList, writeReviveList } from '../src/server/sessions/revive-on-boot.js';
 // @ts-expect-error — a plain .mjs build script, no types
 import { BUILD_INPUTS as SCRIPT_BUILD_INPUTS, buildInfo, workingTreeId } from '../scripts/write-build-info.mjs';
 import { buildView, formatBuiltAt, waitForNewBoot, type BuildStatus, type BuildText, type ServerStatus } from '../src/client/server-restart.js';
@@ -110,7 +114,7 @@ describe('POST /api/server/restart', () => {
     const unverified = await appWith(deps({ verify: async () => null }));
     const res = await unverified.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN });
     expect(res.statusCode).toBe(403);
-    vi.runAllTimers();
+    vi.advanceTimersByTime(LAUNCH_DELAY_MS);
     expect(d.launch).not.toHaveBeenCalled();
   });
 
@@ -121,12 +125,12 @@ describe('POST /api/server/restart', () => {
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ restarting: true, built: false, bootId: BOOT_ID });
     expect(d.build).not.toHaveBeenCalled();
-    vi.runAllTimers();
-    expect(d.launch).toHaveBeenCalledWith(join(root, 'restart-server.vbs'));
+    vi.advanceTimersByTime(LAUNCH_DELAY_MS);
+    expect(d.launch).toHaveBeenCalledWith(join(root, 'restart-server.vbs'), expect.any(Function));
 
     const again = await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN });
     expect(again.statusCode).toBe(409);
-    vi.runAllTimers();
+    vi.advanceTimersByTime(LAUNCH_DELAY_MS);
     expect(d.launch).toHaveBeenCalledTimes(1);
   });
 
@@ -138,7 +142,7 @@ describe('POST /api/server/restart', () => {
     });
     expect(res.statusCode).toBe(500);
     expect(res.json().detail).toMatch(/TS2304/);
-    vi.runAllTimers();
+    vi.advanceTimersByTime(LAUNCH_DELAY_MS);
     expect(failing.launch).not.toHaveBeenCalled();
 
     // The server stayed up, so a retry after fixing the build goes through.
@@ -148,8 +152,141 @@ describe('POST /api/server/restart', () => {
     });
     expect(retry.statusCode).toBe(202);
     expect(retry.json().built).toBe(true);
-    vi.runAllTimers();
+    vi.advanceTimersByTime(LAUNCH_DELAY_MS);
     expect(failing.launch).toHaveBeenCalledTimes(1);
+  });
+
+  describe('reviving sessions (project/revive-after-build-restart.md)', () => {
+    /**
+     * A launcher that records its call and resolves `launched`, so a test awaits the
+     * route's async parking by its outcome rather than by counting microtask ticks.
+     * `fails`: the launcher reports it could not start.
+     */
+    function launcher(order: string[] = [], fails = false) {
+      let done!: (onFailure: () => void) => void;
+      const launched = new Promise<() => void>((resolve) => (done = resolve));
+      const launch = vi.fn((_path: string, onFailure: () => void) => {
+        order.push('launch');
+        if (fails) onFailure();
+        done(onFailure);
+      });
+      return { launch, launched };
+    }
+
+    /** Fire the delayed launch and wait until it has run. */
+    async function fireLaunch(launched: Promise<unknown>) {
+      vi.advanceTimersByTime(LAUNCH_DELAY_MS);
+      return launched;
+    }
+
+    function sessionsFake(running: string[]) {
+      const order: string[] = [];
+      const sessions: RestartSessions & { revive: ReturnType<typeof vi.fn> } = {
+        dataDir: root,
+        targets: () => running,
+        park: vi.fn(async (ids: string[]) => {
+          // The list is on disk before anything is killed.
+          order.push(existsSync(reviveListPath(root)) ? 'listed' : 'unlisted');
+          order.push(`park ${ids.join(',')}`);
+          return ids;
+        }),
+        revive: vi.fn(),
+      };
+      return { sessions, order };
+    }
+
+    const BUILD = { method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN, payload: { build: true } } as const;
+
+    it('Build & restart lists and parks the running sessions before launching', async () => {
+      const { sessions, order } = sessionsFake(['a', 'b']);
+      const { launch, launched } = launcher(order);
+      const app = await appWith(deps({ sessions, launch }));
+      const res = await app.inject(BUILD);
+      expect(res.statusCode).toBe(202);
+      // Nothing is parked before the reply.
+      expect(order).toEqual([]);
+      await fireLaunch(launched);
+      expect(order).toEqual(['listed', 'park a,b', 'launch']);
+      expect(takeReviveList(root)).toEqual(['a', 'b']);
+    });
+
+    it('a plain Restart parks and lists nothing', async () => {
+      const { sessions, order } = sessionsFake(['a']);
+      const { launch, launched } = launcher();
+      const app = await appWith(deps({ sessions, launch }));
+      await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN });
+      await fireLaunch(launched);
+      expect(order).toEqual([]);
+      expect(existsSync(reviveListPath(root))).toBe(false);
+      expect(launch).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed build parks and lists nothing', async () => {
+      const { sessions, order } = sessionsFake(['a']);
+      const d = deps({ sessions, build: vi.fn(async () => ({ ran: true, ok: false, detail: 'TS2304' })) });
+      const app = await appWith(d);
+      await app.inject(BUILD);
+      // Nothing was scheduled: the route returned 500 before the delayed launch.
+      vi.advanceTimersByTime(LAUNCH_DELAY_MS);
+      expect(d.launch).not.toHaveBeenCalled();
+      expect(order).toEqual([]);
+      expect(existsSync(reviveListPath(root))).toBe(false);
+    });
+
+    it('with nothing running, an old list is removed rather than left for the next boot', async () => {
+      writeReviveList(root, ['old']);
+      const { sessions } = sessionsFake([]);
+      const { launch, launched } = launcher();
+      const app = await appWith(deps({ sessions, launch }));
+      await app.inject(BUILD);
+      await fireLaunch(launched);
+      expect(existsSync(reviveListPath(root))).toBe(false);
+    });
+
+    it('a launcher that fails to start revives the parked sessions here and allows a retry', async () => {
+      const { sessions } = sessionsFake(['a', 'b']);
+      const { launch, launched } = launcher([], true);
+      const app = await appWith(deps({ sessions, launch }));
+      await app.inject(BUILD);
+      await fireLaunch(launched);
+      expect(sessions.revive).toHaveBeenCalledWith(['a', 'b']);
+      // No new server will consume it, and the user may restart by hand days later.
+      expect(existsSync(reviveListPath(root))).toBe(false);
+
+      const retry = await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN });
+      expect(retry.statusCode).toBe(202);
+    });
+
+    it('a restart that never kills this server is recovered by the watchdog, once', async () => {
+      const { sessions } = sessionsFake(['a']);
+      const { launch, launched } = launcher();
+      const app = await appWith(deps({ sessions, launch }));
+      await app.inject(BUILD);
+      const onFailure = await fireLaunch(launched);
+
+      // Still in progress until the watchdog fires: a retry is refused meanwhile.
+      vi.advanceTimersByTime(RESTART_WATCHDOG_MS - 1);
+      expect(sessions.revive).not.toHaveBeenCalled();
+      expect((await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN })).statusCode).toBe(409);
+
+      vi.advanceTimersByTime(1);
+      expect(sessions.revive).toHaveBeenCalledWith(['a']);
+      expect(existsSync(reviveListPath(root))).toBe(false);
+
+      // A late launcher failure after the watchdog doesn't revive twice.
+      onFailure();
+      expect(sessions.revive).toHaveBeenCalledTimes(1);
+      expect((await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN })).statusCode).toBe(202);
+    });
+
+    it('a plain Restart that never happens also allows a retry after the watchdog', async () => {
+      const { launch, launched } = launcher();
+      const app = await appWith(deps({ launch }));
+      await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN });
+      await fireLaunch(launched);
+      vi.advanceTimersByTime(RESTART_WATCHDOG_MS);
+      expect((await app.inject({ method: 'POST', url: '/api/server/restart', headers: SAME_ORIGIN })).statusCode).toBe(202);
+    });
   });
 
   it('refuses in dev mode, where the script would not stop the server', async () => {

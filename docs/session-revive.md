@@ -71,6 +71,30 @@ was the alternative (reusing `session.open`) and it leaves a dead row behind eve
   refresh/retry elsewhere in the app. It reveals on row hover exactly like the Delete button
   beside it. The row carries `cursor: not-allowed`, which the button overrides for itself.
 
+## Revived automatically after Build & restart
+
+Settings' **Build & restart** brings back the sessions that were running when it was
+pressed; nothing else does (plain Restart, a manual `restart-server.vbs`, a crash, a
+reboot). Spec: `project/revive-after-build-restart.md`.
+
+- The old server, after the build passes and the `202` is sent, writes
+  `<dataDir>/revive-on-boot.json` (`restartTargets()`: running, non-fork) and then parks
+  each as Stop does (`parkForRestart()`: scrollback persisted, row `idle`, no session-log
+  entry). Parking is what saves the scrollback: `restart-server.ps1` stops the server with
+  `Stop-Process -Force`, so `shutdown()` never runs on a UI restart.
+- The new server reads and **deletes** the list in `createApp()`, after
+  `configureSessionEnv()` (or the revived PTYs lack the server URL and CLI) and before it
+  listens, so the reloading browser finds them live. A list older than 10 minutes is
+  dropped: the restart it was written for never happened. A per-session refusal leaves that
+  row stale with its Play button. Never on an isolated boot or under vitest.
+- If `restart-server.vbs` fails to spawn, or this process is still alive
+  `RESTART_WATCHDOG_MS` (60s) after launching it (the script ran but could not stop the
+  server), the old server deletes the list, revives the sessions it parked and allows a
+  retry, once whichever comes first. Without the watchdog a restart that silently didn't
+  happen leaves every session parked and every retry refused as "in progress".
+- Sessions are parked all at once (`Promise.allSettled`): each waits for its own shell's
+  exit, so parking one at a time would hold the restart for each slow shell.
+
 ## Stopping a session on demand
 
 The sidebar's Stop button (filled square, in the slot Play takes once stopped) makes a row

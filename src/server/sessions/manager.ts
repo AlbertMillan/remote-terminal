@@ -478,6 +478,37 @@ class SessionManager {
   }
 
   /**
+   * The sessions Build & restart parks and the next boot revives: every running one but
+   * forks, whose transcript is deleted at boot (project/revive-after-build-restart.md).
+   * A session moving to another account is left alone: it is already parked for the move.
+   */
+  restartTargets(): string[] {
+    return this.getRunningSessions()
+      .filter((s) => !this.movingAccount.has(s.id) && !getSessionMetadata(s.id)?.isFork)
+      .map((s) => s.id);
+  }
+
+  /**
+   * Park `ids` as Stop does (scrollback persisted, PTY killed, row `idle`) so the next boot
+   * revives them with their old output; the restart that follows is a hard kill, which
+   * saves nothing. No session-log entry: the conversation continues after the restart.
+   * All at once, since each touches only its own id and awaits its own shell's exit (up to
+   * PTY_EXIT_WAIT_MS): one at a time, a slow shell would hold the restart for each of them.
+   * One failing doesn't stop the rest. Returns the ids parked, in the order given.
+   */
+  async parkForRestart(ids: string[]): Promise<string[]> {
+    const results = await Promise.allSettled(ids.map((id) => this.parkSession(id, undefined, { log: false })));
+    return ids.filter((id, i) => {
+      const result = results[i];
+      if (result.status === 'rejected') {
+        logger.warn({ id, error: result.reason }, 'Could not park a session for Build & restart');
+        return false;
+      }
+      return result.value;
+    });
+  }
+
+  /**
    * One session's half of stopSession(). False when it was no longer running (a second
    * click, or it exited meanwhile): nothing is done and it is not reported as stopped.
    */

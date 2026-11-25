@@ -24,6 +24,7 @@ status: active
 - [x] `f-k4w9zd` P2 Drop any file into a session — web drop/paste uploads any type (20 MB), keeps its name under <dataDir>/uploads, pastes every path → project/file-uploads.md
 - [x] `f-slr9eh` P2 Click a file path in the terminal to open it — server-checked links, served in place, the browser or device opens it → project/clickable-file-paths.md
 - [x] `f-2f96b5` P2 Pick or create a project folder in New Session — Tab-complete paths, search known projects, create folders anywhere under the user folder, `~/NodeProjects` default → project/new-session-folder-picker.md
+- [ ] P2 Revive running sessions after Build & restart — the old server records and parks them, the new one resumes them at boot → project/revive-after-build-restart.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
