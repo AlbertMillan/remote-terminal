@@ -1,5 +1,7 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { formatTokens } from './format.js';
+import { openDialog } from './dialog.js';
+import { BrowserNotifier } from './browser-notifier.js';
 
 /**
  * The plan-usage chip: how much of each Claude login's 5-hour and weekly
@@ -52,6 +54,14 @@ export interface AccountPlanUsage {
   jobs?: boolean;
   /** `settingsPath`: that account's settings.json, where the status line goes. */
   setup: { command: string | null; settingsPath?: string };
+  /** When its claude.ai login ends (src/server/usage/login-status.ts); absent from an older server. */
+  login?: LoginInfo;
+}
+
+/** Mirrors LoginInfo in src/server/usage/login-status.ts. */
+export interface LoginInfo {
+  state: 'ok' | 'ending' | 'ends-today' | 'logged-out' | 'unknown';
+  endsAt: string | null;
 }
 
 export interface PlanUsage {
@@ -154,15 +164,79 @@ function windowChip(w: WindowView): SafeHtml {
   return html`<span class="pu-window ${w.level}">${w.short} ${w.reset ? 'reset' : `${Math.round(w.reading.usedPercentage)}%`}</span>`;
 }
 
+const DAY_MS = 24 * 3600_000;
+/** The one reminder fires this long before a login ends (project/login-expiry.md). */
+export const REMINDER_MS = 3 * DAY_MS;
+
+/** A login's colour: amber within 7 days, red under a day or logged out. */
+export function loginLevel(login: LoginInfo | undefined): Level {
+  if (login?.state === 'ending') return 'warn';
+  if (login?.state === 'ends-today' || login?.state === 'logged-out') return 'danger';
+  return 'ok';
+}
+
+/** "3d", "5h", "40m": the largest whole unit left, for a tag. */
+export function shortLeft(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60000));
+  if (minutes >= 24 * 60) return `${Math.floor(minutes / (24 * 60))}d`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h`;
+  return `${minutes}m`;
+}
+
+function endDate(ms: number): string {
+  return new Date(ms).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+/** The summary line's login tag, only when it needs attention. */
+function loginTag(login: LoginInfo | undefined, now: number): SafeHtml | '' {
+  const level = loginLevel(login);
+  if (level === 'ok' || !login) return '';
+  if (login.state === 'logged-out') return html`<span class="pu-tag danger">logged out</span>`;
+  const left = login.endsAt ? shortLeft(Date.parse(login.endsAt) - now) : '?';
+  return html`<span class="pu-tag ${level}" title="Its claude.ai login ends soon">login ${left}</span>`;
+}
+
 /** One summary line: name, both windows, and whether it is the attached session's. */
-function summaryLine(v: AccountView): SafeHtml {
+function summaryLine(v: AccountView, now: number): SafeHtml {
   const name = html`<span class="pu-acct ${v.colour}">${v.data.account}</span>`;
   const figures =
     v.state === 'not-set-up'
       ? html`<span class="pu-muted">not set up</span>`
       : joinHtml(v.windows.map(windowChip), html`<span class="pu-sep">·</span>`);
   const tag = v.attached ? html`<span class="pu-tag">attached</span>` : '';
-  return html`<span class="pu-line">${name}${figures}${tag}</span>`;
+  return html`<span class="pu-line">${name}${figures}${loginTag(v.data.login, now)}${tag}</span>`;
+}
+
+/** The popover's Login row: the state, then one muted line ending in a small link. */
+function loginRow(data: AccountPlanUsage, now: number): SafeHtml | '' {
+  const login = data.login;
+  if (!login || login.state === 'unknown') return '';
+  const link = (label: string) =>
+    html`<button type="button" class="pu-link" data-action="login" data-account="${data.account}">${label}</button>`;
+  if (login.state === 'logged-out') {
+    return html`
+        <div class="pu-row pu-login">
+          <div class="pu-row-head"><span>Login</span><span class="pu-pct danger">not logged in</span></div>
+          <p class="pu-detail">Its sessions and jobs can't reach Claude. ${link('Log in →')}</p>
+        </div>`;
+  }
+  const ends = login.endsAt ? Date.parse(login.endsAt) : NaN;
+  const when = Number.isFinite(ends) ? `ends ${endDate(ends)} · ${shortLeft(ends - now)}` : 'logged in';
+  return html`
+        <div class="pu-row pu-login">
+          <div class="pu-row-head"><span>Login</span><span class="pu-pct ${loginLevel(login)}">${when}</span></div>
+          <p class="pu-detail">Using Claude doesn't extend it. ${link('Renew now')}</p>
+        </div>`;
+}
+
+/** Accounts whose one reminder is due now: within REMINDER_MS of the end, not yet past it. */
+export function remindersDue(data: PlanUsage, now: number): { account: string; endsAt: string }[] {
+  return data.accounts.flatMap((a) => {
+    const login = a.login;
+    if (!login?.endsAt || (login.state !== 'ending' && login.state !== 'ends-today')) return [];
+    const left = Date.parse(login.endsAt) - now;
+    return left > 0 && left <= REMINDER_MS ? [{ account: a.account, endsAt: login.endsAt }] : [];
+  });
 }
 
 function windowRow(w: WindowView, now: number): SafeHtml {
@@ -248,19 +322,19 @@ function section(v: AccountView, now: number): SafeHtml {
   const held = d.held
     ? html`<p class="pu-detail pu-held">${d.held} reading${d.held === 1 ? '' : 's'} held back (not this login's, or unverified)</p>`
     : '';
-  return html`<section class="pu-section">${head}${content}${held}</section>`;
+  return html`<section class="pu-section">${head}${loginRow(d, now)}${content}${held}</section>`;
 }
 
 /** The chip's summary lines and popover for `data` at time `now`. Pure, for tests. */
 export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
   const views = data.accounts.map((a, i) => accountView(a, i, data.attached, now));
-  const level = worst(views.flatMap((v) => v.windows.map((w) => w.level)));
+  const level = worst(views.flatMap((v) => [...v.windows.map((w) => w.level), loginLevel(v.data.login)]));
   // Dimmed only when every account with readings is stale: one fresh line is news.
   const withReadings = views.filter((v) => v.latest !== null);
   const stale = withReadings.length > 0 && withReadings.every((v) => now - (v.latest ?? 0) > STALE_MS);
 
   const summary =
-    views.length > 0 ? joinHtml(views.map(summaryLine)) : html`<span class="pu-label">Plan usage</span> <span class="pu-muted">no accounts</span>`;
+    views.length > 0 ? joinHtml(views.map((v) => summaryLine(v, now))) : html`<span class="pu-label">Plan usage</span> <span class="pu-muted">no accounts</span>`;
   const body = html`${views.map((v) => section(v, now))}<p class="pu-foot">Readings arrive while a Claude Code session is open; job runs do not send them.</p><button type="button" class="pu-breakdown" data-action="account-usage">Per-account breakdown →</button>`;
   return { summary, body, level, stale };
 }
@@ -292,14 +366,121 @@ export class PlanUsageChip {
     if (document.visibilityState === 'visible') void this.refresh();
   };
   private readonly onClick = (event: MouseEvent) => {
-    const target = (event.target as HTMLElement | null)?.closest?.('[data-action="account-usage"]');
-    if (!target) return;
-    event.preventDefault();
-    this.openBreakdown?.();
+    const el = (event.target as HTMLElement | null)?.closest?.<HTMLElement>('[data-action]');
+    if (!el) return;
+    if (el.dataset.action === 'account-usage') {
+      event.preventDefault();
+      this.openBreakdown?.();
+    } else if (el.dataset.action === 'login' && el.dataset.account) {
+      event.preventDefault();
+      this.confirmLogin(el.dataset.account);
+    }
   };
+  private readonly notifier = new BrowserNotifier();
+  private reminderToast: HTMLElement | null = null;
 
   /** Opens the per-account usage page; set by the owner (session-manager). */
   openBreakdown: (() => void) | null = null;
+  /**
+   * Starts a Log in session for an account (the refusal modal's flow, session-manager's
+   * startLogin); null until the owner sets it, and then the links do nothing.
+   */
+  logIn: ((account: string) => void) | null = null;
+
+  /** The steps, then the Log in session. The check after it is the server's, via refreshLogin. */
+  confirmLogin(account: string): void {
+    if (!this.logIn) return;
+    const { modal, close } = openDialog<null>(
+      'login-modal',
+      html`
+      <div class="modal-content login-modal-content" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+        <h3 id="login-modal-title">Log in to <span class="login-modal-account">${account}</span></h3>
+        <ol class="login-modal-steps">
+          <li>A terminal opens running <code>claude</code> with only this account's folder.</li>
+          <li>Type <code>/login</code> and choose your Claude subscription. Approve it in the browser window that opens.</li>
+          <li>Type <code>/exit</code>. claude-remote checks the login and clears the warning.</li>
+        </ol>
+        <p class="pu-detail">If you log in as a different account, you'll see the usual mismatch dialog instead.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" data-cancel>Cancel</button>
+          <button type="button" class="btn-primary login-modal-go">Open login terminal</button>
+        </div>
+      </div>`,
+      null
+    );
+    const go = modal.querySelector<HTMLButtonElement>('.login-modal-go');
+    go?.addEventListener('click', () => {
+      close(null);
+      this.dismissReminder();
+      this.logIn?.(account);
+    });
+    go?.focus();
+  }
+
+  /** Ask the server to re-check an account's login now (after a Log in session), then redraw. */
+  async refreshLogin(account: string): Promise<void> {
+    try {
+      await fetch('/api/plan-usage/login/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account }),
+      });
+    } catch {
+      // The next poll picks it up within a minute: an urgent state is re-checked that often.
+    }
+    await this.refresh();
+  }
+
+  /**
+   * The one reminder per account per login (keyed by its end, so a renewed login gets its
+   * own): a toast, plus a browser notification when the tab is in the background.
+   */
+  private remind(data: PlanUsage, now: number): void {
+    for (const due of remindersDue(data, now)) {
+      const key = `cr.loginReminder.${due.account}`;
+      try {
+        if (localStorage.getItem(key) === due.endsAt) continue;
+        localStorage.setItem(key, due.endsAt);
+      } catch {
+        // No storage: remind once per page load instead.
+        if (this.reminded.has(key + due.endsAt)) continue;
+      }
+      this.reminded.add(key + due.endsAt);
+      const ends = Date.parse(due.endsAt);
+      const title = `${due.account} login ends in ${shortLeft(ends - now)}`;
+      const body = `Ends ${endDate(ends)}. Using Claude won't extend it.`;
+      this.showReminder(due.account, title, body);
+      this.notifier.show(title, body, `login-${due.account}`);
+    }
+  }
+  private reminded = new Set<string>();
+
+  private showReminder(account: string, title: string, body: string): void {
+    this.dismissReminder();
+    const toast = document.createElement('div');
+    toast.className = 'login-toast';
+    toast.setAttribute('role', 'status');
+    setHtml(
+      toast,
+      html`<p><strong>${title}.</strong> ${body}</p>
+        <div class="login-toast-actions">
+          <button type="button" class="btn-secondary" data-toast="dismiss">Dismiss</button>
+          <button type="button" class="btn-secondary login-toast-go" data-toast="login">Log in →</button>
+        </div>`
+    );
+    toast.addEventListener('click', (e) => {
+      const action = (e.target as HTMLElement).closest<HTMLElement>('[data-toast]')?.dataset.toast;
+      if (action === 'dismiss') this.dismissReminder();
+      else if (action === 'login') this.confirmLogin(account);
+    });
+    document.body.appendChild(toast);
+    this.reminderToast = toast;
+  }
+
+  private dismissReminder(): void {
+    this.reminderToast?.remove();
+    this.reminderToast = null;
+  }
   /** Called after every render — a poll or a countdown tick — so an open usage page keeps up. */
   onRender: ((data: PlanUsage, now: number) => void) | null = null;
 
@@ -376,6 +557,7 @@ export class PlanUsageChip {
     root.dataset.level = view.level;
     root.classList.toggle('stale', view.stale);
     root.hidden = false;
+    this.remind(this.data, now);
     this.onRender?.(this.data, now);
   }
 }

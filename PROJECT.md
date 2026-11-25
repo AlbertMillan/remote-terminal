@@ -111,6 +111,7 @@ status: active
 - [x] `f-tkaa6d` P2 Status line shows the session's account — mapped from `CLAUDE_CONFIG_DIR`, no server call → project/accounts.md
 - [x] `f-f4a9u0` P2 Sessions message each other across accounts — opt-in `sessions.crossAccountMessaging` mirrors each live Claude registry entry into the other accounts' folders, so `ListAgents`/`SendMessage` cross logins → project/cross-account-messaging.md
 - [x] `f-b7rat9` P2 Move a session's conversation to another account — the header's account chip stops, moves the transcript and resumes the session in place under the other login → project/move-conversation-account.md
+- [ ] `f-iz7kym` P2 Warn before a login ends — plan-usage chip tags each account's login (amber ≤7 days, red under a day or logged out), a Log in link in its popover, one toast and notification 3 days before → project/login-expiry.md
 
 ## Track: Per-account usage
 - [x] `f-jzpmyk` P1 Plan-usage readings verified against the login that produced them — relay sends its session, mismatches and legacy readings are held back instead of pinning → project/per-account-usage.md

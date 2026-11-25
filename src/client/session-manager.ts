@@ -213,6 +213,7 @@ class SessionManager {
     this.jobOverlay.attach();
     this.planUsage.openBreakdown = () => void this.accountUsage.open(this.planUsage.latest());
     this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
+    this.planUsage.logIn = (account) => this.startLogin(account, false, () => void this.planUsage.refreshLogin(account));
     this.planUsage.attach();
     this.buildIndicator.start();
     this.socket.connect();

@@ -25,6 +25,7 @@ import {
 import { accountLogin, accountWarningFor } from '../sessions/account-watch.js';
 import { getSession } from '../db/queries.js';
 import { usageByAccount, type AccountUsage } from './store.js';
+import { accountLoginInfo, primeLoginStatus, refreshLoginStatus, type LoginInfo } from './login-status.js';
 
 /**
  * The status line script, found by walking up from this module: it sits at
@@ -145,6 +146,8 @@ export interface AccountPlanUsage {
   /** True for the account the current project's jobs run under (projectAccount). */
   jobs: boolean;
   setup: { command: string | null; settingsPath: string };
+  /** When its claude.ai login ends, from `claude auth status` (login-status.ts). */
+  login: LoginInfo;
 }
 
 const WINDOW_S = { fiveHour: 5 * 3600, sevenDay: 7 * 24 * 3600 } as const;
@@ -209,6 +212,7 @@ export function planUsageSummary(
         : null,
       jobs: account === jobsAccount,
       setup: { command: statuslineCommand(), settingsPath: settingsPath(account) },
+      login: accountLoginInfo(account, now),
     };
   });
 }
@@ -219,6 +223,17 @@ export interface PlanUsageRouteDeps {
 }
 
 export function registerPlanUsageRoutes(app: FastifyInstance, deps: PlanUsageRouteDeps = {}): void {
+  // Every account's login checked once at boot, so the chip has an answer on first load.
+  primeLoginStatus();
+
+  // Re-check one account's login now (after a Log in session), answering once it settled.
+  app.post('/api/plan-usage/login/refresh', async (request, reply) => {
+    const account = (request.body as { account?: unknown } | undefined)?.account;
+    if (!isAccount(account)) return reply.code(400).send({ error: 'Pass { account }' });
+    await refreshLoginStatus(account);
+    return { login: accountLoginInfo(account) };
+  });
+
   // The relay: scripts/statusline.mjs posts `{ rate_limits }` on every status
   // line render. A post with no usable limits is normal (before a session's
   // first response, or on a plan without limits); it still counts as contact,
