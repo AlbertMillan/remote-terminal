@@ -6,15 +6,23 @@ import { COMMIT_IDENTITY, git, gitStatusEntries, hasRemote, offBranch } from '..
 import { getConfig } from '../config.js';
 import { runClaude } from '../agent/claude-run.js';
 import { sessionManager } from '../sessions/manager.js';
-import { removeWorktreeSessions } from '../websocket/connections.js';
+import { broadcastLandResult, removeWorktreeSessions } from '../websocket/connections.js';
+import { pushLandResult } from '../push/wire.js';
+import type { LandNotificationPayload } from '../websocket/protocol.js';
 import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { ProjectBusyError, withProjectLock } from '../projects/project-lock.js';
 import { buildProject, type BuildResult } from '../projects/project-build.js';
 import { landAndBuild } from '../projects/track-land.js';
-import type { LandResult } from '../projects/track-land-core.js';
+import { landPreflight, type LandResult } from '../projects/track-land-core.js';
 import { TrackBranchError } from '../projects/track-branches.js';
 import { findActiveTrackBranchByName, getActiveTrackBranch, trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
-import { behindMain, updateTrackFromMain, type MergeConflict } from '../projects/track-update.js';
+import {
+  applyPreparedUpdate,
+  behindMain,
+  prepareTrackUpdate,
+  type MergeConflict,
+  type PreparedUpdate,
+} from '../projects/track-update.js';
 import {
   commitOnHead,
   commitWorktreePlanning,
@@ -36,6 +44,7 @@ import {
   insertMerge,
   latestMergeFor,
   listMerges,
+  listUnfinishedMerges,
   updateMerge,
   type MergeRecord,
   type ParkedConflict,
@@ -135,6 +144,8 @@ export interface MergeQueueDeps {
   land(project: RegistryProject, trackName: string): Promise<LandResult & { build: BuildResult }>;
   /** The registry entry for a project folder (its plan doc may be overridden). */
   project(cwd: string): RegistryProject;
+  /** Report a resumed Land's result (resumeMergeQueues): its requester is gone. Never throws. */
+  notifyLand(payload: LandNotificationPayload): void;
   /** How often a holding entry re-checks the checkout. */
   holdPollMs: number;
   /** How long to wait before retrying a busy project lock. */
@@ -161,6 +172,14 @@ const defaultDeps: MergeQueueDeps = {
       logger.warn({ cwd, error: (error as Error).message }, 'merge queue: registry not read');
     }
     return { cwd };
+  },
+  notifyLand: (payload) => {
+    try {
+      broadcastLandResult(payload);
+      pushLandResult(payload);
+    } catch (error) {
+      logger.warn({ error }, 'merge queue: could not send a land result');
+    }
   },
   holdPollMs: 15_000,
   busyRetryMs: 5_000,
@@ -232,6 +251,50 @@ export function enqueueMerge(entry: MergeEntry): MergeTicket {
     return schedule(existing);
   }
   return schedule(insertMerge({ ...entry, featureIds: [...entry.featureIds] }));
+}
+
+/**
+ * At boot: put back in the queue, under their own rows and in their order,
+ * the entries the last server left queued, holding or running. A Land a
+ * session or the board was told is "queued" would otherwise never happen;
+ * its result goes out as the land notification, as it would have. Never on
+ * an isolated boot (CLAUDE_REMOTE_CONFIG) or under vitest: their entries
+ * would merge into the user's real repositories from code that hasn't landed.
+ * Returns the ids it queued.
+ */
+export async function resumeMergeQueues(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  if (env.CLAUDE_REMOTE_CONFIG || env.VITEST) return [];
+  const resumed: string[] = [];
+  for (const record of listUnfinishedMerges()) {
+    if (tickets.has(record.id)) continue;
+    // A server stopped while an item's worktree was mid-merge (the update, or
+    // a resolver at work) leaves it there; the entry starts that over.
+    if (record.kind === 'item' && record.status === 'running') await abortLeftMerge(record.worktreePath);
+    updateMerge(record.id, { status: 'queued', detail: null });
+    const ticket = schedule({ ...record, status: 'queued', detail: null });
+    resumed.push(record.id);
+    if (record.kind === 'session-land') {
+      const track = record.trackName ?? record.branch;
+      void ticket.done.then((outcome) =>
+        deps.notifyLand({
+          kind: 'land',
+          projectCwd: record.projectCwd,
+          track,
+          ok: outcome.status === 'merged',
+          detail: outcome.status === 'merged' ? outcome.detail : `Landing "${track}" failed: ${outcome.detail}`,
+          timestamp: new Date().toISOString(),
+        })
+      );
+    }
+  }
+  if (resumed.length > 0) logger.info({ resumed }, 'merge queue: resumed entries left by the last server');
+  return resumed;
+}
+
+async function abortLeftMerge(worktreePath: string): Promise<void> {
+  if ((await git(worktreePath, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])) !== null) {
+    await git(worktreePath, ['merge', '--abort']);
+  }
 }
 
 /**
@@ -654,6 +717,16 @@ async function mergeTrack(lane: Lane, record: MergeRecord): Promise<Done> {
     // would conflict: then Update from main with the resolver first.
     const behind = factoryRun ? null : await behindMain(project, track);
     if (factoryRun || behind?.wouldConflict?.length) {
+      // Land's own refusals first, so no resolver works for a Land that is
+      // going to be refused anyway. They close nothing: landTrack runs them
+      // again, and closes the worktree's sessions only after all of them.
+      try {
+        await withLockRetry(lane, record, `checking "${track.trackName}" before it lands`, () =>
+          landPreflight(project, track.trackName)
+        );
+      } catch (error) {
+        throw new ParkError((error as Error).message, null, error as Error);
+      }
       const updated = await updateWithResolver(lane, record, project, track);
       if (factoryRun || updated) {
         const verified = await deps.verify(track.worktreePath);
@@ -688,8 +761,12 @@ function trackOf(record: MergeRecord): TrackBranch | null {
 }
 
 /**
- * Update from main under the lock, its conflicts handed to the resolver.
- * True when it merged something (the code to land changed).
+ * Update from main with the resolver, holding the project lock only for the
+ * fast-forward: the merge (and the resolver's minutes) happens in a scratch
+ * checkout (prepareTrackUpdate), then the worktree is fast-forwarded onto it
+ * under the lock, after Update's refusals. A branch that moved meanwhile is
+ * merged again, a bounded number of times. True when it merged something
+ * (the code to land changed).
  */
 async function updateWithResolver(
   lane: Lane,
@@ -697,21 +774,36 @@ async function updateWithResolver(
   project: RegistryProject,
   track: TrackBranch
 ): Promise<boolean> {
-  let conflict: MergeConflict | null = null;
-  try {
-    const updated = await withLockRetry(lane, record, `updating "${track.trackName}" before it lands`, () =>
-      updateTrackFromMain(project, track.trackName, {
+  for (let round = 1; ; round++) {
+    let conflict: MergeConflict | null = null;
+    let prepared: PreparedUpdate | null;
+    try {
+      prepared = await prepareTrackUpdate(project, track.trackName, {
         resolve: async (c) => {
           conflict = c;
           await settleConflict(c, record);
         },
-      })
-    );
-    return updated.mergeSha !== null;
-  } catch (error) {
-    const c = conflict as MergeConflict | null;
-    if (c) throw new ParkError(conflictMessage(c, (error as Error).message), parked(c), error as Error);
-    throw new ParkError((error as Error).message, null, error as Error);
+      });
+    } catch (error) {
+      const c = conflict as MergeConflict | null;
+      // The scratch checkout is gone; the track's own worktree was never touched.
+      if (c) throw new ParkError(conflictMessage({ ...c, cwd: track.worktreePath }, (error as Error).message), parked(c), error as Error);
+      throw new ParkError((error as Error).message, null, error as Error);
+    }
+    if (!prepared) return false;
+    const ready = prepared;
+    let applied: Awaited<ReturnType<typeof applyPreparedUpdate>>;
+    try {
+      applied = await withLockRetry(lane, record, `updating "${track.trackName}" before it lands`, () =>
+        applyPreparedUpdate(project, track.trackName, ready)
+      );
+    } catch (error) {
+      throw new ParkError((error as Error).message, null, error as Error);
+    }
+    if (applied !== 'moved') return true;
+    if (round >= deps.maxRounds) {
+      throw new ParkError(`${track.branch} kept moving while ${track.baseBranch} was merged into it; nothing was landed`);
+    }
   }
 }
 

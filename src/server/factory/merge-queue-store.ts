@@ -158,3 +158,11 @@ export function listMerges(projectCwd: string, statuses?: MergeStatus[]): MergeR
     .all(...values) as MergeRow[];
   return rows.map(toRecord);
 }
+
+/** Every project's entries a stopped server left unfinished, oldest first. */
+export function listUnfinishedMerges(): MergeRecord[] {
+  const rows = getDatabase()
+    .prepare(`SELECT * FROM factory_merges WHERE status IN ('queued', 'holding', 'running') ORDER BY created_at, rowid`)
+    .all() as MergeRow[];
+  return rows.map(toRecord);
+}

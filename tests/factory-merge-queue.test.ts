@@ -397,6 +397,115 @@ describe('conflicts', () => {
   });
 });
 
+describe('the resolver never holds the project lock', () => {
+  it('another track operation takes the lock while a track’s conflict is being resolved, and the track worktree stays untouched', async () => {
+    const track = await ensureTrackBranch({ cwd: repo }, 'Alpha');
+    commitFile(track.worktreePath, 'shared.ts', 'one\nTWO from the track\nthree\n', 'track work');
+    commitFile(repo, 'shared.ts', 'one\nTWO from main\nthree\n', 'main moves on');
+    const trackHead = git(track.worktreePath, 'rev-parse', 'HEAD');
+    let started!: () => void;
+    const resolving = new Promise<void>((r) => (started = r));
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => (finish = r));
+    resolve = async (c) => {
+      started();
+      await gate;
+      writeFileSync(join(c.cwd, 'shared.ts'), 'one\nTWO from both\nthree\n');
+    };
+    queue.configureMergeQueue({
+      land: async (project, name) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+        build: { ran: false, ok: true, detail: 'no build script' },
+      }),
+    });
+
+    const landing = queue.queueLand({ cwd: repo }, 'Alpha').result;
+    await resolving;
+    // A Delete or Branch now right now is not refused with "This project is busy".
+    await expect(withProjectLock(repo, 'Branch now', async () => 'took it')).resolves.toBe('took it');
+    // The resolver works in a scratch checkout: the track's worktree is not mid-merge.
+    expect(resolved[0].cwd).not.toBe(track.worktreePath);
+    expect(git(track.worktreePath, 'rev-parse', 'HEAD')).toBe(trackHead);
+    expect(existsSync(join(track.worktreePath, '.git'))).toBe(true);
+    expect(() => git(track.worktreePath, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(git(track.worktreePath, 'status', '--porcelain')).toBe('');
+
+    finish();
+    const landed = await landing;
+    expect(landed.mergeSha).toBeTruthy();
+    expect(text(join(repo, 'shared.ts'))).toBe('one\nTWO from both\nthree\n');
+    // The scratch checkout is gone.
+    expect(existsSync(resolved[0].cwd)).toBe(false);
+    expect(git(repo, 'worktree', 'list').split('\n')).toHaveLength(1);
+  });
+
+  it('an item’s conflict is resolved in its own worktree with the lock free', async () => {
+    const a = itemWorktree('a', 'shared.ts', 'one\nTWO from the item\nthree\n');
+    commitFile(repo, 'shared.ts', 'one\nTWO from main\nthree\n', 'main moves on');
+    let started!: () => void;
+    const resolving = new Promise<void>((r) => (started = r));
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => (finish = r));
+    resolve = async (c) => {
+      started();
+      await gate;
+      writeFileSync(join(c.cwd, 'shared.ts'), 'one\nTWO from both\nthree\n');
+    };
+    const ticket = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    await resolving;
+    await expect(withProjectLock(repo, 'Delete track', async () => 'took it')).resolves.toBe('took it');
+    finish();
+    expect((await ticket.done).status).toBe('merged');
+  });
+});
+
+describe('resume at boot', () => {
+  it('re-runs entries a stopped server left queued or running, in order, a Land included, under their rows', async () => {
+    const { insertMerge, updateMerge } = await import('../src/server/factory/merge-queue-store.js');
+    const notifiedLands: LandNotificationPayload[] = [];
+    queue.configureMergeQueue({
+      notifyLand: (p) => notifiedLands.push(p),
+      land: async (project, name) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+        build: { ran: false, ok: true, detail: 'no build script' },
+      }),
+    });
+    const track = await ensureTrackBranch({ cwd: repo }, 'Alpha');
+    commitFile(track.worktreePath, 'alpha.ts', 'alpha\n', 'track work');
+    // An item the last server was merging: its worktree was left mid-merge.
+    const a = itemWorktree('a', 'shared.ts', 'one\nTWO from the item\nthree\n');
+    commitFile(repo, 'shared.ts', 'one\nTWO from main\nthree\n', 'main moves on');
+    expect(() => git(a.worktreePath, 'merge', '--no-commit', 'main')).toThrow(); // stops on the conflict
+    expect(git(a.worktreePath, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toBeTruthy();
+    const item = insertMerge({ ...entry(a, ['f-cccccc']), trackName: 'Beta' });
+    updateMerge(item.id, { status: 'running' });
+    // A session's Land answered "queued" behind it.
+    const land = insertMerge({
+      projectCwd: repo,
+      kind: 'session-land',
+      branch: track.branch,
+      worktreePath: track.worktreePath,
+      baseBranch: 'main',
+      featureIds: [],
+      trackName: 'Alpha',
+    });
+    resolve = async (c) => writeFileSync(join(c.cwd, 'shared.ts'), 'one\nTWO from both\nthree\n');
+
+    // Never on an isolated boot or under vitest.
+    expect(await queue.resumeMergeQueues({ CLAUDE_REMOTE_CONFIG: 'x' })).toEqual([]);
+    expect(await queue.resumeMergeQueues()).toEqual([]);
+    expect(await queue.resumeMergeQueues({})).toEqual([item.id, land.id]);
+
+    await waitFor(() => expect(notifiedLands).toHaveLength(1));
+    expect(notifiedLands[0]).toMatchObject({ kind: 'land', track: 'Alpha', ok: true });
+    expect(getMerge(item.id)?.status).toBe('merged');
+    expect(getMerge(land.id)?.status).toBe('merged');
+    const log = mainLog();
+    expect(log.indexOf('Merge track: Alpha')).toBeLessThan(log.indexOf('Merge job: Unrelated'));
+    expect(text(join(repo, 'shared.ts'))).toBe('one\nTWO from both\nthree\n');
+  });
+});
+
 describe('the dirty-main hold', () => {
   it('holds while main has uncommitted code and merges once it is clean', async () => {
     const a = itemWorktree('a', 'a.ts', 'a\n');
