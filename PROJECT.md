@@ -134,3 +134,15 @@ status: active
 - [x] `f-h5txr3` P2 Projects and job gates — board, jobs, answering design/review/merge gates → project/android-app.md
 - [x] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md
 - [x] `f-q2m7vx` P2 Attach and share any file — pinned Attach key (Photo / File menu), share target for any file(s), Paste takes any URI → project/file-uploads.md
+
+## Track: Code factory
+- [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
+- [x] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and a plan-usage cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md
+- [ ] `f-wlr5dc` P1 Intake and shaping — `cr factory add` turns free-form text into Inbox features plus requirements with an overlap check; shaping asks only when blocked; agents file `discovered-from` work into triage → project/code-factory.md
+- [ ] `f-o5veqv` P1 Reviewer agent — escalation rules, review per track or per feature, Settings → Factory project/code-factory.md
+- [ ] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
+- [ ] `f-5clssc` P2 Factory overlay and board — the Jobs overlay becomes Factory; board view, item drawer, summary page, morning report with stalls and tokens per item → project/code-factory.md
+- [ ] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
+- [ ] `f-c23d5b` P2 Protocol and Android — new `/ws` payloads in `shared/protocol.ts`, the fixture and `Protocol.kt` → project/code-factory.md
+- [ ] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
+- [ ] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
