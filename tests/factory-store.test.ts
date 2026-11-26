@@ -155,6 +155,17 @@ describe('dependency types', () => {
     expect(ready()).toEqual(['f-parent', 'f-child', 'f-grandkid']);
   });
 
+  it('a closed parent passes no blocker down to its open children', () => {
+    item('f-blocker');
+    item('f-parent');
+    item('f-child');
+    store.addDependency({ projectCwd: ALPHA, fromFeature: 'f-parent', toFeature: 'f-blocker', type: 'blocks' });
+    store.addDependency({ projectCwd: ALPHA, fromFeature: 'f-child', toFeature: 'f-parent', type: 'parent-child' });
+    expect(ready()).toEqual(['f-blocker']);
+    store.updateItem(ALPHA, 'f-parent', { status: 'cancelled' });
+    expect(ready()).toEqual(['f-blocker', 'f-child']);
+  });
+
   it('parent-child alone does not block: an unblocked parent leaves its children ready', () => {
     item('f-parent');
     item('f-child');
@@ -285,13 +296,44 @@ describe('claims', () => {
     item('f-aaaaaa');
     store.updateItem(ALPHA, 'f-aaaaaa', { step: 'verify' });
     store.claimItem(ALPHA, 'f-aaaaaa', run('r1'), T0);
-    expect(store.releaseClaim(ALPHA, 'f-aaaaaa', 'r2', T0)).toBe(false);
-    expect(store.releaseClaim(ALPHA, 'f-aaaaaa', 'r1', T0)).toBe(true);
+    expect(store.releaseClaim(ALPHA, 'f-aaaaaa', run('r2'), T0)).toBe(false);
+    // Same owner name, other kind: not the holder, as for a claim.
+    expect(store.releaseClaim(ALPHA, 'f-aaaaaa', { owner: 'r1', kind: 'session' }, T0)).toBe(false);
+    expect(store.releaseClaim(ALPHA, 'f-aaaaaa', run('r1'), T0)).toBe(true);
     expect(store.getItem(ALPHA, 'f-aaaaaa')).toMatchObject({ status: 'open', step: 'verify', claimOwner: null });
 
     store.claimItem(ALPHA, 'f-aaaaaa', run('r1'), T0);
     store.updateItem(ALPHA, 'f-aaaaaa', { status: 'parked' });
     expect(store.getItem(ALPHA, 'f-aaaaaa')).toMatchObject({ claimOwner: null, leaseExpiresAt: null });
+  });
+});
+
+describe('update validation', () => {
+  it('refuses in_progress and unknown statuses: only a claim makes an item in progress', () => {
+    item('f-aaaaaa');
+    // As a route forwarding a request body would pass it, past the type.
+    const patch = { status: 'in_progress' } as unknown as Parameters<typeof store.updateItem>[2];
+    expect(() => store.updateItem(ALPHA, 'f-aaaaaa', patch)).toThrow(/claim/);
+    const bogus = { status: 'merged' } as unknown as Parameters<typeof store.updateItem>[2];
+    expect(() => store.updateItem(ALPHA, 'f-aaaaaa', bogus)).toThrow(store.FactoryStoreError);
+    expect(store.getItem(ALPHA, 'f-aaaaaa')?.status).toBe('open');
+    expect(ready()).toEqual(['f-aaaaaa']);
+  });
+
+  it('ignores keys that are not item fields instead of building bad SQL', () => {
+    item('f-aaaaaa');
+    const patch = { step: 'verify', constructor: 'x', claimOwner: 'r9' } as unknown as Parameters<
+      typeof store.updateItem
+    >[2];
+    expect(store.updateItem(ALPHA, 'f-aaaaaa', patch)).toMatchObject({ step: 'verify', claimOwner: null });
+  });
+
+  it('refuses a priority that would mis-sort the ready queue', () => {
+    expect(() => item('f-aaaaaa', { priority: Number.NaN })).toThrow(/priority/);
+    expect(() => item('f-bbbbbb', { priority: 0 })).toThrow(/priority/);
+    item('f-cccccc');
+    expect(() => store.updateItem(ALPHA, 'f-cccccc', { priority: 1.5 })).toThrow(/priority/);
+    expect(store.updateItem(ALPHA, 'f-cccccc', { priority: 1 })?.priority).toBe(1);
   });
 });
 
@@ -341,6 +383,26 @@ describe('leases', () => {
     // The dead run's late heartbeat is refused, and a new run can take over.
     expect(store.heartbeat(ALPHA, 'f-aaaaaa', 'r1', T0 + LEASE_EXPIRY_MS + 1)).toBe(false);
     expect(store.claimItem(ALPHA, 'f-aaaaaa', run('r2'), T0 + LEASE_EXPIRY_MS + 1).ok).toBe(true);
+  });
+
+  it('a heartbeat landing after expiry but before the reclaim keeps the claim', () => {
+    item('f-aaaaaa');
+    store.claimItem(ALPHA, 'f-aaaaaa', run('r1'), T0);
+    const late = T0 + LEASE_EXPIRY_MS + 1000;
+    expect(store.heartbeat(ALPHA, 'f-aaaaaa', 'r1', late)).toBe(true);
+    expect(store.reclaimExpiredLeases(late)).toEqual([]);
+    expect(store.getItem(ALPHA, 'f-aaaaaa')?.claimOwner).toBe('r1');
+  });
+
+  it('the reclaim sweep reads the lease index, not the whole table', () => {
+    const plan = getDatabase()
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT project_key, feature_id FROM factory_items
+          WHERE claim_owner IS NOT NULL AND claim_kind = 'run' AND status = 'in_progress'
+            AND lease_expires_at <= ?`
+      )
+      .all('x') as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(' ')).toMatch(/idx_factory_items_lease/);
   });
 
   it('a session claim has no lease and is never reclaimed', () => {

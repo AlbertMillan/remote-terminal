@@ -98,6 +98,15 @@ function checkFeatureId(id: string): void {
   if (!FEATURE_ID.test(id)) throw new FactoryStoreError(`Not a feature id: ${JSON.stringify(id)}`);
 }
 
+// Priorities order the ready queue, so a NaN or fractional one would sort it wrongly.
+function checkPriority(priority: number): void {
+  if (!Number.isInteger(priority) || priority < 1) {
+    throw new FactoryStoreError(`Not a priority: ${JSON.stringify(priority)}`);
+  }
+}
+
+const SETTABLE_STATUSES: readonly string[] = ['open', 'parked', 'done', 'cancelled'] satisfies SettableItemStatus[];
+
 const iso = (ms: number) => new Date(ms).toISOString();
 
 const CLOSED_SQL = CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -106,7 +115,9 @@ const CLOSED_SQL = CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
  * Every item that has an open blocker, as (project_key, feature_id).
  *
  * Direct: a `blocks` edge to an item not yet closed. Inherited: a child of a
- * blocked parent (`parent-child`, followed down any depth). `UNION`, not
+ * blocked parent that is itself still open (`parent-child`, followed down any
+ * depth); a done or cancelled parent passes nothing on, or its children would
+ * wait on a blocker their closed parent no longer cares about. `UNION`, not
  * `UNION ALL`, so the recursion stops on a row it has already produced.
  * `discovered-from` never appears: it is provenance, not ordering.
  */
@@ -120,7 +131,8 @@ const BLOCKED_CTE = `
     SELECT d.project_key, d.from_feature
       FROM factory_deps d
       JOIN blocked p ON p.project_key = d.project_key AND p.feature_id = d.to_feature
-     WHERE d.type = 'parent-child'
+      JOIN factory_items pi ON pi.project_key = p.project_key AND pi.feature_id = p.feature_id
+     WHERE d.type = 'parent-child' AND pi.status NOT IN (${CLOSED_SQL})
   )`;
 
 function isBlocked(projectKey: string, featureId: string): boolean {
@@ -154,6 +166,7 @@ export interface CreateItemInput {
 /** Add a feature to the factory as an `open` item. Refuses one already there. */
 export function createItem(input: CreateItemInput, now = Date.now()): FactoryItem {
   checkFeatureId(input.featureId);
+  if (input.priority !== undefined) checkPriority(input.priority);
   const key = pathKey(input.projectCwd);
   if (getRow(key, input.featureId)) {
     throw new FactoryStoreError(`${input.featureId} is already a factory item`);
@@ -247,7 +260,16 @@ export function updateItem(
   now = Date.now()
 ): FactoryItem | null {
   const key = pathKey(projectCwd);
-  const entries = (Object.keys(patch) as (keyof ItemPatch)[]).filter((k) => patch[k] !== undefined);
+  // Only known fields, checked at runtime too: a route may forward a request
+  // body, and an unknown key would otherwise build `undefined = ?`.
+  const entries = (Object.keys(patch) as (keyof ItemPatch)[]).filter(
+    (k) => Object.prototype.hasOwnProperty.call(COLUMN_OF, k) && patch[k] !== undefined
+  );
+  // `in_progress` without a claim would be neither ready nor reclaimable: stuck.
+  if (patch.status !== undefined && !SETTABLE_STATUSES.includes(patch.status)) {
+    throw new FactoryStoreError(`Cannot set status ${JSON.stringify(patch.status)}; in_progress comes from a claim`);
+  }
+  if (patch.priority !== undefined) checkPriority(patch.priority);
   const sets = entries.map((k) => `${COLUMN_OF[k]} = ?`);
   const values: (string | number | null)[] = entries.map((k) => patch[k] as string | number | null);
   if (patch.status !== undefined) {
@@ -499,16 +521,24 @@ export function heartbeat(projectCwd: string, featureId: string, owner: string, 
   return info.changes === 1;
 }
 
-/** Give a claim back: the item returns to `open`, keeping its step. False if `owner` did not hold it. */
-export function releaseClaim(projectCwd: string, featureId: string, owner: string, now = Date.now()): boolean {
+/**
+ * Give a claim back: the item returns to `open`, keeping its step. False if the
+ * claimant (owner AND kind, as for a claim) did not hold it.
+ */
+export function releaseClaim(
+  projectCwd: string,
+  featureId: string,
+  claimant: Claimant,
+  now = Date.now()
+): boolean {
   const info = getDatabase()
     .prepare(
       `UPDATE factory_items
           SET claim_owner = NULL, claim_kind = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
               status = CASE WHEN status = 'in_progress' THEN 'open' ELSE status END, updated_at = ?
-        WHERE project_key = ? AND feature_id = ? AND claim_owner = ?`
+        WHERE project_key = ? AND feature_id = ? AND claim_owner = ? AND claim_kind = ?`
     )
-    .run(iso(now), pathKey(projectCwd), featureId, owner);
+    .run(iso(now), pathKey(projectCwd), featureId, claimant.owner, claimant.kind);
   return info.changes === 1;
 }
 
@@ -526,7 +556,8 @@ export function reclaimExpiredLeases(now = Date.now()): FactoryItem[] {
       const expired = db
         .prepare(
           `SELECT project_key, feature_id FROM factory_items
-            WHERE claim_kind = 'run' AND status = 'in_progress' AND lease_expires_at <= ?`
+            WHERE claim_owner IS NOT NULL AND claim_kind = 'run' AND status = 'in_progress'
+              AND lease_expires_at <= ?`
         )
         .all(at) as { project_key: string; feature_id: string }[];
       const reset = db.prepare(
