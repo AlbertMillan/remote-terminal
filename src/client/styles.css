@@ -5453,6 +5453,12 @@ body {
 .fb-question label { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; cursor: pointer; }
 .fb-question input[type="radio"] { accent-color: var(--accent); }
 .fb-label { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; font-size: 12.5px; color: var(--text-secondary); }
+.fb-check { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; font-size: 12.5px; cursor: pointer; }
+.fb-check input { accent-color: var(--accent); }
+/* An item parked at its mockup (factory-mockup.ts): room for the page, which is the app's own replica. */
+.fb-drawer.fb-wide { width: min(920px, 100%); }
+.fb-mockup-frame { display: block; width: 100%; height: 62vh; margin: 8px 0 0; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.fb-acts a.btn-secondary { text-decoration: none; display: inline-flex; align-items: center; }
 .fb-input, .fb-textarea {
   width: 100%;
   padding: 6px 8px;

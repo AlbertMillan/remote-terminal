@@ -3,6 +3,7 @@ import type { EngineDeps, UnitFeature, UnitRef, UnitWorktree } from './deps.js';
 import type { MergeEntry } from './merge-sink.js';
 import { DONE, type Progress, type WorkflowStep } from './templates.js';
 import { DISCOVERED_INSTRUCTION, type DiscoveredWork } from './triage.js';
+import { mockupReference } from './mockup-files.js';
 
 /**
  * Step handlers: what each template step does. Templates name a handler, so a
@@ -81,9 +82,9 @@ your final message under "## Assumptions" instead of stopping to ask.`;
 
 const NO_COMMIT = 'Do not commit; the factory commits your work.';
 
-function implementPrompt(f: UnitFeature): string {
+function implementPrompt(f: UnitFeature, mockup = ''): string {
   return `Implement feature ${f.id}: ${f.title}
-${specLine(f)}
+${specLine(f)}${mockup ? `\n${mockup}` : ''}
 
 1. Make the changes the spec plans, matching the surrounding code's conventions.
 2. Write the tests it calls for and RUN them with the project's own test command.
@@ -99,7 +100,9 @@ ${DISCOVERED_INSTRUCTION}`;
 
 registerStepHandler('implement', async (ctx) => {
   const f = ctx.features[0];
-  await ctx.agent({ prompt: implementPrompt(f), work: true, access: 'write' });
+  // An approved mockup (mockup-step.ts) is binding: implement follows it.
+  const mockup = mockupReference(ctx.progress, ctx.unit.projectCwd, f.id);
+  await ctx.agent({ prompt: implementPrompt(f, mockup), work: true, access: 'write' });
   await ctx.commit(f.title, f.id);
   return { outcome: DONE };
 });
@@ -236,6 +239,10 @@ registerStepHandler('summary', async (ctx) => {
   const shaped = ctx.progress.notes.shape
     ? `\nList these, made while shaping the item, under Assumptions as well:\n${ctx.progress.notes.shape}\n`
     : '';
+  const mockup = ctx.unit.isTrack ? '' : mockupReference(ctx.progress, ctx.unit.projectCwd, ctx.features[0].id);
+  const mockupNote = mockup
+    ? `\n${mockup}\nAdd "## Mockup" with that path and every place the change departs from it.\n`
+    : '';
   const result = await ctx.agent({
     work: true,
     access: 'read',
@@ -246,7 +253,7 @@ its markdown:
 ## Checks run (commands and results)
 ${sections}
 ## Assumptions (decisions you made instead of asking)
-${shaped}
+${shaped}${mockupNote}
 Base it on \`git diff ${ctx.worktree.baseBranch}...HEAD\` and what you did. Do not edit files.`,
   });
   ctx.progress.notes.summary = ctx.deps.writeSummary(ctx.unit.projectCwd, ctx.unit.unitId, result.result);

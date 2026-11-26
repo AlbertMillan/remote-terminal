@@ -12,6 +12,8 @@ import { parseDiscovered, type DiscoveredWork } from './triage.js';
 import './review-step.js';
 // Registers the shaping pass (shape).
 import './shape-step.js';
+// Registers the mockup-first step (mockup).
+import './mockup-step.js';
 import { nextStep, recordOutcome, templateFor, type Progress, type WorkflowTemplate } from './templates.js';
 
 const logger = createLogger('factory-runner');

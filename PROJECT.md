@@ -143,7 +143,7 @@ status: active
 - [x] `f-c23d5b` P2 Protocol and Android — new `/ws` payloads in `shared/protocol.ts`, the fixture and `Protocol.kt` → project/code-factory.md
 
 ## Track: Factory mockup step
-- [ ] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
+- [x] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
 
 ## Track: Code factory
 - [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
