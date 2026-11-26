@@ -137,7 +137,3 @@ status: active
 
 ## Track: Factory merge queue
 - [x] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
-
-## Track: Factory overlay
-- [ ] `f-5clssc` P2 Factory overlay and board — the Jobs overlay becomes Factory; board view, item drawer, summary page, morning report with stalls and tokens per item → project/code-factory.md
-- [ ] `f-c23d5b` P2 Protocol and Android — new `/ws` payloads in `shared/protocol.ts`, the fixture and `Protocol.kt` → project/code-factory.md
