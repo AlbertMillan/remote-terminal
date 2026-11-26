@@ -126,6 +126,19 @@ status: active
 - [x] `f-rkppyr` P2 Started sessions load no MCP servers unless asked — `--strict-mcp-config` by default, `start --mcp <name>` scopes one in, and revive and history Resume re-apply the profile → project/lean-started-sessions.md
 - [x] `f-44ibuj` P2 Read-only peers beside a builder — `start --read-only` adds up to two peers to a started session's track; the server enforces one writer, the skill teaches review (fresh judge per checkpoint, findings ledger, verdict and round cap, escalation to the parent) → project/builder-critic-pairs.md
 
+## Track: Code factory
+- [ ] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
+- [ ] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and token cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md
+- [ ] `f-wlr5dc` P1 Intake and shaping — `cr factory add` turns free-form text into Inbox features plus requirements with an overlap check; shaping asks only when blocked; agents file `discovered-from` work into triage → project/code-factory.md
+- [ ] `f-o5veqv` P1 Reviewer agent — escalation rules, review per track or per feature, Settings → Factory → project/code-factory.md
+- [ ] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
+- [ ] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
+- [ ] `f-5clssc` P2 Factory overlay and board — the Jobs overlay becomes Factory; board view, item drawer, summary page, morning report with stalls and tokens per item → project/code-factory.md
+- [ ] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
+- [ ] `f-c23d5b` P2 Protocol and Android — new `/ws` payloads in `shared/protocol.ts`, the fixture and `Protocol.kt` → project/code-factory.md
+- [ ] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
+- [ ] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
+
 ## Track: Android app
 - [x] `f-uy1l0v` P1 Project scaffold in main — `android/` Gradle project, Termux terminal modules with NOTICE, `.gitignore` changes, `scripts/android.mjs` (Android Studio JDK, `local.properties`, `gradlew.bat`), empty app runs on the emulator → project/android-app.md
 - [x] `f-4jcthu` P1 Protocol and connection — Kotlin `/ws` + `/api` client mirroring `protocol.ts` with a shared fixture test, connect screen, reconnect on resume and network change → project/android-app.md

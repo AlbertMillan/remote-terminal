@@ -1,0 +1,369 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Factory Walkthrough</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE work: claude-remote itself, with the factory folded into the real page
+   IDEA a faithful replica of index.html (sidebar, terminal header, Jobs overlay) where the overlay becomes Factory
+   PICTURE the app window, working in a planning session; scenario buttons play real flows into it
+   COLOUR claude-remote's Tokyo Night tokens from styles.css
+   TYPE Plus Jakarta Sans + JetBrains Mono (the app's faces)
+   LAYOUT caption + scenario row, then the app window at most of the screen height; phone: sidebar hidden like the real app */
+:root{color-scheme:dark;--bg-primary:#1a1b26;--bg-secondary:#24283b;--bg-tertiary:#2f3549;--bg-elevated:#1f2335;--text-primary:#c0caf5;--text-secondary:#9aa5ce;--text-muted:#565f89;--accent:#7aa2f7;--accent-glow:rgba(122,162,247,.4);--success:#9ece6a;--warning:#e0af68;--danger:#f7768e;--vio:#bb9af7;--cy:#7dcfff;--border:#414868;--border-subtle:#343a52;--terminal-bg:#16161e;--ui:'Plus Jakarta Sans',system-ui,sans-serif;--mono:'JetBrains Mono',Consolas,monospace}
+*{box-sizing:border-box;min-width:0}
+body{background:#101118;color:var(--text-primary);font:14px/1.5 var(--ui);overflow-x:clip;margin:0}
+.band{padding-block:clamp(14px,2vw,26px);padding-left:max(2.5vw,16px,env(safe-area-inset-left,0px));padding-right:max(2.5vw,16px,env(safe-area-inset-right,0px));max-width:1500px;margin:0 auto}
+h1{font-size:clamp(22px,2.6vw,30px);line-height:1.1;letter-spacing:-.02em;margin:0 0 4px;font-weight:700}
+.lede{color:var(--text-secondary);margin:0 0 12px;font-size:13.5px;max-width:100ch}
+.scen{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.scen span{font-size:12px;color:var(--text-muted);margin-right:4px}
+.scen button{font:600 12.5px var(--ui);color:var(--text-primary);background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;padding:6px 12px;cursor:pointer}
+.scen button:hover{border-color:var(--accent)}
+.scen button.ran{color:var(--text-muted)}
+.scen button:disabled{opacity:.5;cursor:progress}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* app */
+.app{display:flex;height:clamp(640px,86vh,900px);border:1px solid var(--border);border-radius:12px;overflow:hidden;position:relative;background:var(--bg-primary);box-shadow:0 16px 48px rgba(0,0,0,.5)}
+#sb{width:268px;flex:none;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--bg-secondary),var(--bg-elevated));border-right:1px solid var(--border)}
+.sbh{padding:10px 12px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,rgba(122,162,247,.05),transparent 50%)}
+.sbt{display:flex;align-items:center;gap:8px}
+.cdot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 8px rgba(158,206,106,.4)}
+.sbt h2{font:700 15px var(--mono);letter-spacing:1px;margin:0;background:linear-gradient(135deg,var(--text-primary),var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.ico{margin-left:auto;display:flex;gap:4px}
+.ico i{width:24px;height:24px;border:1px solid var(--border-subtle);border-radius:6px;display:grid;place-items:center;color:var(--text-secondary);font-style:normal;font-size:12px}
+.pu{margin-top:8px;font:11px var(--mono);color:var(--text-secondary);display:flex;gap:8px;align-items:center}
+.pu b{font-weight:500;color:var(--text-primary)}
+.pbar{width:50px;height:4px;border-radius:2px;background:var(--bg-tertiary);overflow:hidden;display:inline-block}
+.pbar i{display:block;height:100%;background:var(--accent)}
+.sbs{padding:8px 10px;flex:1;overflow-y:auto}
+.stabs{display:flex;gap:4px;align-items:center;margin-bottom:6px}
+.stab{font:600 11px var(--mono);text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);background:none;border:0;border-bottom:2px solid transparent;padding:4px 6px;cursor:pointer}
+.stab.on{color:var(--accent);border-bottom-color:var(--accent)}
+.filt{display:flex;align-items:center;gap:6px;border:1px solid var(--border-subtle);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--text-muted);margin-bottom:8px}
+.filt kbd{margin-left:auto;font:10px var(--mono);border:1px solid var(--border-subtle);border-radius:3px;padding:0 4px}
+.cat{font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);display:flex;gap:6px;align-items:center;height:26px;padding:0 4px}
+.cat em{font-style:normal;margin-left:auto;font-size:10px}
+.cat em .y{color:var(--warning)}
+.srow{display:flex;align-items:center;gap:7px;height:28px;padding:0 6px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;border:0;background:none;color:inherit;width:100%;text-align:left;font-family:var(--ui)}
+.srow:hover{background:var(--bg-tertiary)}
+.srow.on{background:var(--bg-tertiary);box-shadow:inset 2px 0 0 var(--accent);font-weight:600}
+.srow.child{padding-left:22px}
+.srow.stopped{color:var(--text-muted)}
+.srow .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.g{width:9px;height:9px;border-radius:50%;flex:none}
+.g.live{border:2px solid var(--accent)}.g.input{background:var(--warning)}.g.done{background:var(--success)}.g.stop{border:1.5px dashed var(--text-muted)}
+.claim{font:10px var(--mono);color:var(--cy);background:#1f3a44;border-radius:4px;padding:0 5px;white-space:nowrap}
+.prow{display:block;width:100%;text-align:left;border:0;background:none;color:inherit;font:inherit;padding:8px;border-radius:7px;cursor:pointer;margin-bottom:4px}
+.prow:hover,.prow.on{background:var(--bg-tertiary)}
+.prow b{display:block;font-size:13px}
+.prow span{font-size:11.5px;color:var(--text-muted)}
+.sbf{border-top:1px solid var(--border);padding:8px 12px;font-size:12px;color:var(--text-muted)}
+#mc{flex:1;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.hdr{display:flex;align-items:center;gap:10px;padding:11px 18px;background:linear-gradient(180deg,var(--bg-secondary),var(--bg-elevated));border-bottom:1px solid var(--border);min-height:48px}
+.hdr .sn{font:600 13px var(--mono);display:flex;align-items:center;gap:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr .sn::before{content:'●';color:var(--success);font-size:10px}
+.hdr .ctl{margin-left:auto;display:flex;gap:4px;align-items:center}
+.acct{font:11px var(--mono);border:1px solid var(--border-subtle);border-radius:12px;padding:2px 8px;color:var(--text-secondary);white-space:nowrap}
+.ib{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;color:var(--text-secondary);font-size:13px}
+.hbtn{font:700 12px var(--ui);border-radius:6px;padding:5px 10px;cursor:pointer;border:1px solid #2d5866;background:#1f3a44;color:var(--cy);white-space:nowrap}
+/* terminal */
+.term{flex:1;min-height:0;background:var(--terminal-bg);display:flex;flex-direction:column;padding:10px 14px 10px}
+.tx{flex:1;overflow-y:auto;font:13px/1.62 var(--mono);color:var(--text-secondary);white-space:pre-wrap;overflow-wrap:anywhere;padding-right:4px}
+.tx .u{color:var(--text-primary);background:#1d2030;display:block;padding:2px 6px;margin:8px 0 6px;border-radius:3px}
+.tx .b{color:var(--success)}.tx .bt{color:var(--accent)}.tx .k{color:var(--text-muted)}.tx .w{color:var(--text-primary)}.tx .y{color:var(--warning)}.tx .v{color:var(--vio)}
+.inb{border:1px solid var(--border);border-radius:6px;padding:6px 10px;font:13px/1.55 var(--mono);color:var(--text-primary);margin-top:8px;min-height:34px;white-space:pre-wrap}
+.inb::before{content:'> ';color:var(--text-muted)}
+.cur{display:inline-block;width:7px;height:15px;background:var(--text-secondary);vertical-align:-2px;animation:bl 1s steps(2) infinite}
+@keyframes bl{50%{opacity:0}}
+.stl{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--text-muted);padding:4px 2px 0;gap:10px;flex-wrap:wrap}
+/* factory overlay (replaces the Jobs overlay) */
+.fo{position:absolute;top:58px;right:14px;width:340px;max-width:calc(100% - 28px);z-index:20;font-family:var(--ui)}
+.fob{display:flex;align-items:center;gap:7px;padding:7px 10px;background:rgba(31,35,53,.94);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:10px;cursor:pointer;width:100%;color:inherit;font:inherit;text-align:left}
+.fob:hover{border-color:var(--accent)}
+.fo.open .fob{border-radius:10px 10px 0 0}
+.fob.flash{animation:fl 1s ease 2}
+@keyframes fl{50%{border-color:var(--warning);box-shadow:0 0 0 3px rgba(224,175,104,.25)}}
+.chev{color:var(--text-muted);font-size:10px;transition:transform .15s}
+.fo.open .chev{transform:rotate(90deg)}
+.fot{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-secondary);margin-right:auto}
+.cnt{font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:20px;white-space:nowrap;display:inline-flex;gap:4px;align-items:center}
+.cnt.r{color:var(--accent);background:rgba(122,162,247,.12)}.cnt.y{color:var(--warning);background:rgba(224,175,104,.14)}.cnt.v{color:var(--vio);background:rgba(187,154,247,.13)}.cnt.g{color:var(--success);background:rgba(158,206,106,.14)}
+.pl{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pp 1.6s infinite}
+@keyframes pp{50%{opacity:.25}}
+.fol{display:none;flex-direction:column;background:rgba(31,35,53,.96);backdrop-filter:blur(8px);border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;max-height:min(58vh,480px);overflow-y:auto}
+.fo.open .fol{display:flex}
+.foc{position:relative;display:block;width:100%;text-align:left;padding:8px 11px 9px 14px;background:none;border:0;border-top:1px solid var(--border-subtle);color:inherit;font:inherit;cursor:pointer}
+.foc:first-child{border-top:0}
+.foc:hover{background:rgba(122,162,247,.07)}
+.foc::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--border)}
+.foc.running::before{background:var(--accent)}.foc.you::before{background:var(--warning)}.foc.review::before{background:var(--vio)}.foc.merging::before{background:var(--cy)}.foc.intake::before,.foc.ready::before{background:var(--text-muted)}.foc.done::before{background:var(--success)}.foc.ses::before{background:var(--cy)}
+.foc.new{animation:nw 1.4s ease}
+@keyframes nw{from{background:rgba(122,162,247,.18)}}
+.fct{display:flex;gap:6px;align-items:baseline}
+.fct .t{font-size:12.5px;font-weight:600;flex:1;line-height:1.3}
+.fid{font:10.5px var(--mono);color:var(--vio);white-space:nowrap}
+.fcs{font-size:11.5px;color:var(--text-muted);margin-top:2px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.prog{display:flex;gap:2px;width:60px}
+.prog i{flex:1;height:4px;border-radius:2px;background:var(--bg-tertiary)}
+.prog i.d{background:var(--success)}.prog i.n{background:var(--accent)}
+.fof{display:flex;justify-content:space-between;padding:7px 11px;border-top:1px solid var(--border-subtle);font-size:12px}
+.lnk{background:none;border:0;color:var(--accent);font:600 12px var(--ui);cursor:pointer;padding:0}
+@media(prefers-reduced-motion:reduce){.pl,.cur,.fob.flash,.foc.new{animation:none}}
+/* chips, buttons */
+.chip{display:inline-block;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--bg-tertiary);color:var(--text-secondary);white-space:nowrap}
+.chip.v{background:#2b2550;color:var(--vio)}.chip.y{background:#3a3020;color:var(--warning)}.chip.g{background:#253322;color:var(--success)}.chip.c{background:#1f3a44;color:var(--cy)}.chip.b{background:#1f2f4d;color:var(--accent)}
+.btn{font:700 12.5px var(--ui);border-radius:7px;padding:6px 12px;cursor:pointer;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#16161e}
+.btn:hover{filter:brightness(1.12)}
+/* drawer, toast */
+.drawer{position:absolute;top:48px;right:0;bottom:0;width:min(430px,100%);background:var(--bg-secondary);border-left:1px solid var(--border);box-shadow:-16px 0 36px rgba(0,0,0,.45);padding:14px 16px;overflow-y:auto;z-index:30}
+.drawer h3{font-size:16px;margin:4px 0 10px;line-height:1.25}
+.drawer h4{font-size:12px;color:var(--text-secondary);margin:14px 0 6px}
+.drawer ul{margin:0;padding-left:18px;font-size:13px}
+.drawer p{font-size:13px;margin:0 0 8px}
+.x{float:right;background:none;border:0;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1}
+.verd{border:1px solid #7a6034;background:#2a2720;border-radius:8px;padding:8px 10px;font-size:13px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12.5px;margin:0}
+.kv dt{color:var(--text-muted)}.kv dd{margin:0;text-align:right}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.toast{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:40;background:var(--bg-elevated);border:1px solid #7a6034;border-radius:9px;padding:8px 10px 8px 12px;font-size:13px;display:flex;gap:10px;align-items:center;box-shadow:0 10px 28px rgba(0,0,0,.5);max-width:calc(100% - 380px)}
+.toast b{color:var(--warning)}
+/* main views */
+.view{flex:1;min-height:0;overflow-y:auto;background:var(--bg-primary)}
+.vh{display:flex;align-items:center;gap:10px;padding:16px 22px 10px;flex-wrap:wrap}
+.vh h2{margin:0;font-size:19px}
+.vh .sp{flex:1}
+.path{font:11.5px var(--mono);color:var(--text-muted)}
+.scroll{overflow-x:auto}
+.board{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;padding:6px 22px 20px;min-width:960px}
+.col h3{font-size:11.5px;font-weight:700;margin:0 0 8px;color:var(--text-secondary);display:flex;justify-content:space-between}
+.col h3 em{font-style:normal;color:var(--text-muted);font-weight:500}
+.bc{display:block;width:100%;text-align:left;font:inherit;color:inherit;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:8px;padding:8px 9px;margin-bottom:8px;font-size:12.5px;cursor:pointer}
+.bc:hover{border-color:var(--border)}
+.bc.you{border-color:#7a6034;background:#2a2720}.bc.ses{border-color:#2d5866}
+.bc .t{display:block;font-weight:600;margin:3px 0 5px;line-height:1.3}
+.bc .s{font-size:11px;color:var(--text-muted);display:block;margin-top:4px}
+.trk{margin:0 22px 14px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--bg-elevated)}
+.trh{display:flex;gap:10px;align-items:center;padding:10px 12px;flex-wrap:wrap}
+.trh b{font-size:14px}
+.play{width:28px;height:28px;border-radius:50%;border:0;background:var(--accent);color:#16161e;cursor:pointer;display:grid;place-items:center;flex:none;font-size:11px}
+.play.run{background:var(--bg-tertiary);color:var(--success);cursor:default}
+.fl{list-style:none;margin:0;padding:0 12px 10px 50px;font:12.5px/1.9 var(--mono);color:var(--text-secondary)}
+.fl u{color:var(--vio);text-decoration:none}
+.set{display:grid;gap:6px}
+.set label{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--border-subtle);border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;background:var(--bg-primary)}
+.set label:has(input:checked){border-color:var(--accent);background:#22294a}
+.set input{accent-color:var(--accent)}
+.set small{display:block;color:var(--text-muted);font-size:11.5px}
+.set.chk label{background:none;border:0;padding:2px 0}
+.note{font-size:12px;color:var(--text-muted);margin-top:10px}
+@media(max-width:760px){#sb{display:none}.toast{max-width:calc(100% - 24px);top:auto;bottom:14px}.fo{top:56px}}
+</style>
+
+<div class="band">
+  <h1>claude-remote with the factory folded in</h1>
+  <p class="lede">A copy of the real page with you in a planning session. The Jobs overlay becomes <b>Factory</b>. Click around freely, or play a flow into it:</p>
+  <div class="scen" id="scen">
+    <span>Play:</span>
+    <button data-s="send">1 · Send the track from my session</button>
+    <button data-s="add">2 · File loose work without leaving the terminal</button>
+    <button data-s="esc">3 · A risky change escalates to me</button>
+    <button data-s="take">4 · Take over the track in a terminal</button>
+    <button data-s="reset">Reset</button>
+  </div>
+
+  <div class="app" id="app">
+    <aside id="sb">
+      <div class="sbh">
+        <div class="sbt"><span class="cdot" title="Connected"></span><h2>Claude Remote</h2><span class="ico"><i>⌨</i><i>⚙</i></span></div>
+        <div class="pu">5h <span class="pbar"><i style="width:34%"></i></span><b>34%</b> · wk <span class="pbar"><i style="width:61%"></i></span><b>61%</b></div>
+      </div>
+      <div class="sbs">
+        <div class="stabs"><button class="stab on" data-sbt="sessions">Sessions</button><button class="stab" data-sbt="projects">Projects</button></div>
+        <div id="sb-sessions">
+          <div class="filt">⌕ Filter sessions <kbd>Alt K</kbd></div>
+          <div id="slist"></div>
+        </div>
+        <div id="sb-projects" hidden>
+          <button class="prow" data-proj="cr"><b>claude-remote</b><span>3 tracks · factory: 4 running</span></button>
+          <button class="prow"><b>ds-news</b><span>1 track · idle</span></button>
+          <button class="prow"><b>Revamp</b><span>2 tracks · idle</span></button>
+        </div>
+      </div>
+      <div class="sbf">Albert · tailnet</div>
+    </aside>
+
+    <main id="mc">
+      <div class="hdr"><span class="sn" id="hname">planning</span><span class="ctl"><button class="hbtn" id="retbtn" hidden>Return to factory</button><span class="acct">personal</span><span class="ib">⑂</span><span class="ib">⧉</span><span class="ib">✎</span><span class="ib" style="color:var(--danger)">✕</span></span></div>
+
+      <section class="term" id="v-term">
+        <div class="tx" id="tx"></div>
+        <div class="inb" id="inb"><span class="cur"></span></div>
+        <div class="stl"><span>? for shortcuts</span><span id="stl">~/NodeProjects/claude-remote · main</span></div>
+      </section>
+
+      <section class="view" id="v-board" hidden>
+        <div class="vh"><h2>Factory</h2><span class="chip g">dispatcher on</span><span class="path">reviewer: agent, escalates risky changes</span><span class="sp"></span><button class="btn" data-open="set">⚙ Settings</button><button class="btn p" data-back>Back to terminal</button></div>
+        <div class="scroll"><div class="board" id="board"></div></div>
+      </section>
+
+      <section class="view" id="v-proj" hidden>
+        <div class="vh"><div><h2>claude-remote</h2><div class="path">~/NodeProjects/claude-remote · PROJECT.md</div></div><span class="sp"></span><button class="btn p" data-back>Back to terminal</button></div>
+        <div id="tracks"></div>
+      </section>
+
+      <div class="fo" id="fo">
+        <button class="fob" id="fob"><span class="chev">▶</span><span class="fot">Factory</span><span id="cnts" style="display:flex;gap:5px;flex-wrap:wrap"></span></button>
+        <div class="fol"><div id="fol"></div><div class="fof"><span class="path" id="fuel">today 1.9M tokens</span><button class="lnk" data-board>Open board →</button></div></div>
+      </div>
+      <aside class="drawer" id="drawer" hidden></aside>
+      <div class="toast" id="toast" hidden></div>
+    </main>
+  </div>
+  <p class="note">Sample content throughout. The page around the factory is copied from claude-remote's index.html and styles.css.</p>
+</div>
+
+<script>
+{
+const $=s=>document.getElementById(s);
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sleep=ms=>new Promise(r=>setTimeout(r,RM?Math.min(ms,60):ms));
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const COLS=[[`intake`,`Intake`],[`ready`,`Ready`],[`running`,`Running`],[`review`,`Review`],[`merging`,`Merging`],[`done`,`Done today`]];
+const PLAN_TX=`<span class="u">&gt; let's plan the session history search track</span><span class="b">●</span> I read src/server/sessions/, the history index and docs/session-revive.md.
+
+<span class="b">●</span> <span class="w">Write</span>(project/history-search.md)
+  <span class="k">⎿</span> Wrote 64 lines
+
+<span class="b">●</span> <span class="w">Edit</span>(PROJECT.md)
+  <span class="k">⎿</span> Added <span class="w">## Track: Session history search</span> (4 features)
+
+<span class="b">●</span> The spec covers the FTS index, the search API, the panel and opening a hit
+  in Resume. Features 2 to 4 build on 1, so they share files.
+  Want me to start it?
+`;
+const TAKE_TX=`<span class="k">Resumed the factory's session for track</span> <span class="w">Session history search</span>
+<span class="k">worktree  tracks/k2m81-history · feature 2 of 4 · the factory has paused this item</span>
+
+<span class="b">●</span> I was on <span class="w">Search API with project and date filters</span>. routes.ts has the
+  handler and 14 passing tests; the date filter isn't wired to the index yet.
+  Want me to carry on, or will you drive?
+`;
+let S, sess, cur, open=false, busy=false;
+function init(){
+  S={items:[
+    {id:`f-x2pa1q`,t:`Usage chip shows weekly cap`,c:`running`,s:`verify · Sonnet`},
+    {id:`f-h33r0b`,t:`Board remembers collapsed tracks`,c:`review`,s:`reviewer agent checking`},
+    {id:`f-z9le4c`,t:`Tab leaves the folder field`,c:`merging`,s:`resolver agent: conflict in session-manager.ts`},
+    {id:`f-z7aa4n`,t:`Revive after Build & restart`,c:`done`,s:`merged · agent-approved`},
+    {id:`f-m9t0x1`,t:`Plan usage chip tooltip`,c:`done`,s:`merged · agent-approved`}
+  ],tracks:{hist:false,clean:false},tx:{planning:PLAN_TX,take:TAKE_TX}};
+  sess=[{k:`planning`,n:`planning`,g:`live`,cat:0},{k:`android`,n:`android-settings`,g:`input`,cat:0,claim:`f-a8nd2s`},{k:`scratch`,n:`scratch`,g:`stop`,cat:0},{k:`dsapi`,n:`api-pagination`,g:`done`,cat:1}];
+  cur=`planning`;
+}
+function renderSessions(){
+  const cats=[`claude-remote`,`ds-news`];
+  $('slist').innerHTML=cats.map((c,ci)=>{const rows=sess.filter(s=>s.cat===ci);const inp=rows.filter(s=>s.g===`input`).length,dn=rows.filter(s=>s.g===`done`).length;
+    return `<div class="cat">▾ ${c} <span>${rows.length}</span><em>${inp?`<span class="y">${inp}●</span> `:''}${dn?`<span style="color:var(--success)">${dn}●</span>`:''}</em></div>`+rows.map(s=>`<button class="srow${s.child?' child':''}${s.k===cur?' on':''}${s.g==='stop'?' stopped':''}" data-sess="${s.k}"><span class="g ${s.g}"></span><span class="nm">${esc(s.n)}</span>${s.claim?`<span class="claim">${s.claim}</span>`:''}</button>`).join('')}).join('');
+}
+function counts(){const n=c=>S.items.filter(i=>i.c===c).length;const you=S.items.filter(i=>i.you).length,run=n(`running`)+n(`intake`)+n(`ready`);
+  $('cnts').innerHTML=`<span class="cnt r"><span class="pl"></span>${run}</span>${n('review')-you>0?`<span class="cnt v">${n('review')-you} review</span>`:''}${you?`<span class="cnt y">${you} needs you</span>`:''}${n('merging')?`<span class="cnt" style="color:var(--cy);background:rgba(125,207,255,.12)">${n('merging')} merging</span>`:''}<span class="cnt g">${n('done')}</span>`}
+function cls(i){return i.you?`you`:i.ses?`ses`:i.c}
+function meta(i){return `${i.prog!=null?`<span class="prog">${[0,1,2,3].map(k=>`<i class="${k<i.prog?'d':k===i.prog?'n':''}"></i>`).join('')}</span>`:''}<span>${esc(i.s)}</span>`}
+function renderOverlay(){
+  const order=[`you`,`running`,`ses`,`review`,`intake`,`ready`,`merging`,`done`];
+  const list=S.items.slice().sort((a,b)=>order.indexOf(cls(a))-order.indexOf(cls(b)));
+  $('fol').innerHTML=list.map(i=>`<button class="foc ${cls(i)}${i.fresh?' new':''}" data-item="${i.id}"><span class="fct"><span class="t">${esc(i.t)}</span><span class="fid">${i.track?'track':i.id}</span></span><span class="fcs">${meta(i)}</span></button>`).join('');
+  counts();
+}
+function renderBoard(){
+  $('board').innerHTML=COLS.map(([c,l])=>{const its=S.items.filter(i=>i.c===c);const you=its.filter(i=>i.you).length;
+    return `<div class="col"><h3>${l} <em>${c==='review'&&its.length?`agent ${its.length-you} · you ${you}`:its.length}</em></h3>${its.map(i=>`<button class="bc${i.you?' you':i.ses?' ses':''}" data-item="${i.id}"><span class="fid">${i.track?'Track':i.id}</span><span class="t">${esc(i.t)}</span>${i.prog!=null?`<span class="prog" style="width:100%">${[0,1,2,3].map(k=>`<i class="${k<i.prog?'d':k===i.prog?'n':''}"></i>`).join('')}</span>`:''}<span class="s">${esc(i.s)}</span></button>`).join('')}</div>`}).join('');
+}
+function renderTracks(){
+  const T=[[`hist`,`Session history search`,[`f-k2m81a P1 Index transcripts into SQLite FTS`,`f-k2m81b P1 Search API with project and date filters`,`f-k2m81c P2 Search panel in the session manager`,`f-k2m81d P2 Open a hit straight into Resume`]],[`clean`,`Job board cleanup`,[`f-c1bb7d P2 Remove the legacy stage switch`,`f-c1bb7e P3 Drop decision-format prose parsing`]]];
+  const inbox=S.items.filter(i=>i.inbox);
+  $('tracks').innerHTML=T.map(([k,n,fs])=>`<div class="trk"><div class="trh"><button class="play${S.tracks[k]?' run':''}" data-play="${k}" aria-label="Send to factory">${S.tracks[k]?'❚❚':'▶'}</button><b>${n}</b>${S.tracks[k]?`<span class="chip g">factory · running</span>${k==='hist'&&S.fromSession?'<span class="chip c">sent from session “planning”</span>':''}`:'<span class="chip">planned · spec ready</span>'}</div><ul class="fl">${fs.map(f=>{const [id,...r]=f.split(' ');return `<li>[${S.tracks[k]?'~':' '}] <u>${id}</u> ${esc(r.join(' '))}</li>`}).join('')}</ul></div>`).join('')+
+  `<div class="trk"><div class="trh"><button class="play" aria-label="Send to factory">▶</button><b>Inbox</b><span class="chip">${inbox.length} items · filled by Add work, sessions and agents</span></div><ul class="fl">${inbox.length?inbox.map(i=>`<li>[ ] <u>${i.id}</u> ${esc(i.t)}</li>`).join(''):'<li class="path">empty</li>'}</ul></div>`;
+}
+function render(){renderSessions();renderOverlay();renderBoard();renderTracks();$('fo').classList.toggle('open',open);S.items.forEach(i=>i.fresh=false)}
+function showTx(){$('tx').innerHTML=S.tx[cur]||`<span class="k">(session ${esc(cur)})</span>\n`;$('tx').scrollTop=1e6;
+  const s=sess.find(x=>x.k===cur);$('hname').textContent=s?s.n:cur;$('retbtn').hidden=cur!==`take`;
+  $('stl').textContent=cur===`take`?`~/.claude-remote/worktrees/tracks/k2m81-history · track/session-history-search`:`~/NodeProjects/claude-remote · main`}
+function view(v){for(const k of ['term','board','proj'])$('v-'+k).hidden=k!==v;$('drawer').hidden=true}
+async function type(text){const b=$('inb');b.textContent='';for(const ch of text){b.textContent+=ch;await sleep(ch==='\n'?120:14)}await sleep(350);b.innerHTML='<span class="cur"></span>';S.tx[cur]+=`<span class="u">&gt; ${esc(text)}</span>`;$('tx').innerHTML=S.tx[cur];$('tx').scrollTop=1e6}
+async function out(html,ms=500){await sleep(ms);S.tx[cur]+=html;$('tx').innerHTML=S.tx[cur];$('tx').scrollTop=1e6}
+function add(it){it.fresh=true;S.items.push(it);render()}
+function item(id){return S.items.find(i=>i.id===id)}
+let tt;function toast(html,ms=7000){const t=$('toast');t.innerHTML=html;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,ms)}
+function startTrack(fromSession){if(S.tracks.hist)return;S.tracks.hist=true;S.fromSession=fromSession;add({id:`trk-hist`,track:1,t:`Session history search`,c:`running`,prog:0,s:`feature 1 of 4 · Sonnet${fromSession?' · from session':''}`})}
+const SC={
+async send(){
+  if(S.tracks.hist)return;view('term');cur=`planning`;showTx();render();
+  await type(`Looks good. Send it to the factory, review per feature.`);
+  await out(`\n<span class="b">●</span> <span class="w">Bash</span>(cr factory send "Session history search" --review per-feature)\n`,600);
+  await out(`  <span class="k">⎿</span> <span class="b">queued</span>  track Session history search · 4 features\n     plan    1 agent, features in order (they share files) · Sonnet\n     review  per feature · reviewer agent, escalates when risky\n`,900);
+  open=true;startTrack(true);
+  await out(`\n<span class="b">●</span> Sent. It's in the Factory overlay; I'm still here if you want to plan more.\n`,700);
+  await sleep(2200);const t=item(`trk-hist`);if(t){t.prog=1;t.s=`feature 2 of 4 · Sonnet · from session`;render()}
+},
+async add(){
+  view('term');cur=`planning`;showTx();render();
+  await type(`file these for later:\n- fork loses the window title\n- android push should retry on 503, but don't spam\n- session switcher on ctrl+shift+k, mockup first`);
+  await out(`\n<span class="b">●</span> <span class="w">Bash</span>(cr factory add --from-stdin)\n`,600);
+  await out(`  <span class="k">⎿</span> <span class="b">intake</span>  3 features → Inbox (PROJECT.md)\n     <span class="v">f-r7qq2c</span>  Fork keeps the window title\n     <span class="v">f-r7qq2e</span>  Android push retries on 503  <span class="k">+ requirement: back off, no spam</span>\n     <span class="v">f-r7qq2f</span>  Session switcher on Ctrl+Shift+K  <span class="y">mockup first</span>\n     <span class="k">order</span>   f-r7qq2c waits for f-r7qq2f (both touch session-manager.ts)\n`,1000);
+  open=true;
+  for(const it of [{id:`f-r7qq2c`,t:`Fork keeps the window title`,c:`intake`,s:`shaping · Haiku`,inbox:1},{id:`f-r7qq2e`,t:`Android push retries on 503`,c:`intake`,s:`shaping · Haiku`,inbox:1},{id:`f-r7qq2f`,t:`Session switcher on Ctrl+Shift+K`,c:`intake`,s:`writing mockup · Opus`,inbox:1}]){if(!item(it.id)){add(it);await sleep(250)}}
+  await out(`\n<span class="b">●</span> Filed. They're shaping now; nothing needs you yet. Back to the plan?\n`,600);
+  await sleep(2000);const a=item(`f-r7qq2c`);if(a){a.c=`ready`;a.s=`waits for f-r7qq2f · Haiku`}
+  const m=item(`f-r7qq2f`);if(m){m.c=`review`;m.you=1;m.s=`mockup ready for you`}render();
+},
+async esc(){
+  open=true;const h=item(`f-h33r0b`);if(h){h.c=`merging`;h.s=`approved by reviewer agent · queue 2`;h.fresh=true}
+  if(!item(`f-g8tq1m`))add({id:`f-g8tq1m`,t:`Admit tailnet devices by tag`,c:`review`,you:1,s:`escalated: touches auth/access-gate.ts`});
+  render();$('fob').classList.remove('flash');void $('fob').offsetWidth;$('fob').classList.add('flash');
+  toast(`<span><b>Factory</b> · f-g8tq1m needs you: touches auth/access-gate.ts. The reviewer agent found no problems.</span><button class="btn p" data-item="f-g8tq1m">Review</button>`);
+  await sleep(2600);const z=item(`f-z9le4c`);if(z){z.c=`done`;z.s=`merged · resolver fixed the conflict`;z.fresh=true}if(h){h.c=`done`;h.s=`merged · agent-approved`}render();
+},
+async take(){
+  if(!S.tracks.hist){startTrack(false)}
+  const t=item(`trk-hist`);t.ses=1;t.c=`running`;t.prog=1;t.s=`session · you · factory paused`;
+  if(!sess.find(s=>s.k===`take`))sess.splice(1,0,{k:`take`,n:`history-search`,g:`live`,cat:0,child:1,claim:`track`});
+  cur=`take`;view('term');showTx();render();await sleep(400);
+  toast(`<span>Took over <b style="color:var(--cy)">Session history search</b>. The factory skips it until you press Return to factory.</span>`,4500);
+}
+};
+async function run(k){if(busy)return;if(k==='reset'){init();open=false;view('term');showTx();render();$('toast').hidden=true;document.querySelectorAll('[data-s]').forEach(b=>b.classList.remove('ran'));return}
+  busy=true;document.querySelectorAll('[data-s]').forEach(b=>b.disabled=true);
+  try{await SC[k]()}finally{busy=false;document.querySelectorAll('[data-s]').forEach(b=>b.disabled=false);document.querySelector(`[data-s="${k}"]`).classList.add('ran')}}
+const D={
+'f-g8tq1m':()=>`<span class="fid">f-g8tq1m</span><h3>Admit tailnet devices by tag</h3><div class="verd"><b style="color:var(--warning)">Escalated to you</b>: touches auth/access-gate.ts (rule: auth changes). The reviewer agent found no problems.</div><h4>Summary</h4><ul><li>New setting auth.allowedTags; a device with a listed tag passes the gate.</li><li>Missing tailscale still refuses, never admits.</li><li>Tests 228 passed · QA playwright passed · +142 −9</li></ul><h4>Assumptions it made instead of asking</h4><ul><li>Tags match exactly, no wildcards.</li></ul><div class="acts"><button class="btn p" data-approve="f-g8tq1m">Approve</button><button class="btn">Request changes</button><button class="btn">Open diff</button></div>`,
+'f-r7qq2f':()=>`<span class="fid">f-r7qq2f</span><h3>Session switcher on Ctrl+Shift+K</h3><span class="chip y">mockup ready for you</span><h4>Mockup</h4><svg viewBox="0 0 320 140" role="img" aria-label="Mockup of the session switcher" style="width:100%;border:1px solid var(--border-subtle);border-radius:8px;background:var(--terminal-bg)"><rect x="60" y="14" width="200" height="110" rx="9" fill="#24283b" stroke="#414868"/><rect x="72" y="26" width="176" height="18" rx="4" fill="#1a1b26"/><text x="79" y="39" fill="#9aa5ce" font-size="9" font-family="monospace">sea|</text><rect x="72" y="52" width="176" height="16" rx="3" fill="#22294a"/><text x="79" y="63" fill="#c0caf5" font-size="9">history-search</text><text x="214" y="63" fill="#7dcfff" font-size="8">live</text><text x="79" y="82" fill="#6b7399" font-size="9">planning</text><text x="79" y="100" fill="#6b7399" font-size="9">android-settings</text><text x="79" y="116" fill="#565f89" font-size="7.5">Enter attach · Esc close</text></svg><p class="path" style="margin-top:6px">Served by claude-remote from the item's prompt folder; opens full size.</p><div class="acts"><button class="btn p" data-approve="f-r7qq2f">Approve mockup</button><button class="btn">Comment…</button></div>`,
+'trk-hist':()=>{const t=item('trk-hist');return `<span class="path">Track${S.fromSession?' · sent from session “planning”':''}</span><h3>Session history search</h3><span class="chip b">1 agent · Sonnet</span> <span class="chip">review per feature</span>${t.ses?' <span class="chip c">session · you</span>':''}<h4>Features, in order, one worktree</h4><ul><li>${t.prog>0?'✓':'…'} Index transcripts into SQLite FTS</li><li>${t.prog===1?'<b>Search API with filters</b> (now)':'Search API with filters'}</li><li>Search panel</li><li>Open a hit into Resume</li></ul><h4>Live</h4><dl class="kv"><dt>Heartbeat</dt><dd>${t.ses?'your terminal':'4s ago'}</dd><dt>Tokens</dt><dd>640k</dd><dt>Worktree</dt><dd>tracks/k2m81-history</dd></dl><div class="acts">${t.ses?'<button class="btn" data-ret>Return to factory</button>':'<button class="btn p" data-take>Take over in terminal</button><button class="btn">Split the rest</button><button class="btn">Pause</button>'}</div>`}
+};
+function drawer(id){const it=item(id);const f=D[id];$('drawer').innerHTML=`<button class="x" data-close aria-label="Close">×</button>`+(f?f():`<span class="fid">${id}</span><h3>${esc(it?it.t:id)}</h3><p>${esc(it?it.s:'')}</p>`);$('drawer').hidden=false}
+const SET=`<button class="x" data-close aria-label="Close">×</button><span class="path">Settings · Factory</span><h3>claude-remote</h3><h4>Who reviews finished work</h4><div class="set"><label><input type="radio" name="rv"><span>Reviewer agent decides<small>You never block a merge.</small></span></label><label><input type="radio" name="rv" checked><span>Reviewer agent, escalate to me when risky</span></label><label><input type="radio" name="rv"><span>Me</span></label></div><h4>Escalate when</h4><div class="set chk"><label><input type="checkbox" checked>It touches auth/, access-gate, accounts or migrations</label><label><input type="checkbox" checked>The diff is over 400 lines</label><label><input type="checkbox" checked>Two fix loops didn't satisfy the reviewer</label><label><input type="checkbox" checked>It made assumptions instead of asking</label><label><input type="checkbox">It adds a dependency</label></div><h4>Review granularity</h4><div class="set"><label><input type="radio" name="gr" checked><span>Once per track<small>A session or track spec can override it.</small></span></label><label><input type="radio" name="gr"><span>Per feature</span></label></div><h4>Capacity</h4><dl class="kv"><dt>Seats</dt><dd>5</dd><dt>Pause dispatch when items wait for me</dt><dd>3</dd><dt>Daily token cap</dt><dd>6M</dd></dl>`;
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-s],[data-sess],[data-sbt],[data-proj],[data-item],[data-board],[data-back],[data-close],[data-play],[data-approve],[data-take],[data-ret],[data-open],#fob,#retbtn');if(!g)return;
+  if(g.dataset.s)return run(g.dataset.s);
+  if(g.id==='fob'){open=!open;$('fo').classList.toggle('open',open);return}
+  if(g.dataset.sess){cur=g.dataset.sess;view('term');showTx();renderSessions();return}
+  if(g.dataset.sbt){const p=g.dataset.sbt==='projects';$('sb-sessions').hidden=p;$('sb-projects').hidden=!p;document.querySelectorAll('.stab').forEach(b=>b.classList.toggle('on',b===g));if(p){view('proj');renderTracks()}else view('term');return}
+  if(g.dataset.proj){view('proj');renderTracks();return}
+  if(g.dataset.item){$('toast').hidden=true;drawer(g.dataset.item);return}
+  if(g.hasAttribute('data-board')){view('board');renderBoard();return}
+  if(g.hasAttribute('data-back')){view('term');showTx();return}
+  if(g.hasAttribute('data-close')){$('drawer').hidden=true;return}
+  if(g.dataset.open){$('drawer').innerHTML=SET;$('drawer').hidden=false;return}
+  if(g.dataset.play){if(g.dataset.play==='hist')startTrack(false);else if(!S.tracks.clean){S.tracks.clean=true;add({id:`trk-clean`,track:1,t:`Job board cleanup`,c:`running`,prog:0,s:`feature 1 of 2 · Sonnet`})}open=true;render();toast(`<span>Sent to the factory with your Settings defaults.</span>`,3000);return}
+  if(g.dataset.approve){const it=item(g.dataset.approve);if(it){it.you=0;if(it.id==='f-r7qq2f'){it.c='ready';it.s='mockup approved · Opus'}else{it.c='merging';it.s='approved by you · queued'}it.fresh=true}$('drawer').hidden=true;render();return}
+  if(g.hasAttribute('data-take')){$('drawer').hidden=true;run('take');return}
+  if(g.hasAttribute('data-ret')||g.id==='retbtn'){const t=item('trk-hist');if(t){t.ses=0;t.s='feature 2 of 4 · Sonnet · factory resumed';t.fresh=true}sess=sess.filter(s=>s.k!=='take');cur='planning';$('drawer').hidden=true;view('term');showTx();render();toast(`<span>Returned to the factory. It picks up from your last commit.</span>`,3500);return}
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('drawer').hidden=true}});
+init();showTx();render();
+}
+</script>
