@@ -85,6 +85,11 @@ export interface Config {
   accounts: Record<string, AccountConfig>;
   /** The account a new session gets when neither its start nor its project names one. */
   defaultAccount: string;
+  /**
+   * Settings → Factory, as written: read through `factoryReviewSettings()`
+   * (factory/review-settings.ts), which fills defaults and drops bad values.
+   */
+  factory?: { review?: Record<string, unknown> };
 }
 
 export interface AccountConfig {
@@ -263,21 +268,42 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 export function setServerSettings(patch: ServerSettingsPatch): void {
   const configPath = getConfigPath();
+  const changed = [...LIMIT_KEYS, ...FLAG_KEYS].filter((key) => patch[key] !== undefined);
+  patchConfigFile((onDisk) => {
+    // A section that isn't an object (an array, a number): loadConfig ignores it too, so
+    // start it afresh.
+    // Patched into `next`, not `onDisk`: two limits in one section must both land.
+    const next: Record<string, unknown> = { ...onDisk };
+    for (const key of changed) {
+      const section = sectionOf(key);
+      const current = isPlainObject(next[section]) ? next[section] : {};
+      next[section] = { ...current, [key]: patch[key] };
+    }
+    return next;
+  });
+
+  // New objects: a section may still be defaultConfig's own, shared by reference.
+  const updated: Record<string, unknown> = { ...currentConfig };
+  for (const key of changed) {
+    const section = sectionOf(key);
+    updated[section] = { ...(updated[section] as object), [key]: patch[key] };
+  }
+  currentConfig = updated as unknown as Config;
+  logger.info({ path: configPath, ...patch }, 'Saved server settings');
+}
+
+/**
+ * Rewrite the config file from what is on disk (never the merged config, which would pin
+ * every default into the user's file). An unparseable file throws instead of being
+ * replaced, or a typo would cost the user their accounts.
+ */
+function patchConfigFile(edit: (onDisk: Record<string, unknown>) => Record<string, unknown>): void {
+  const configPath = getConfigPath();
   const onDisk: unknown = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf-8')) : {};
   if (!isPlainObject(onDisk)) {
     throw new Error(`${configPath} does not hold a JSON object`);
   }
-  // A section that isn't an object (an array, a number): loadConfig ignores it too, so
-  // start it afresh.
-  // Patched into `next`, not `onDisk`: two limits in one section must both land.
-  const next: Record<string, unknown> = { ...onDisk };
-  const changed = [...LIMIT_KEYS, ...FLAG_KEYS].filter((key) => patch[key] !== undefined);
-  for (const key of changed) {
-    const section = sectionOf(key);
-    const current = isPlainObject(next[section]) ? next[section] : {};
-    next[section] = { ...current, [key]: patch[key] };
-  }
-
+  const next = edit(onDisk);
   mkdirSync(dirname(configPath), { recursive: true });
   // Through a temp file: a crash mid-write must not leave a truncated config.
   const tempPath = `${configPath}.tmp`;
@@ -289,15 +315,21 @@ export function setServerSettings(patch: ServerSettingsPatch): void {
     try { rmSync(tempPath, { force: true }); } catch { /* left for the next save to overwrite */ }
     throw error;
   }
+}
 
-  // New objects: a section may still be defaultConfig's own, shared by reference.
-  const updated: Record<string, unknown> = { ...currentConfig };
-  for (const key of changed) {
-    const section = sectionOf(key);
-    updated[section] = { ...(updated[section] as object), [key]: patch[key] };
-  }
-  currentConfig = updated as unknown as Config;
-  logger.info({ path: configPath, ...patch }, 'Saved server settings');
+/**
+ * Replace the keys given in `factory.review` (Settings → Factory), on disk and in the
+ * running config. Values are the caller's to check (factory/review-settings.ts).
+ */
+export function setFactoryReviewConfig(patch: Record<string, unknown>): void {
+  const merge = (factory: unknown) => {
+    const f = isPlainObject(factory) ? factory : {};
+    const review = isPlainObject(f.review) ? f.review : {};
+    return { ...f, review: { ...review, ...patch } };
+  };
+  patchConfigFile((onDisk) => ({ ...onDisk, factory: merge(onDisk.factory) }));
+  currentConfig = { ...currentConfig, factory: merge(currentConfig.factory) as Config['factory'] };
+  logger.info({ path: getConfigPath(), ...patch }, 'Saved factory settings');
 }
 
 export function getConfig(): Config {

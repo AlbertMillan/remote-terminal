@@ -1,6 +1,7 @@
 import type { JobOverlay, OverlayPlacement } from './job-overlay.js';
 import { ServerRestartControl } from './server-restart.js';
 import { SessionLimitSetting } from './session-limit-setting.js';
+import { FactorySetting } from './factory-setting.js';
 import type { NotificationPreferencesPayload } from './session-types.js';
 import { KEEP_STOPPED_IN_PLACE_KEY, readFlag, writeFlag } from './session-list-view.js';
 
@@ -18,15 +19,16 @@ export interface SettingsModalHost {
   buildBehind(): boolean;
 }
 
-export type SettingsTab = 'notifications' | 'display' | 'sessions' | 'server';
+export type SettingsTab = 'notifications' | 'display' | 'sessions' | 'factory' | 'server';
 
 /** In strip order; ←/→ move through them. Each tab's button is `settings-tab-<id>`, its panel `settings-panel-<id>`. */
-const TABS: readonly SettingsTab[] = ['notifications', 'display', 'sessions', 'server'];
+const TABS: readonly SettingsTab[] = ['notifications', 'display', 'sessions', 'factory', 'server'];
 /** How a tab is named in the unsaved-changes summary and the restart warning. */
 const TAB_LABELS: Record<SettingsTab, string> = {
   notifications: 'Notifications',
   display: 'Display',
   sessions: 'Sessions',
+  factory: 'Factory',
   server: 'Server',
 };
 
@@ -39,6 +41,7 @@ export class SettingsModal {
   /** Restart / Build & restart on the Server tab; it warns about the unsaved changes a restart drops. */
   private serverRestart = new ServerRestartControl(() => this.unsavedTabs().map((tab) => TAB_LABELS[tab]));
   private sessionLimit = new SessionLimitSetting();
+  private factory = new FactorySetting();
   /** Bumped on every open and close: a save applies its local part only if it still matches. */
   private openId = 0;
   private saving = false;
@@ -65,6 +68,9 @@ export class SettingsModal {
     document.getElementById('settings-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hide();
     });
+    for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="factory-review-mode"]')) {
+      radio.addEventListener('change', () => this.factory.updateRulesEnabled());
+    }
     const panels = document.getElementById('settings-panels');
     panels?.addEventListener('input', () => this.refreshDirty());
     panels?.addEventListener('change', () => this.refreshDirty());
@@ -92,7 +98,7 @@ export class SettingsModal {
 
     const openId = ++this.openId;
     // Until the limits reload, what their fields hold is the last open's: no dot for it.
-    for (const input of this.fields('sessions')) this.loaded.delete(input);
+    for (const input of [...this.fields('sessions'), ...this.fields('factory')]) this.loaded.delete(input);
     this.updateUI();
     this.updateSaveEnabled();
     this.select(tab, false);
@@ -102,6 +108,11 @@ export class SettingsModal {
       // Loaded values are the baseline for the Sessions dot; a later open has its own.
       if (openId !== this.openId) return;
       this.remember('sessions');
+      this.refreshDirty();
+    });
+    void this.factory.refresh().then(() => {
+      if (openId !== this.openId) return;
+      this.remember('factory');
       this.refreshDirty();
     });
   }
@@ -254,13 +265,15 @@ export class SettingsModal {
     this.saving = true;
     this.updateSaveEnabled();
     const saved = await this.sessionLimit.save();
+    const factorySaved = saved && (await this.factory.save());
     this.saving = false;
     this.updateSaveEnabled();
     // Closed (or closed and reopened) while the server answered: Cancel means the
     // preferences below stay as they were. The limit is the server's either way.
-    if (!saved || openId !== this.openId) {
-      // A refused limit keeps its dot; say which tab holds the reason.
-      if (!saved && openId === this.openId && this.tab !== 'sessions') this.select('sessions', false);
+    if (!factorySaved || openId !== this.openId) {
+      // A refused setting keeps its dot; say which tab holds the reason.
+      const refused: SettingsTab = !saved ? 'sessions' : 'factory';
+      if (!factorySaved && openId === this.openId && this.tab !== refused) this.select(refused, false);
       return;
     }
 

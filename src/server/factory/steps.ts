@@ -6,7 +6,7 @@ import { DONE, type Progress, type WorkflowStep } from './templates.js';
 /**
  * Step handlers: what each template step does. Templates name a handler, so a
  * later feature replaces one without touching the walk — the shaping pass
- * (f-wlr5dc) and the reviewer agent (f-o5veqv) are stubs here for that reason.
+ * (f-wlr5dc) is a stub here for that reason; the reviewer is review-step.ts.
  */
 
 export interface AgentRequest {
@@ -236,12 +236,7 @@ Base it on \`git diff ${ctx.worktree.baseBranch}...HEAD\` and what you did. Do n
   return { outcome: DONE };
 });
 
-registerStepHandler('review', async () => {
-  // Stub until the reviewer agent (f-o5veqv): every unit waits for the user,
-  // the "me" setting, rather than merging unreviewed. Releasing it with the
-  // outcome `approved` (engine.releaseParked) moves it on to merge.
-  return { park: 'review: waiting for you (no reviewer agent yet)' };
-});
+// 'review', 'review-fix', 'track-features-reviewed' and 'next-feature': review-step.ts.
 
 registerStepHandler('merge', async (ctx) => ({
   handoff: {

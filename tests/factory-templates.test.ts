@@ -39,7 +39,20 @@ describe('item template', () => {
     const r = walk(ITEM_TEMPLATE, happy);
     expect(r.end).toBe('finished');
     expect(r.ran).toEqual(['shape', 'implement', 'verify', 'self-review', 'summary', 'review', 'merge']);
-    expect(r.progress.skipped).toEqual(['fix']);
+    expect(r.progress.skipped).toEqual(['fix', 'review-fix']);
+  });
+
+  it("loops review-fix → verify → … → review while the reviewer asks for changes, up to the cap", () => {
+    const answer = (step: string, n: number) =>
+      step === 'review' ? (n < 3 ? 'changes' : 'approved') : step === 'verify' || step === 'self-review' ? 'pass' : 'done';
+    const r = walk(ITEM_TEMPLATE, answer);
+    expect(r.end).toBe('finished');
+    expect(r.ran.filter((s) => s === 'review-fix')).toHaveLength(2);
+    expect(r.ran.slice(-2)).toEqual(['review', 'merge']);
+
+    const stuck = walk(ITEM_TEMPLATE, (step) => (step === 'review' ? 'changes' : happy(step)));
+    expect(stuck).toMatchObject({ end: 'park', at: 'review-fix' });
+    expect(stuck.ran.filter((s) => s === 'review-fix')).toHaveLength(2);
   });
 
   it('loops fix → verify → self-review until the checks pass', () => {
@@ -95,6 +108,17 @@ describe('track template', () => {
   it('has no shaping step: the features run first', () => {
     const r = walk(TRACK_TEMPLATE, happy);
     expect(r.ran).toEqual(['features', 'verify', 'self-review', 'summary', 'review', 'merge']);
+    expect(r.progress.skipped).toEqual(expect.arrayContaining(['review-fix', 'next-feature']));
+  });
+
+  it('reviewed per feature, walks features → … → review once per feature, then merges once', () => {
+    // Three features: the features step reports `more` until the last one.
+    const answer = (step: string, n: number) =>
+      step === 'features' ? (n < 3 ? 'more' : 'done') : step === 'review' ? 'approved' : happy(step);
+    const r = walk(TRACK_TEMPLATE, answer);
+    expect(r.end).toBe('finished');
+    const round = ['features', 'verify', 'self-review', 'summary', 'review'];
+    expect(r.ran).toEqual([...round, 'next-feature', ...round, 'next-feature', ...round, 'merge']);
   });
 });
 
