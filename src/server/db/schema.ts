@@ -497,6 +497,33 @@ function runMigrations(database: Database.Database): void {
         );
       `,
     },
+    {
+      // The factory's merge queue (src/server/factory/merge-queue.ts): one row
+      // per entry, processed one at a time per project. merge_sha is the
+      // merge commit, kept so Delete track can revert exactly it; a parked
+      // entry keeps both sides of its conflict in conflict_json.
+      name: '025_factory_merges',
+      sql: `
+        CREATE TABLE IF NOT EXISTS factory_merges (
+          id TEXT PRIMARY KEY,
+          project_key TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          worktree_path TEXT NOT NULL,
+          base_branch TEXT NOT NULL,
+          feature_ids TEXT NOT NULL DEFAULT '[]',
+          track_name TEXT,
+          status TEXT NOT NULL DEFAULT 'queued',
+          detail TEXT,
+          merge_sha TEXT,
+          conflict_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_merges_project ON factory_merges(project_key, status);
+      `,
+    },
   ];
 
   const appliedMigrations = database

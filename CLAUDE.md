@@ -177,6 +177,12 @@ worktree. Gates after **design**, after **review**, before **merge**.
 - A job based on a track branch merges **in the track worktree** (`mergeCwd`), never pushes.
 - Every job merge and Land records `merge_sha`; job merges carry `Job-Id`/`Feature`
   trailers (`jobs/merge-trailers.ts`).
+- Both Lands and factory merges go through the per-project merge queue
+  (`factory/merge-queue.ts`), one entry at a time; a new merge path that bypasses it
+  interleaves with a queued one. It takes the lock only around shared-checkout git (never
+  across a resolver or verify run), holds on a dirty main, never merges code it changed
+  (update, resolution) without re-verifying, nor a file still holding a conflict marker.
+  → `docs/track-branches.md`
 - `track_branches` is unique only among **unlanded** rows (partial index).
 - Worktree sessions are session-logged into main (`worktreeOwner()`), run there too, or the
   entry dies with the folder and the run holds it open (`EBUSY`).

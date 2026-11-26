@@ -426,6 +426,79 @@ and a merge stage waiting on the same lock would never stop. Inside the lock, th
 also checks again that its track branch still exists, so a track landed or deleted while
 the job waited fails with that reason instead of merging into a removed folder.
 
+The factory's merge queue is the one caller that retries instead (below): nothing waits
+on the queue while holding the lock, so its retry cannot deadlock.
+
+## The merge queue
+
+`src/server/factory/merge-queue.ts` (spec: `project/code-factory.md`, "Merges go through
+one queue per project"; rows in `factory_merges`, migration 025). One slot per project:
+entries run one at a time, so two merges never interleave their checks and git calls.
+The factory engine hands its work over through `enqueueMerge(entry)`; **both Lands, the
+board's button and `POST /api/agent/land`, go through it too** (`queueLand`), so a merge
+in progress queues a Land instead of refusing it on the lock.
+
+An entry, at its turn:
+
+1. **Holds** (`holding`) while the checkout it merges into has uncommitted code, staged
+   files (even planning ones: `git merge` refuses then) or another branch checked out.
+   Planning files and the session log don't hold it, as they don't refuse Land. It
+   re-checks every 15 s, and at once on `kickMergeQueue`. A busy lock holds it too.
+2. **Updates** its branch onto the base: `git merge --no-commit <base>` in an item's own
+   worktree; for a track, Update from main's merge (which keeps the plan) built in a
+   **scratch checkout** of the branch (`prepareTrackUpdate`, detached in a temp folder),
+   then the track's worktree fast-forwarded onto it under the lock after Update's
+   refusals (`applyPreparedUpdate`; built again if the branch moved). Conflicts go to a
+   **resolver agent** (`runClaude`, tagged kind `factory`, stage `merge-resolve`, its own lane, allowed to edit
+   only the conflicting files) while that merge is in progress; the queue then checks no
+   conflict marker is left and stages each file itself. Anything left aborts the merge, so
+   the checkout is as it was, and **parks** the entry with both sides (branch and sha) and
+   the paths in `conflict_json`.
+3. **Verifies** with the project's declared commands (QA.md and `verify:`; the QA flows
+   stay with the engine's own verify step) whenever the code to merge changed. A failure
+   parks: a red result never merges.
+4. **Merges** under the lock, after checking the hold again and that the base has not
+   moved since verification (if it has, back to 2, at most 3 times): `--no-ff` with
+   `Job-Id: <entry id>` and one `Feature:` trailer per feature (`parseMergeLog` reads them
+   all into `featureIds`; Delete track matches any). `merge_sha` goes on the row. The
+   features are ticked in the plan file at the merge's checkout through `commitOnHead`
+   (never `git add`), the working copy keeping the user's own edits; then main is pushed
+   where there is a remote (merge and tick together; track branches never push, as with
+   the job merge stage) and rebuilt outside the lock. A tick or push failing after the
+   merge is reported in the detail, never a park: the merge stands. A factory track's
+   features are ticked on main after Land, and that tick is pushed when Land pushed.
+
+Only the git that touches a shared checkout runs under the lock, **never a resolver or a
+verification**: an item's update runs in its own worktree, a track's in the scratch
+checkout, both without it. Holding the try lock for minutes would refuse every Land,
+Delete, Branch now and board write.
+
+**Lands keep every Land rule** (kind `session-land`): `landTrack` still runs all its
+refusals, closes the worktree's sessions after them, and copies the plan back before
+merging. The queue adds only the turn, plus Update from main with the resolver when the
+dry run (`behindMain`) says the Land would conflict, then verification. A session's
+request with an idle queue still runs phase 1 (every refusal reaches the agent) and lands
+after its `202`; with a busy queue it is accepted at once (`queuedBehind`), skipping
+phase 1, whose lock the merge holds, and every refusal comes as the notification. The
+board's Land answers with the result when the queue is idle, and `202` plus a
+notification when it is queued behind something. A second Land of a track already in the
+queue is refused (409): it could only fail at its turn, after the first. Before a resolver
+works for a Land, `landPreflight` runs under the lock, so no agent time is spent on a Land
+that would be refused; it closes nothing, and `landTrack` still closes the worktree's
+sessions only after all its refusals.
+
+**Resume at boot.** `resumeMergeQueues()` (from `index.ts`, after listen) puts entries
+the last server left `queued`, `holding` or `running` back in the queue under their own
+rows, in order: a Land answered "queued" must still happen, and reports through the land
+notification. An item left mid-merge in its worktree is aborted first. Never on an
+isolated boot (`CLAUDE_REMOTE_CONFIG`) or under vitest: their entries would merge into the
+user's repositories from code that hasn't landed.
+
+**Idempotent enqueue.** `enqueueMerge` answers an entry already queued, running, merged or
+parked for the same (project, branch) with that entry's ticket (the engine may hand a unit
+over twice around a crash); a parked one reruns only through `requeueMerge(id)`. Lands are
+never deduplicated this way, since a refused Land is landed again once fixed.
+
 ## Delete track
 
 `src/server/projects/track-delete.ts` and `src/client/track-delete-dialog.ts`. It works

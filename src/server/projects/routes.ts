@@ -29,10 +29,12 @@ import { addBehindMain } from './track-update.js';
 import { allFeatureIds, planFileFor, readProjectPlan, type PlanCopy } from './project-plan.js';
 import { attributionContext, guessTrackWork } from './track-attribution.js';
 import { ProjectBusyError, withProjectLock } from './project-lock.js';
-import { landAndBuild, updateAndInstall } from './track-land.js';
+import { updateAndInstall } from './track-land.js';
+import { queueLand } from '../factory/merge-queue.js';
 import { installDependencies, needsInstall } from './project-deps.js';
 import { sessionManager } from '../sessions/manager.js';
-import { removeWorktreeSessions } from '../websocket/connections.js';
+import { broadcastLandResult, removeWorktreeSessions } from '../websocket/connections.js';
+import { pushLandResult } from '../push/wire.js';
 import { WorktreeError } from '../jobs/worktree.js';
 import { cancelJob, discardJob } from '../jobs/runner.js';
 import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
@@ -54,6 +56,17 @@ const STATUSES: FeatureStatus[] = ['pending', 'in_progress', 'done', 'blocked'];
 /** Running sessions as Land, Delete and the board's `openSessions` all read them. */
 function runningSessions(): { id: string; cwd: string }[] {
   return sessionManager.getRunningSessions().map((s) => ({ id: s.id, cwd: s.cwd }));
+}
+
+/** A queued board Land's result, sent as a session's Land result is. Never throws. */
+function notifyLand(projectCwd: string, track: string, ok: boolean, detail: string): void {
+  const payload = { kind: 'land' as const, projectCwd, track, ok, detail, timestamp: new Date().toISOString() };
+  try {
+    broadcastLandResult(payload);
+    pushLandResult(payload);
+  } catch (error) {
+    logger.warn({ error }, 'could not send a queued land result');
+  }
 }
 
 function isStatus(v: unknown): v is FeatureStatus {
@@ -437,13 +450,23 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       }
       const project = projectOr404(reply, body.cwd);
       if (!project) return reply;
-      return withErrors(reply, () =>
-        landAndBuild(project, body.track as string, {
-          sessions: runningSessions(),
-          terminateSession: (id) => sessionManager.terminateSession(id),
-          removeSessions: removeWorktreeSessions,
-        })
-      );
+      const track = body.track;
+      // Through the project's merge queue: a merge in progress queues the Land
+      // instead of refusing it on the lock. Queued behind one, it answers 202
+      // at once and reports like a session's Land (a notification), since the
+      // merge ahead can take minutes; otherwise it answers with the result.
+      return withErrors(reply, async () => {
+        const queued = queueLand(project, track);
+        if (queued.queuedBehind === null) return await queued.result;
+        void queued.result.then(
+          (landed) => notifyLand(project.cwd, track, true, landed.detail),
+          (error: Error) => notifyLand(project.cwd, track, false, `Landing "${track}" failed: ${error.message}`)
+        );
+        return reply.code(202).send({
+          queued: true,
+          detail: `Queued behind ${queued.queuedBehind}. "${track}" lands at its turn; the result comes as a notification.`,
+        });
+      });
     }
   );
 

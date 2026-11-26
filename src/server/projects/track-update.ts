@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, runGit } from '../utils/git.js';
@@ -178,6 +179,32 @@ export async function addBehindMain(projects: WorkspaceProject[]): Promise<Works
 
 // --- Update from main ----------------------------------------------------
 
+/** One side of a conflicting merge, for a resolver and for the message naming both. */
+export interface MergeSide {
+  branch: string;
+  sha: string;
+}
+
+/** A merge stopped on conflicts, handed to a resolver while it is still in progress in `cwd`. */
+export interface MergeConflict {
+  cwd: string;
+  /** Unmerged paths, repo-relative. */
+  paths: string[];
+  /** The branch being merged into (checked out in `cwd`). */
+  ours: MergeSide;
+  /** The branch being merged in. */
+  theirs: MergeSide;
+}
+
+export interface UpdateOptions {
+  /**
+   * Settle the conflicts of the in-progress merge (the merge queue's resolver
+   * agent). It must leave each path resolved and staged; any path still
+   * unmerged afterwards refuses as with no resolver. A throw aborts the merge.
+   */
+  resolve?: (conflict: MergeConflict) => Promise<void>;
+}
+
 export interface UpdateResult {
   /** The merge commit on the track branch, or null when it was already up to date. */
   mergeSha: string | null;
@@ -219,6 +246,34 @@ export interface UpdateResult {
  * the reinstall to its caller (updateAndInstall), outside the lock.
  */
 export async function updateTrackFromMain(project: RegistryProject, trackName: string): Promise<UpdateResult> {
+  const { track, docRel } = await updatePreflight(project, trackName);
+  const base = track.baseBranch;
+  const wt = track.worktreePath;
+
+  const baseSha = (await git(wt, ['rev-parse', '--verify', `${base}^{commit}`]))?.trim();
+  if (!baseSha) throw new TrackBranchError(`Could not find the branch "${base}"`, 500);
+  const behindOut = await git(wt, ['rev-list', '--count', `HEAD..${baseSha}`]);
+  const behind = Number(behindOut?.trim());
+  if (behindOut === null || !Number.isInteger(behind)) {
+    throw new TrackBranchError(`Could not compare the track branch with ${base} in ${wt}`, 500);
+  }
+  if (behind === 0) return { mergeSha: null, lockfileChanged: false, detail: `Already up to date with ${base}` };
+  const preMerge = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
+  if (!preMerge) throw new TrackBranchError(`Could not read the track branch's HEAD in ${wt}`, 500);
+
+  await mergeBaseIntoCheckout(wt, { trackName, branch: track.branch, docRel, base, baseSha, preMerge });
+  return updateResult(project, wt, { trackName, base, baseSha, behind, preMerge, docRel });
+}
+
+/**
+ * Step 1 of Update from main, in the track's worktree: refuse on a live job,
+ * a running install or uncommitted code; commit uncommitted planning. The
+ * caller holds the project lock.
+ */
+async function updatePreflight(
+  project: RegistryProject,
+  trackName: string
+): Promise<{ track: TrackBranch; docRel: string }> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to update', 404);
   const docRel = docRelOf(project);
@@ -249,20 +304,29 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
       409
     );
   }
+  return { track, docRel };
+}
 
-  const baseSha = (await git(wt, ['rev-parse', '--verify', `${base}^{commit}`]))?.trim();
-  if (!baseSha) throw new TrackBranchError(`Could not find the branch "${base}"`, 500);
-  const behindOut = await git(wt, ['rev-list', '--count', `HEAD..${baseSha}`]);
-  const behind = Number(behindOut?.trim());
-  if (behindOut === null || !Number.isInteger(behind)) {
-    throw new TrackBranchError(`Could not compare the track branch with ${base} in ${wt}`, 500);
-  }
-  if (behind === 0) return { mergeSha: null, lockfileChanged: false, detail: `Already up to date with ${base}` };
-  const preMerge = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
-  if (!preMerge) throw new TrackBranchError(`Could not read the track branch's HEAD in ${wt}`, 500);
-  // What the board showed as "N behind", for the message.
-  const counted = (await codeCommitsBetween(wt, 'HEAD', baseSha, docRel)) ?? behind;
+interface CheckoutMerge {
+  trackName: string;
+  /** The track branch, named to a resolver as "ours". */
+  branch: string;
+  docRel: string;
+  base: string;
+  baseSha: string;
+  /** HEAD of the checkout before the merge. */
+  preMerge: string;
+  resolve?: (conflict: MergeConflict) => Promise<void>;
+}
 
+/**
+ * Steps 2–6 of Update from main in a checkout of the track branch (its
+ * worktree, or the merge queue's scratch checkout): merge the base in, put
+ * the plan back, hand conflicts to `resolve` when given, commit. Any failure
+ * aborts the merge, leaving the checkout as it was, and throws.
+ */
+async function mergeBaseIntoCheckout(wt: string, o: CheckoutMerge): Promise<void> {
+  const { trackName, docRel, base, baseSha, preMerge } = o;
   // 2. The plan as the branch has it: its section, and the specs it links to
   // that the base lacks (the ones the move took off main).
   const section = await sectionAt(wt, 'HEAD', docRel, trackName);
@@ -297,8 +361,29 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
       if ((await git(wt, ['checkout', 'HEAD', '--', spec])) === null) throw new Error(`Could not restore ${spec}`);
     }
 
-    // 5. Anything still unmerged is a real conflict.
-    const unmerged = await unmergedPaths(wt);
+    // 5. Anything still unmerged is a real conflict. The merge queue hands it
+    // to its resolver first (while the merge is still in progress, after the
+    // plan is back, so the resolver never sees the trap's deletions); whatever
+    // it leaves unmerged refuses as before.
+    let unmerged = await unmergedPaths(wt);
+    if (unmerged.length > 0 && o.resolve) {
+      try {
+        await o.resolve({
+          cwd: wt,
+          paths: unmerged,
+          ours: { branch: o.branch, sha: preMerge },
+          theirs: { branch: base, sha: baseSha },
+        });
+      } catch (error) {
+        await abortMerge(wt, base);
+        throw new TrackBranchError(
+          `Merging ${base} into the track conflicts in ${nameFiles(unmerged)}, and resolving it failed: ` +
+            `${(error as Error).message}. Nothing was changed.`,
+          409
+        );
+      }
+      unmerged = await unmergedPaths(wt);
+    }
     if (unmerged.length > 0) {
       await abortMerge(wt, base);
       throw new TrackBranchError(
@@ -327,7 +412,17 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
       500
     );
   }
+}
 
+/** Steps 7 and the message, once the merge is HEAD of the track's worktree `wt`. */
+async function updateResult(
+  project: RegistryProject,
+  wt: string,
+  o: { trackName: string; base: string; baseSha: string; behind: number; preMerge: string; docRel: string }
+): Promise<UpdateResult> {
+  const { trackName, base, behind, preMerge } = o;
+  // What the board showed as "N behind", for the message.
+  const counted = (await codeCommitsBetween(wt, preMerge, o.baseSha, o.docRel)) ?? behind;
   const mergeSha = (await git(wt, ['rev-parse', 'HEAD']))?.trim() || '';
   logger.info({ cwd: project.cwd, track: trackName, base, behind, mergeSha }, 'track updated from main');
 
@@ -343,6 +438,90 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
         ? `Merged ${counted} commit${counted === 1 ? '' : 's'} from ${base} into the track. `
         : `Merged ${base}'s planning changes into the track. `) + 'Run the tests in the track’s session.',
   };
+}
+
+// --- Update from main without holding the lock (the merge queue) -----------
+
+/** An Update from main built off to the side, ready to fast-forward the track onto. */
+export interface PreparedUpdate {
+  /** The track branch's head it was built on. */
+  from: string;
+  /** The merge commit, whose first parent is `from`. */
+  commit: string;
+  baseSha: string;
+  behind: number;
+}
+
+/**
+ * Update from main's merge, built in a scratch checkout of the track branch
+ * (detached, in a temp folder) so the project lock is NOT held while a
+ * resolver works through its conflicts, which can take minutes: the lock is
+ * try-only, and every Land, Delete and Branch now would be refused meanwhile.
+ * The track's worktree is not touched; applyPreparedUpdate fast-forwards it
+ * under the lock. Null when the branch is already up to date. Throws as
+ * Update does when a conflict is left; the scratch checkout always goes.
+ */
+export async function prepareTrackUpdate(
+  project: RegistryProject,
+  trackName: string,
+  opts: UpdateOptions = {}
+): Promise<PreparedUpdate | null> {
+  const track = getActiveTrackBranch(project.cwd, trackName);
+  if (!track) throw new TrackBranchError('This track has no branch to update', 404);
+  const docRel = docRelOf(project);
+  const base = track.baseBranch;
+  const shas = (await git(project.cwd, ['rev-parse', track.branch, `${base}^{commit}`]))?.trim().split(/\s+/);
+  if (!shas || shas.length !== 2) throw new TrackBranchError(`Could not read ${track.branch} and ${base}`, 500);
+  const [from, baseSha] = shas;
+  const behind = Number((await git(project.cwd, ['rev-list', '--count', `${from}..${baseSha}`]))?.trim());
+  if (!Number.isInteger(behind)) throw new TrackBranchError(`Could not compare ${track.branch} with ${base}`, 500);
+  if (behind === 0) return null;
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cr-merge-'));
+  const wt = join(scratch, 'wt');
+  try {
+    if ((await git(project.cwd, ['worktree', 'add', '-q', '--detach', wt, from])) === null) {
+      throw new TrackBranchError(`Could not check out ${track.branch} to merge ${base} into it`, 500);
+    }
+    await mergeBaseIntoCheckout(wt, { trackName, branch: track.branch, docRel, base, baseSha, preMerge: from, resolve: opts.resolve });
+    const commit = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
+    if (!commit || commit === from) throw new TrackBranchError(`Merging ${base} into ${track.branch} made no commit`, 500);
+    return { from, commit, baseSha, behind };
+  } finally {
+    // A fresh checkout holds no link (docs/track-branches.md, teardown), and
+    // the commit lives on in the object store until the fast-forward.
+    await git(project.cwd, ['worktree', 'remove', '--force', wt]);
+    rmSync(scratch, { recursive: true, force: true });
+    await git(project.cwd, ['worktree', 'prune']);
+  }
+}
+
+/**
+ * Fast-forward the track's worktree onto a PreparedUpdate, after Update's own
+ * refusals (live job, install, uncommitted code; planning is committed). The
+ * caller holds the project lock. `moved` when the branch's head is no longer
+ * the one the merge was built on: build it again.
+ */
+export async function applyPreparedUpdate(
+  project: RegistryProject,
+  trackName: string,
+  prepared: PreparedUpdate
+): Promise<UpdateResult | 'moved'> {
+  const { track, docRel } = await updatePreflight(project, trackName);
+  const wt = track.worktreePath;
+  const head = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
+  if (head !== prepared.from) return 'moved';
+  if ((await git(wt, ['merge', '-q', '--ff-only', prepared.commit])) === null) {
+    throw new TrackBranchError(`Could not fast-forward the track worktree (${wt}) onto the merge of ${track.baseBranch}`, 500);
+  }
+  return updateResult(project, wt, {
+    trackName,
+    base: track.baseBranch,
+    baseSha: prepared.baseSha,
+    behind: prepared.behind,
+    preMerge: prepared.from,
+    docRel,
+  });
 }
 
 /**

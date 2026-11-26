@@ -4,6 +4,7 @@ import { createLogger, getLogDirectory } from './utils/logger.js';
 import { getPlatform } from './utils/platform.js';
 import { scrubProcessEnv } from './utils/claude-env.js';
 import { installSkillsAtBoot } from './utils/skill-install.js';
+import { resumeMergeQueues } from './factory/merge-queue.js';
 
 const logger = createLogger('server');
 
@@ -49,6 +50,9 @@ async function main() {
 
     logger.info({ address, protocol }, 'Server started');
     void installSkillsAtBoot();
+    // Merges and Lands the last server left queued (a Land answered "queued" must happen).
+    // Caught: an unhandled rejection here would shut the server down.
+    resumeMergeQueues().catch((error: Error) => logger.error({ error: error.message }, 'merge queue: resume failed'));
 
     // Print helpful startup message
     console.log(`

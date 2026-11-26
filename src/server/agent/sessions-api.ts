@@ -712,11 +712,15 @@ export function registerAgentSessionRoutes(
         const accepted = await requestLand(landDeps, callerId, (request.body ?? {}) as TrackBody);
         acceptedLands.set(request, accepted);
         const closing = accepted.closesCaller ? 'this session will close' : "the track's sessions will close";
+        const queued = accepted.queuedBehind
+          ? ` It is queued behind ${accepted.queuedBehind}; Land's checks run at its turn.`
+          : '';
         return reply.code(202).send({
           accepted: true,
           track: accepted.track,
           closesCaller: accepted.closesCaller,
-          detail: `Land of "${accepted.track}" accepted; ${closing}. The result is sent as a notification.`,
+          queuedBehind: accepted.queuedBehind,
+          detail: `Land of "${accepted.track}" accepted; ${closing}.${queued} The result is sent as a notification.`,
         });
       } catch (error) {
         return sendError(reply, error);

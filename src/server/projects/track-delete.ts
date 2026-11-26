@@ -365,7 +365,7 @@ async function findMerges(opts: {
     ));
   const withJobId = async (id: string) => (await branchMerges()).filter((m) => m.jobId === id).map((m) => m.sha);
   const withFeature = async (id: string) =>
-    (await branchMerges()).filter((m) => m.featureId === id).map((m) => m.sha);
+    (await branchMerges()).filter((m) => m.featureIds.includes(id)).map((m) => m.sha);
   const withSubject = async (subject: string) =>
     (await branchMerges()).filter((m) => !m.jobId && m.subject === subject).map((m) => m.sha);
   const byMessage = async (title: string, base: string, mustExist: boolean) => {
