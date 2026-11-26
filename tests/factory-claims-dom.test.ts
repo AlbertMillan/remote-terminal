@@ -132,6 +132,16 @@ describe('the drawer', () => {
     expect(document.getElementById('factory-board-view')!.classList.contains('hidden')).toBe(true);
   });
 
+  it('a unit parked at its mockup shows the mockup drawer only, with no Take over', async () => {
+    BOARD.units.push(unit('f-mock', { status: 'parked', step: 'mockup', needsYou: true }));
+    try {
+      await open('f-mock');
+      expect(drawer().querySelector('[data-fb="take-over"]')).toBeNull();
+    } finally {
+      BOARD.units.pop();
+    }
+  });
+
   it('never offers Take over in the merge queue or triage', async () => {
     await open('f-merge');
     expect(drawer().querySelector('[data-fb="take-over"]')).toBeNull();

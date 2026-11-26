@@ -478,3 +478,16 @@ describe('code-review fixes', () => {
     expect(e.runs.map((r) => r.opts.tag?.stage)).toEqual(['implement']);
   });
 });
+
+describe('beside the mockup step (merged from main)', () => {
+  it('Done on an unshaped item skips shaping and the mockup approval: the session built it', async () => {
+    const { ITEM_TEMPLATE } = await import('../src/server/factory/templates.js');
+    const progress = runState.ensureRunState(ALPHA, 'f-mck111', [], clock).progress;
+    takeover.markWorkDone(ITEM_TEMPLATE, progress, ['f-mck111']);
+    expect(progress.outcomes).toEqual({ implement: 'done' });
+    expect(progress.skipped).toEqual(['shape', 'mockup']);
+    const { nextStep } = await import('../src/server/factory/templates.js');
+    const next = nextStep(ITEM_TEMPLATE, progress);
+    expect(next.kind === 'run' && next.step.id).toBe('verify');
+  });
+});
