@@ -145,9 +145,9 @@ status: active
 ## Track: Code factory
 - [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
 - [x] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and a plan-usage cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md
-- [ ] `f-wlr5dc` P1 Intake and shaping — `cr factory add` turns free-form text into Inbox features plus requirements with an overlap check; shaping asks only when blocked; agents file `discovered-from` work into triage → project/code-factory.md
+- [x] `f-wlr5dc` P1 Intake and shaping — `cr factory add` turns free-form text into Inbox features plus requirements with an overlap check; shaping asks only when blocked; agents file `discovered-from` work into triage → project/code-factory.md
 - [x] `f-o5veqv` P1 Reviewer agent — escalation rules, review per track or per feature, Settings → Factory project/code-factory.md
-- [ ] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
+- [x] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
 - [ ] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
 - [ ] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
 - [ ] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
