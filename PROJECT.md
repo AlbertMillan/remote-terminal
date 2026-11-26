@@ -127,7 +127,7 @@ status: active
 - [x] `f-44ibuj` P2 Read-only peers beside a builder — `start --read-only` adds up to two peers to a started session's track; the server enforces one writer, the skill teaches review (fresh judge per checkpoint, findings ledger, verdict and round cap, escalation to the parent) → project/builder-critic-pairs.md
 
 ## Track: Code factory
-- [ ] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
+- [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
 - [ ] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and a plan-usage cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md
 - [ ] `f-wlr5dc` P1 Intake and shaping — `cr factory add` turns free-form text into Inbox features plus requirements with an overlap check; shaping asks only when blocked; agents file `discovered-from` work into triage → project/code-factory.md
 - [ ] `f-o5veqv` P1 Reviewer agent — escalation rules, review per track or per feature, Settings → Factory project/code-factory.md
