@@ -134,6 +134,3 @@ status: active
 - [x] `f-h5txr3` P2 Projects and job gates — board, jobs, answering design/review/merge gates → project/android-app.md
 - [x] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md
 - [x] `f-q2m7vx` P2 Attach and share any file — pinned Attach key (Photo / File menu), share target for any file(s), Paste takes any URI → project/file-uploads.md
-
-## Track: Factory merge queue
-- [x] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
