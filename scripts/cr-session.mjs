@@ -11,6 +11,17 @@
  *   node "$CLAUDE_REMOTE_CLI" list
  *   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
  *   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
+ *   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... <<'EOF'
+ *   <free-form work>
+ *   EOF
+ *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
+ *   node "$CLAUDE_REMOTE_CLI" factory status
+ *
+ * `factory` drives the code factory (project/code-factory.md) for this
+ * session's project: `add` files loose work into the Inbox (`--from` files it
+ * as work discovered on those items, into triage); `send` hands a planned
+ * track (this worktree's when none is named) to the factory with optional
+ * review granularity and per-feature models; `status` prints its state.
  *
  * `land` with no track lands the track whose worktree this session is in, and
  * closes this session to do it. `update` merges the base branch into that
@@ -43,7 +54,71 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" start --track "<name>" [--read-only] [--name <n>] [--mode auto|manual|acceptEdits|plan] [--mcp <server>]... [--account <name>]  (prompt on stdin)
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
-  node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]`;
+  node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
+  node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]...  (the work, free-form, on stdin)
+  node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
+  node "$CLAUDE_REMOTE_CLI" factory status`;
+
+const REVIEWS = ['track', 'feature'];
+
+/**
+ * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
+ * `<feature-id>=<model>` and collects into a map.
+ */
+export function parseFactoryArgs(argv) {
+  const [sub, ...rest] = argv;
+  const flags = {};
+  for (let i = 0; i < rest.length; i++) {
+    const m = /^--(track|from|review|model)(?:=(.*))?$/.exec(rest[i]);
+    if (!m) throw new UsageError(`unknown argument: ${rest[i]}`);
+    const value = m[2] !== undefined ? m[2] : rest[++i];
+    if (value === undefined) throw new UsageError(`--${m[1]} needs a value`);
+    if (m[1] === 'from') {
+      flags.from = [...(flags.from ?? []), ...value.split(',').map((v) => v.trim()).filter(Boolean)];
+    } else if (m[1] === 'model') {
+      const eq = value.indexOf('=');
+      if (eq <= 0 || eq === value.length - 1) throw new UsageError('--model takes <feature-id>=<model>');
+      flags.models = { ...(flags.models ?? {}), [value.slice(0, eq).trim()]: value.slice(eq + 1).trim() };
+    } else {
+      flags[m[1]] = value;
+    }
+  }
+  return { sub, flags };
+}
+
+/** The request for a `factory` subcommand, or a usage error. */
+async function factoryRequest(argv, stdin, headers) {
+  const { sub, flags } = parseFactoryArgs(argv);
+  const allowed = { add: ['track', 'from'], send: ['track', 'review', 'models'], status: [] }[sub];
+  if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send or status');
+  const extra = Object.keys(flags).find((f) => !allowed.includes(f));
+  if (extra) throw new UsageError(`factory ${sub} does not take --${extra === 'models' ? 'model' : extra}`);
+  if (flags.track !== undefined && !flags.track.trim()) throw new UsageError('--track needs a track name');
+  const post = (body) => ({
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (sub === 'status') return { path: '/api/agent/factory/status', request: { method: 'GET', headers } };
+  if (sub === 'send') {
+    if (flags.review !== undefined && !REVIEWS.includes(flags.review)) {
+      throw new UsageError(`--review must be one of: ${REVIEWS.join(', ')}`);
+    }
+    const body = {};
+    if (flags.track !== undefined) body.track = flags.track;
+    if (flags.review !== undefined) body.review = flags.review;
+    if (flags.models !== undefined) body.models = flags.models;
+    return { path: '/api/agent/factory/send', request: post(body) };
+  }
+  // add: the work on stdin, like start's prompt, and checked before any request.
+  if (stdin.isTTY) throw new UsageError("the work goes on stdin (a quoted heredoc: <<'EOF' ... EOF), and stdin is a terminal");
+  const text = await readAll(stdin);
+  if (!text.trim()) throw new UsageError('the work on stdin is empty');
+  const body = { text };
+  if (flags.track !== undefined) body.track = flags.track;
+  if (flags.from !== undefined) body.discoveredFrom = flags.from;
+  return { path: '/api/agent/factory/add', request: post(body) };
+}
 
 // `auto` is the server's default. `default` is the old name for `manual`, still
 // sent by a skill copy installed before the rename; the server maps it.
@@ -99,7 +174,8 @@ export async function main({
 
   let parsed;
   try {
-    parsed = parseArgs(argv);
+    // `factory` has a subcommand of its own; its flags are parsed with it.
+    parsed = argv[0] === 'factory' ? { command: 'factory', flags: {} } : parseArgs(argv);
   } catch (error) {
     if (error instanceof UsageError) return fail(`${error.message}\n${USAGE}`, 2);
     throw error;
@@ -115,7 +191,14 @@ export async function main({
 
   let request;
   let path = '/api/agent/sessions';
-  if (command === 'start') {
+  if (command === 'factory') {
+    try {
+      ({ path, request } = await factoryRequest(argv.slice(1), stdin, headers));
+    } catch (error) {
+      if (error instanceof UsageError) return fail(`${error.message}\n${USAGE}`, 2);
+      throw error;
+    }
+  } else if (command === 'start') {
     if (!flags.track || !flags.track.trim()) return fail(`--track is required\n${USAGE}`, 2);
     if (flags.mode !== undefined && !ACCEPTED_MODES.includes(flags.mode)) {
       return fail(`--mode must be one of: ${MODES.join(', ')}`, 2);

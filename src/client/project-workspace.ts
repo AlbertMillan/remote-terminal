@@ -741,6 +741,22 @@ export class ProjectWorkspace {
     if (data) this.flash(data.detail);
   }
 
+  /** ▶: the track's open features to the factory, Settings defaults, nothing overridden. */
+  async sendToFactory(cwd: string, track: string): Promise<void> {
+    this.flash(`Sending "${track}" to the factory…`, 0);
+    const data = await this.trackRequest<{ queued: string[]; plan: { branch: string; review: string } }>(
+      '/api/factory/send',
+      { cwd, track }
+    );
+    await this.reload();
+    if (data) {
+      const n = data.queued.length;
+      this.flash(
+        `"${track}": ${n} feature${n === 1 ? '' : 's'} queued in the factory on ${data.plan.branch}, reviewed per ${data.plan.review}.`
+      );
+    }
+  }
+
   async landTrack(cwd: string, track: string): Promise<void> {
     // The server builds the project after merging, so the reply can take a while.
     this.flash(`Landing "${track}" and rebuilding…`);
@@ -956,6 +972,13 @@ export class ProjectWorkspace {
       const trackDelete = target.closest('.pw-track-delete') as HTMLElement | null;
       if (trackDelete) {
         void this.deleteTrack(trackDelete.dataset.cwd || '', trackDelete.dataset.track || '');
+        return;
+      }
+
+      const trackFactory = target.closest('.pw-track-factory') as HTMLElement | null;
+      if (trackFactory) {
+        // ▶ always means "the factory, with my Settings defaults": no dialog.
+        void this.sendToFactory(trackFactory.dataset.cwd || '', trackFactory.dataset.track || '');
         return;
       }
 

@@ -1,6 +1,6 @@
 ---
 name: claude-remote-sessions
-description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, add read-only peers (a reviewer) beside one, list their state, update a track from main (merge main in) and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, asks to pull main into a track (update from main, catch up, merge main in), or asks to land a track.
+description: Start prompted Claude sessions on planned PROJECT.md tracks from inside a claude-remote terminal, add read-only peers (a reviewer) beside one, list their state, update a track from main (merge main in) and land this session's own track or one its started sessions worked on. Use only when the user asks to start (kick off, launch, hand off) work on tracks you planned, asks to pull main into a track (update from main, catch up, merge main in), or asks to land a track, or to send a track or file work to the code factory (`factory send|add|status`).
 ---
 
 # Start sessions on planned tracks
@@ -332,6 +332,60 @@ node "$CLAUDE_REMOTE_CLI" land --track "Split view"
 - On success it prints `Land accepted; the track's sessions will close.` Your
   session stays open; the result reaches the user as a notification.
   Other refusals are as above.
+
+## The code factory
+
+The factory runs planned work with little supervision: one agent per track (or
+per loose item), a reviewer agent, then the merge queue. Use it only when the
+user asks to send work to the factory, or to file work for it.
+
+**Send a planned track** (the track's spec is the input; nothing re-plans it):
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory send --track "Split view"
+node "$CLAUDE_REMOTE_CLI" factory send --track "Split view" --review feature --model f-ab12cd=opus
+```
+
+- No `--track`: the track whose worktree this session is in.
+- `--review track|feature` overrides Settings → Factory's review granularity
+  for this track; `--model <feature-id>=haiku|sonnet|opus` (repeatable) picks a
+  feature's model. Leave both out to use the Settings defaults, like ▶ does.
+- The server creates the track's branch if it has none, and commits the
+  worktree's planning files. Uncommitted code in the worktree is refused (409):
+  commit it first. A track already in the factory is refused too.
+- Prints `{queued, plan}`: what was queued, the branch, the review granularity
+  in force and each feature's model.
+
+**File loose work** (free-form text on stdin; sentences or bullets, several
+asks mixed):
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory add <<'EOF'
+Add a dark-mode toggle to Settings
+- remember the choice per device
+- mockup first
+Also: the session list should sort by last activity
+EOF
+```
+
+- Intake splits it into features (bullets under an ask are its requirements)
+  and files them in the `Inbox` track of `PROJECT.md` with real ids; each is
+  shaped (a short spec) before it runs. `--track "<name>"` files into another
+  track instead.
+- Text with no work in it is refused (422) and nothing is written.
+- **Work you discovered** while on a factory item, outside its scope: file it
+  with `--from <feature-id>` (repeatable). It goes into triage and runs only
+  once the user accepts it. Never fix it yourself in the item's branch.
+
+**See its state:**
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory status
+```
+
+Prints the open items (step, what each waits for), parked units with their
+reason or shaping question, and pending merges. The user answers questions and
+settles triage on the board; don't answer a shaping question for them.
 
 ## Limits
 

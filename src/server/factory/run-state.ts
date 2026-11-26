@@ -117,6 +117,11 @@ export function saveRunState(projectCwd: string, unitId: string, patch: RunState
     .run(...values, pathKey(projectCwd), unitId);
 }
 
+/** Forget a unit's progress (a track sent again after its earlier unit closed). */
+export function deleteRunState(projectCwd: string, unitId: string): void {
+  getDatabase().prepare('DELETE FROM factory_runs WHERE project_key = ? AND unit_id = ?').run(pathKey(projectCwd), unitId);
+}
+
 /** Units sitting in the merge sink: dispatch must not claim them again. */
 export function handedOffUnits(): Set<string> {
   const rows = getDatabase()

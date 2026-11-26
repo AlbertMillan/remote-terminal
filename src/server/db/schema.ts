@@ -532,6 +532,36 @@ function runMigrations(database: Database.Database): void {
       name: '026_factory_review_granularity',
       sql: `ALTER TABLE factory_items ADD COLUMN review_granularity TEXT;`,
     },
+    {
+      // Loose work's intake and shaping (factory/intake-store.ts): what intake
+      // read for a feature (its requirements, "mockup first", where it came
+      // from) and what shaping made of it (the spec file, the files it expects
+      // to touch for the overlap check, its assumptions, the tier), plus a
+      // blocking question, its answer and the session that asked, which the
+      // answer resumes. One row per factory item; it goes with the item.
+      name: '027_factory_intake',
+      sql: `
+        CREATE TABLE IF NOT EXISTS factory_intake (
+          project_key TEXT NOT NULL,
+          feature_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          requirements TEXT NOT NULL DEFAULT '[]',
+          mockup_first INTEGER NOT NULL DEFAULT 0,
+          detail TEXT,
+          spec_path TEXT,
+          files TEXT,
+          assumptions TEXT NOT NULL DEFAULT '[]',
+          question TEXT,
+          answer TEXT,
+          shape_session_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_key, feature_id),
+          FOREIGN KEY (project_key, feature_id)
+            REFERENCES factory_items(project_key, feature_id) ON DELETE CASCADE
+        );
+      `,
+    },
   ];
 
   const appliedMigrations = database

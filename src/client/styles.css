@@ -4018,6 +4018,7 @@ body {
   min-width: 0;
 }
 .pw-track-session,
+.pw-track-factory,
 .pw-track-land {
   flex: 0 0 auto;
   font-size: 10px;
@@ -4029,6 +4030,7 @@ body {
   cursor: pointer;
 }
 .pw-track-session:hover,
+.pw-track-factory:hover,
 .pw-track-land:hover { border-color: var(--accent); }
 .pw-track-delete {
   flex: 0 0 auto;

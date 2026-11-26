@@ -2,11 +2,12 @@ import type { ClaudeRunResult } from '../agent/claude-run.js';
 import type { EngineDeps, UnitFeature, UnitRef, UnitWorktree } from './deps.js';
 import type { MergeEntry } from './merge-sink.js';
 import { DONE, type Progress, type WorkflowStep } from './templates.js';
+import { DISCOVERED_INSTRUCTION, type DiscoveredWork } from './triage.js';
 
 /**
  * Step handlers: what each template step does. Templates name a handler, so a
- * later feature replaces one without touching the walk — the shaping pass
- * (f-wlr5dc) is a stub here for that reason; the reviewer is review-step.ts.
+ * later feature replaces one without touching the walk — the shaping pass is
+ * shape-step.ts, the reviewer review-step.ts.
  */
 
 export interface AgentRequest {
@@ -39,7 +40,21 @@ export interface StepContext {
 }
 
 export type StepResult =
-  | { outcome: string }
+  | {
+      outcome: string;
+      /**
+       * Work found outside the unit's scope, which the runner files as triage
+       * items (`discovered-from` this unit). Agents' replies add their own
+       * fenced ```discovered blocks to it (triage.ts).
+       */
+      discovered?: DiscoveredWork[];
+      /**
+       * Record the outcome, then give the unit back to the queue instead of
+       * taking the next step: it now waits on something (shaping's overlap
+       * check) and is claimed again once that is done.
+       */
+      requeue?: string;
+    }
   /** Stop for the user; the step is taken again once they release the unit. */
   | { park: string }
   /** Hand the unit to the merge sink and let go of it. */
@@ -75,14 +90,12 @@ ${specLine(f)}
 3. Run the project's lint or typecheck if it has one and fix what you broke.
 4. Stay inside its "Out of scope"; no unrelated refactors, no new dependencies.
 ${ASSUMPTIONS}
-${NO_COMMIT}`;
+${NO_COMMIT}
+
+${DISCOVERED_INSTRUCTION}`;
 }
 
-registerStepHandler('shape', async () => {
-  // Stub until the shaping pass (f-wlr5dc): a loose item runs on its title and
-  // whatever spec its line already links.
-  return { outcome: DONE };
-});
+// 'shape': shape-step.ts.
 
 registerStepHandler('implement', async (ctx) => {
   const f = ctx.features[0];
@@ -219,6 +232,10 @@ Fix these, re-run the tests and lint, and stay inside the spec. ${NO_COMMIT}`;
 
 registerStepHandler('summary', async (ctx) => {
   const sections = ctx.features.map((f) => `### ${f.id} ${f.title}`).join('\n');
+  // Shaping's choices are assumptions too: the reviewer reads them from this page.
+  const shaped = ctx.progress.notes.shape
+    ? `\nList these, made while shaping the item, under Assumptions as well:\n${ctx.progress.notes.shape}\n`
+    : '';
   const result = await ctx.agent({
     work: true,
     access: 'read',
@@ -229,7 +246,7 @@ its markdown:
 ## Checks run (commands and results)
 ${sections}
 ## Assumptions (decisions you made instead of asking)
-
+${shaped}
 Base it on \`git diff ${ctx.worktree.baseBranch}...HEAD\` and what you did. Do not edit files.`,
   });
   ctx.progress.notes.summary = ctx.deps.writeSummary(ctx.unit.projectCwd, ctx.unit.unitId, result.result);

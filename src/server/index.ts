@@ -5,6 +5,7 @@ import { getPlatform } from './utils/platform.js';
 import { scrubProcessEnv } from './utils/claude-env.js';
 import { installSkillsAtBoot } from './utils/skill-install.js';
 import { resumeMergeQueues } from './factory/merge-queue.js';
+import { startFactoryAtBoot } from './factory/factory-boot.js';
 
 const logger = createLogger('server');
 
@@ -52,7 +53,16 @@ async function main() {
     void installSkillsAtBoot();
     // Merges and Lands the last server left queued (a Land answered "queued" must happen).
     // Caught: an unhandled rejection here would shut the server down.
-    resumeMergeQueues().catch((error: Error) => logger.error({ error: error.message }, 'merge queue: resume failed'));
+    // Then the factory: its sink hands passed units to that queue, and dispatch starts.
+    resumeMergeQueues()
+      .catch((error: Error) => logger.error({ error: error.message }, 'merge queue: resume failed'))
+      .finally(() => {
+        try {
+          startFactoryAtBoot();
+        } catch (error) {
+          logger.error({ error: (error as Error).message }, 'factory: start failed');
+        }
+      });
 
     // Print helpful startup message
     console.log(`
