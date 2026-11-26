@@ -11,6 +11,8 @@ import { getRunState, saveRunState, unitIdFor } from './run-state.js';
 import { isTrackWorkflow } from './templates.js';
 import { getItem } from './store.js';
 import { DEFAULT_FACTORY_LIMITS } from './limits.js';
+import { readMockupState } from './mockup-files.js';
+import { registerMockupRoutes } from './mockup-routes.js';
 
 const logger = createLogger('factory-board-routes');
 
@@ -49,6 +51,9 @@ export function summaryPathAllowed(path: string, dataDir: string): boolean {
 }
 
 export function registerFactoryBoardRoutes(app: FastifyInstance): void {
+  // The mockup-first step's info, files and comment (mockup-routes.ts).
+  registerMockupRoutes(app);
+
   app.get<{ Querystring: { cwd?: string } }>('/api/factory/board', async (request, reply) => {
     const cwd = request.query.cwd;
     if (cwd !== undefined && !isText(cwd)) return reply.status(400).send({ error: 'cwd must be a folder path' });
@@ -127,9 +132,17 @@ export function registerFactoryBoardRoutes(app: FastifyInstance): void {
         return reply.status(409).send({ error: 'This unit is in the merge queue; retry its merge instead' });
       }
       // releaseParked records the outcome against whichever step parked it: an "approved" on a
-      // runaway park at implement would skip the step. Outcomes belong to a parked review only.
-      if (outcome !== undefined && state?.progress.parked !== 'review') {
-        return reply.status(409).send({ error: `${featureId} is not waiting on a review; release it without an outcome` });
+      // runaway park at implement would skip the step. Outcomes belong to a parked review, and
+      // "approved" to a mockup too (a comment, not "changes", revises one: mockup-routes.ts).
+      const parkedAt = state?.progress.parked;
+      const allowed = parkedAt === 'review' || (parkedAt === 'mockup' && outcome === 'approved');
+      if (outcome !== undefined && !allowed) {
+        const waiting = parkedAt === 'mockup' ? 'Approve the mockup, or comment on it' : `${featureId} is not waiting on a review`;
+        return reply.status(409).send({ error: `${waiting}; release it without an outcome` });
+      }
+      // A mockup approved after a run that wrote no page would hand implement nothing to follow.
+      if (parkedAt === 'mockup' && outcome === 'approved' && state && !readMockupState(state.progress).ready) {
+        return reply.status(409).send({ error: 'There is no mockup to approve yet; release it to build one' });
       }
 
       if (outcome === 'changes' && typeof note === 'string') {

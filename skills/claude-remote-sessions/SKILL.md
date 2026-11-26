@@ -372,6 +372,9 @@ EOF
   and files them in the `Inbox` track of `PROJECT.md` with real ids; each is
   shaped (a short spec) before it runs. `--track "<name>"` files into another
   track instead.
+- **Mockup first**: `--mockup` (or saying so in the text) makes every feature
+  filed stop after shaping on a clickable mockup; it is built only once the
+  user approves it on the board (they can comment to have it revised).
 - Text with no work in it is refused (422) and nothing is written.
 - **Work you discovered** while on a factory item, outside its scope: file it
   with `--from <feature-id>` (repeatable). It goes into triage and runs only

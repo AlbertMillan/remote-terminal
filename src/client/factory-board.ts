@@ -2,6 +2,7 @@ import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { requestJson, failureMessage } from './api.js';
 import { formatTokens, shortAge } from './format.js';
 import { cardKind, cardStatus, progressStrip } from './factory-overlay.js';
+import { MockupDrawer, isMockupPark } from './factory-mockup.js';
 import type {
   FactoryBoard,
   FactoryBoardUnit,
@@ -171,6 +172,27 @@ export class FactoryBoardView {
   private projects: { cwd: string; name: string }[] = [];
   private loading: Promise<void> | null = null;
   private reloadQueued = false;
+  /** The drawer markup last set, so an unchanged mockup drawer is not replaced (render()). */
+  private drawnDrawer = '';
+  /** An item parked at its mockup step: its drawer part and `mockup-*` actions (factory-mockup.ts). */
+  private readonly mockup = new MockupDrawer({
+    render: () => this.render(),
+    act: (label, call, done) => this.act(label, call, done),
+    post: (url, body) => this.post(url, body),
+    busy: () => this.busy,
+    draft: (key) => this.drafts.get(key) ?? '',
+    clearDraft: (key) => {
+      this.drafts.delete(key);
+      // render() captures drafts from the DOM first: a box still holding the text would bring it back.
+      const box = [...document.querySelectorAll<HTMLTextAreaElement>('#factory-board-view [data-draft]')].find((el) => el.dataset.draft === key);
+      if (box) box.value = '';
+    },
+    notify: (text) => {
+      this.notice = { text, error: true };
+      this.render();
+    },
+    markdown: renderMarkdown,
+  });
 
   constructor(private readonly host: FactoryBoardHost) {}
 
@@ -327,6 +349,10 @@ export class FactoryBoardView {
     const drawer = this.drawer;
     const unit = drawer?.kind === 'unit' ? this.unit(drawer.key) : undefined;
     const featureId = unit?.featureIds[0];
+    if (kind?.startsWith('mockup-')) {
+      this.captureDrafts();
+      return this.mockup.onAction(kind, unit);
+    }
     switch (kind) {
       case 'back':
         this.hide();
@@ -415,6 +441,7 @@ export class FactoryBoardView {
         const cwd = this.drafts.get('add:cwd') || this.projects[0]?.cwd;
         const text = (this.drafts.get('add:text') ?? '').trim();
         const track = (this.drafts.get('add:track') ?? '').trim();
+        const mockupFirst = this.drafts.get('add:mockup') === 'on';
         if (!cwd || !text) {
           this.notice = { text: 'Pick a project and describe the work.', error: true };
           return this.render();
@@ -423,7 +450,7 @@ export class FactoryBoardView {
         this.busy = true;
         this.notice = null;
         this.render();
-        const res = await this.post('/api/factory/add', { cwd, text, ...(track ? { track } : {}) });
+        const res = await this.post('/api/factory/add', { cwd, text, ...(track ? { track } : {}), ...(mockupFirst ? { mockupFirst } : {}) });
         this.busy = false;
         if (res.ok) {
           this.addResult = readAddResult(res.data as Record<string, unknown>);
@@ -476,6 +503,8 @@ export class FactoryBoardView {
     for (const el of root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-draft]')) {
       if (el instanceof HTMLInputElement && el.type === 'radio') {
         if (el.checked) this.drafts.set(el.dataset.draft as string, el.value);
+      } else if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        this.drafts.set(el.dataset.draft as string, el.checked ? 'on' : '');
       } else {
         this.drafts.set(el.dataset.draft as string, el.value);
       }
@@ -498,7 +527,15 @@ export class FactoryBoardView {
     const drawer = document.getElementById('factory-drawer');
     if (drawer) {
       drawer.classList.toggle('hidden', !this.drawer);
-      setHtml(drawer, this.drawer ? this.renderDrawer() : html``);
+      // A mockup needs room: the drawer widens while it shows one.
+      const shown = this.drawer?.kind === 'unit' && this.drawer.view === 'main' ? this.unit(this.drawer.key) : undefined;
+      const mockup = !!shown && isMockupPark(shown);
+      drawer.classList.toggle('fb-wide', mockup);
+      const markup = this.drawer ? this.renderDrawer() : html``;
+      // Replacing a mockup's frame reloads it and loses where you clicked to; a push for
+      // another unit renders the same drawer, so an unchanged one is left as it is.
+      if (!mockup || markup.value !== this.drawnDrawer) setHtml(drawer, markup);
+      this.drawnDrawer = markup.value;
     }
 
     if (focusDraft) {
@@ -670,6 +707,9 @@ export class FactoryBoardView {
     } else if (u.column === 'merging') {
       const m = this.data?.merges.find((x) => x.id === u.mergeId);
       parts.push(m ? this.renderMerge(m, false) : html`<p class="fb-path">Handed to the merge queue.</p>`);
+    } else if (isMockupPark(u)) {
+      // Only the mockup: the Live block's ages would change the drawer, and reload the frame, every minute.
+      return joinHtml([head, this.mockup.render(u)]);
     } else if (u.status === 'parked') {
       parts.push(html`<div class="fb-verdict"><b>Parked</b> at ${u.step ?? 'setup'}</div>
         ${u.detail.parkReason && html`<pre class="fb-pre">${u.detail.parkReason}</pre>`}
@@ -751,6 +791,7 @@ export class FactoryBoardView {
       <label class="fb-label">What to do
         <textarea class="fb-textarea" rows="8" data-draft="add:text" placeholder="- fork loses the window title&#10;- android push should retry on 503, but don't spam">${this.drafts.get('add:text') ?? ''}</textarea>
       </label>
+      <label class="fb-check"><input type="checkbox" data-draft="add:mockup" ${this.drafts.get('add:mockup') === 'on' ? 'checked' : ''}> Mockup first <span class="fb-path">(approve a clickable mockup before it is built)</span></label>
       <div class="fb-acts"><button type="button" class="btn-primary" data-fb="submit-add" ${this.busy ? 'disabled' : ''}>${this.busy ? 'Filing…' : 'Add work'}</button></div>
       ${result && html`<h4>Intake filed</h4>${result.features.length > 0
         ? html`<ul class="fb-intake">${result.features.map(

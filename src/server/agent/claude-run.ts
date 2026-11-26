@@ -217,6 +217,26 @@ export interface SpawnOptions {
   model?: string;
   /** `--effort` for this run; unset keeps the CLI's default. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * `--add-dir` folders: outside `cwd`, yet the run may edit in them (acceptEdits
+   * covers them). Absolute paths only, passed quoted through the shell, so one
+   * holding a quote or a shell metacharacter refuses the run rather than being
+   * dropped (the step would then write nowhere) or interpreted.
+   */
+  addDirs?: string[];
+}
+
+/** An `--add-dir` folder fit to go through `shell: true` in double quotes: absolute, local, no metacharacters. */
+const SAFE_ADD_DIR = /^(?:[A-Za-z]:[\\/]|\/(?!\/))[^"%!^&|<>`$\r\n]*$/;
+
+/** The `--add-dir` arguments, quoted; throws for a folder that could not be passed safely. */
+export function addDirArgs(dirs: string[] | undefined): string[] {
+  return (dirs ?? []).flatMap((dir) => {
+    // A trailing `\` would escape the closing quote in Windows' argument parsing.
+    const clean = dir.replace(/[\\/]+$/, '');
+    if (!SAFE_ADD_DIR.test(dir) || !clean) throw new Error(`Refusing --add-dir ${JSON.stringify(dir)}: not a plain absolute folder`);
+    return ['--add-dir', `"${clean}"`];
+  });
 }
 
 /** The `--effort` levels the CLI takes; anything else is never passed to the shell. */
@@ -295,6 +315,12 @@ export function spawnClaude(
   const allowed = options.allowedTools ?? DEFAULT_TOOLS;
   const tools = allowed.join(',');
   const builtins = builtinToolsFor(allowed).join(',');
+  let addDirs: string[];
+  try {
+    addDirs = addDirArgs(options.addDirs);
+  } catch (error) {
+    return Promise.reject(error);
+  }
 
   return new Promise<ClaudeRunResult>((resolve, reject) => {
     // Nothing to kill yet, so an already-aborted signal must short-circuit before
@@ -337,6 +363,8 @@ export function spawnClaude(
         ...(!options.resumeSessionId && options.sessionId ? ['--session-id', options.sessionId] : []),
         ...(options.model && SAFE_MODEL.test(options.model) ? ['--model', options.model] : []),
         ...(options.effort && EFFORTS.includes(options.effort) ? ['--effort', options.effort] : []),
+        // Variadic in the CLI: always followed by another flag here, never by the prompt.
+        ...addDirs,
         '--output-format',
         'json',
       ],

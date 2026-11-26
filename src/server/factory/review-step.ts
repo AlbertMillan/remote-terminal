@@ -8,6 +8,7 @@ import { unitJobId, type UnitFeature } from './deps.js';
 import { factoryReviewSettings, type FactoryReviewSettings } from './review-settings.js';
 import { registerStepHandler, stepHandler, type StepContext, type StepResult } from './steps.js';
 import { getItem } from './store.js';
+import { mockupReference } from './mockup-files.js';
 import { DONE, FIX_LOOP_MAX } from './templates.js';
 import type { ReviewGranularity } from './types.js';
 
@@ -346,13 +347,14 @@ function reviewerPrompt(ctx: StepContext, from: string, reviewed: UnitFeature[])
   const checks = ctx.progress.notes.verify ? `${verify}; last failing output:\n${ctx.progress.notes.verify}` : verify;
   const summary = ctx.progress.notes.summary ? `The unit's summary page is ${ctx.progress.notes.summary}; read it first.` : 'The unit wrote no summary page.';
   const self = ctx.progress.notes['self-review'] ? `\nIts self-review last raised:\n${ctx.progress.notes['self-review']}\n` : '';
+  const mockup = ctx.unit.isTrack ? '' : mockupReference(ctx.progress, ctx.unit.projectCwd, ctx.features[0].id);
   return `You are the reviewer who decides whether this work merges. Review the change on this
 branch: \`git diff ${from}...HEAD\` (run it; read the files it touches as needed).
 
 Under review:
 ${specs}
 
-${summary}
+${summary}${mockup ? `\n${mockup}\nA departure from the approved mockup that the summary page does not justify is a finding.` : ''}
 The project's checks (verify): ${checks}
 ${self}
 Judge it on:

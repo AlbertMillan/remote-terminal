@@ -185,7 +185,7 @@ export function viewServingFor(path: string): { type: string; disposition: Dispo
 }
 
 /** A Host header fit to go into a CSP source: name or IP, optional port, nothing else. */
-const VIEW_HOST = /^[A-Za-z0-9.-]+(?::\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](?::\d{1,5})?$/;
+export const VIEW_HOST = /^[A-Za-z0-9.-]+(?::\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](?::\d{1,5})?$/;
 
 /** The URL path of `abs` on the view route: each segment encoded, `\` as `/`. */
 export function viewUrlPath(sessionId: string, abs: string): string {
