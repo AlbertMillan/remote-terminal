@@ -152,4 +152,4 @@ status: active
 - [x] `f-o5veqv` P1 Reviewer agent — escalation rules, review per track or per feature, Settings → Factory project/code-factory.md
 - [x] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
 - [x] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
-- [ ] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
+- [x] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
