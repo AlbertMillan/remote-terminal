@@ -84,10 +84,29 @@ conflict goes to a resolver agent; only a failed resolution comes back to you.
 A session's Land enters the same queue instead of being refused. The queue
 holds (never merges under you) while the main checkout has uncommitted changes.
 
-**Parallelism is capped by review capacity, not CPU.** Seats (concurrent agents),
-"pause dispatch when N items wait for me", and a daily token cap. Lease expiry
-puts a dead agent's item back in the queue and it resumes from its last commit
-and session, not from scratch.
+**Dependencies live in SQLite only.** Inferred ones (intake's file-overlap
+ordering) are scheduling hints that vanish when the blocker merges; they show as
+a "waits for" chip on the card and are removed from the item drawer.
+`PROJECT.md` carries no dependency syntax: within a track one agent runs the
+features in order anyway. If declared cross-track dependencies turn out to
+matter, add an optional `needs f-xxxxxx` suffix later (the parser already
+round-trips unknown text).
+
+**Parallelism is capped by review capacity and plan usage, not CPU.** Lease
+expiry puts a dead agent's item back in the queue and it resumes from its last
+commit and session, not from scratch. Defaults (Settings → Factory, all
+editable; revisit after a week of ledger data):
+
+| Setting | Default |
+|---|---|
+| Seats | 3 across all projects, at most 2 per project (they share one plan's limits) |
+| Pause dispatch when items wait for me | 3 (with the reviewer agent only escalations and mockups count) |
+| Escalate when the diff exceeds | 600 changed lines, excluding tests, lockfiles and generated files |
+| Fix loops before escalating | 2 |
+| Spending cap | No new items once the 5-hour window passes 80% or the weekly 90% (plan-usage readings); running items finish |
+| Runaway guard | Park an item and notify once it passes 3M tokens |
+| Lease | Renewed every 60s, expires after 5 min without a heartbeat |
+| Stall alert | A ready item unclaimed for 30 min while a seat is free |
 
 **Sessions and the factory share one model of work (phase 2).** A session can
 claim an item (Take over, or spawned on a track); liveness is the open terminal,
@@ -108,7 +127,8 @@ Phase 1 (factory on items):
 1. Item store — `factory_items` (feature id, track, workflow, step, status,
    claim, lease, heartbeat, tier), `factory_deps`; ready-queue query; atomic
    claim; lease reclaim.
-2. Engine — dispatcher under seats/review-budget/token cap; workflow templates;
+2. Engine — dispatcher under seats, review budget and the plan-usage cap
+   (readings from the plan usage chip's source); workflow templates;
    track-as-one-agent runner with per-feature commits; resume from last commit.
 3. Intake and shaping — `cr factory add` (free-form → features + requirements,
    overlap check, Inbox lines via `planFileFor()`), shaping pass with blocking
@@ -144,12 +164,6 @@ attribution); retire the old pipeline code and `decision-format.ts`.
 - Cross-project scheduling and cross-repo dependencies.
 - Adopting beads/Dolt or syncing work items across machines.
 - Non-LLM classifiers for triage (worth revisiting once intake volume is real).
-
-## Open questions
-
-- How intake-inferred dependencies are shown and edited (drawer only, or also
-  in `PROJECT.md`).
-- Default thresholds: seats, review budget, diff-size escalation, daily cap.
 
 ## Sources
 
