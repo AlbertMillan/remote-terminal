@@ -449,7 +449,7 @@ An entry, at its turn:
    **scratch checkout** of the branch (`prepareTrackUpdate`, detached in a temp folder),
    then the track's worktree fast-forwarded onto it under the lock after Update's
    refusals (`applyPreparedUpdate`; built again if the branch moved). Conflicts go to a
-   **resolver agent** (`runClaude`, tag `merge-resolve`, its own lane, allowed to edit
+   **resolver agent** (`runClaude`, tagged kind `factory`, stage `merge-resolve`, its own lane, allowed to edit
    only the conflicting files) while that merge is in progress; the queue then checks no
    conflict marker is left and stages each file itself. Anything left aborts the merge, so
    the checkout is as it was, and **parks** the entry with both sides (branch and sha) and

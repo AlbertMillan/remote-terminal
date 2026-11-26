@@ -947,7 +947,8 @@ RULES
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write'],
     timeoutMs: getConfig().jobs.stageTimeoutMs,
     failOnDenial: false,
-    tag: { projectCwd: ctx.projectCwd, kind: 'merge-resolve', jobId: ctx.entryId, stage: 'merge-resolve' },
+    // Factory work, told apart from the engine's own runs by its stage.
+    tag: { projectCwd: ctx.projectCwd, kind: 'factory', jobId: ctx.entryId, stage: 'merge-resolve' },
     // Its own lane: a resolver must not wait behind the project's other runs
     // while its entry holds the merge slot (and, for a track, the lock).
     laneKey: `merge:${pathKey(ctx.projectCwd)}`,
