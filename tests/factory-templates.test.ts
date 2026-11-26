@@ -39,7 +39,8 @@ describe('item template', () => {
     const r = walk(ITEM_TEMPLATE, happy);
     expect(r.end).toBe('finished');
     expect(r.ran).toEqual(['shape', 'implement', 'verify', 'self-review', 'summary', 'review', 'merge']);
-    expect(r.progress.skipped).toEqual(['fix', 'review-fix']);
+    // An item not flagged "mockup first" skips its mockup step too.
+    expect(r.progress.skipped).toEqual(['mockup', 'fix', 'review-fix']);
   });
 
   it("loops review-fix → verify → … → review while the reviewer asks for changes, up to the cap", () => {

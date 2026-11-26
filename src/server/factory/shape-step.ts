@@ -8,7 +8,7 @@ import { getIntake, insertIntake, shapedFiles, updateIntake, type IntakeRecord, 
 import { isObject, jsonReply } from './json-reply.js';
 import { registerStepHandler, type StepContext, type StepResult } from './steps.js';
 import { addDependency, getItem, updateItem } from './store.js';
-import { DONE, isTrackWorkflow } from './templates.js';
+import { DONE, isTrackWorkflow, MOCKUP_OUTCOME } from './templates.js';
 import { checkDiscovered, type DiscoveredWork } from './triage.js';
 import { CLOSED_STATUSES } from './types.js';
 
@@ -103,7 +103,10 @@ function shapePrompt(ctx: StepContext, intake: IntakeRecord | null): string {
   const f = ctx.features[0];
   const reqs = intake?.requirements.length ? `\nRequirements from the request:\n${intake.requirements.map((r) => `- ${r}`).join('\n')}\n` : '';
   const detail = intake?.detail ? `\nWhat was seen when it was filed:\n${intake.detail}\n` : '';
-  const mockup = intake?.mockupFirst ? '\nThe request asks to see a mockup before it is built.\n' : '';
+  // The mockup step builds and shows it (mockup-step.ts); a spec that plans one would put it in the repo.
+  const mockup = intake?.mockupFirst
+    ? '\nThe user will approve a clickable mockup before this is built; the factory makes it in a step of\nits own. Do not plan a mockup file or page in the spec: specify the real change.\n'
+    : '';
   const answered =
     intake?.question && intake.answer
       ? `\nYou asked earlier: ${intake.question.question}\nThe user answered: ${intake.answer}\n`
@@ -146,7 +149,9 @@ export function specMarkdown(id: string, title: string, intake: IntakeRecord | n
   if (intake?.question && intake.answer) {
     parts.push('', '## Decided', '', `- ${intake.question.question} → ${intake.answer}`);
   }
-  if (intake?.mockupFirst) parts.push('', '## Mockup first', '', 'The request asks to see a mockup before this is built.');
+  if (intake?.mockupFirst) {
+    parts.push('', '## Mockup first', '', 'The user approves a clickable mockup (the factory\'s mockup step) before this is built.');
+  }
   if (tier) parts.push('', `Model tier: ${tier}`);
   return `${parts.join('\n')}\n`;
 }
@@ -265,4 +270,19 @@ export async function shapeStep(ctx: StepContext): Promise<StepResult> {
   return proceed(ctx, f.id, spec.files, reply.discovered);
 }
 
-registerStepHandler('shape', shapeStep);
+/**
+ * The `shape` step as the template runs it: an item flagged "mockup first"
+ * (intake's flag, or Add work's option) reports MOCKUP_OUTCOME instead of
+ * done, which is what the template's `mockup` step waits on (mockup-step.ts).
+ * Every way shaping finishes counts: a planned spec, a resumed run, and a
+ * requeue behind overlapping work (its mockup runs once it is claimed again).
+ * A park is left as it is.
+ */
+export async function shapeWithMockupFlag(ctx: StepContext): Promise<StepResult> {
+  const result = await shapeStep(ctx);
+  if (!('outcome' in result) || result.outcome !== DONE) return result;
+  if (!getIntake(ctx.unit.projectCwd, ctx.features[0].id)?.mockupFirst) return result;
+  return { ...result, outcome: MOCKUP_OUTCOME };
+}
+
+registerStepHandler('shape', shapeWithMockupFlag);

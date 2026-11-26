@@ -167,12 +167,21 @@ const REVIEW_FIX_STEP: WorkflowStep = {
 /** Features one track may hold when it is reviewed per feature (one `next-feature` loop each). */
 export const TRACK_FEATURES_MAX = 100;
 
-/** Loose work: shaped, implemented and checked as one item. */
+/** Shaping's outcome for an item flagged "mockup first" (shape-step.ts): the mockup step runs. */
+export const MOCKUP_OUTCOME = 'mockup';
+
+/**
+ * Loose work: shaped, implemented and checked as one item. "Mockup first"
+ * (project/code-factory.md) inserts `mockup` after shaping: it runs only when
+ * shaping reported MOCKUP_OUTCOME, and parks the item until you approve the
+ * mockup (mockup-step.ts); everyone else skips straight to implement.
+ */
 export const ITEM_TEMPLATE: WorkflowTemplate = {
   name: 'item',
   steps: [
     { id: 'shape', handler: 'shape', needs: [] },
-    { id: 'implement', handler: 'implement', needs: ['shape'] },
+    { id: 'mockup', handler: 'mockup', needs: ['shape'], when: [{ step: 'shape', outcome: MOCKUP_OUTCOME }] },
+    { id: 'implement', handler: 'implement', needs: ['mockup'] },
     { id: 'verify', handler: 'verify', needs: ['implement'] },
     { id: 'self-review', handler: 'self-review', needs: ['verify'] },
     FIX_STEP,

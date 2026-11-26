@@ -11,7 +11,7 @@
  *   node "$CLAUDE_REMOTE_CLI" list
  *   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
  *   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
- *   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... [--mockup] <<'EOF'
  *   <free-form work>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
@@ -55,7 +55,7 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
-  node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]...  (the work, free-form, on stdin)
+  node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... [--mockup]  (the work, free-form, on stdin)
   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
   node "$CLAUDE_REMOTE_CLI" factory status`;
 
@@ -63,12 +63,16 @@ const REVIEWS = ['track', 'feature'];
 
 /**
  * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
- * `<feature-id>=<model>` and collects into a map.
+ * `<feature-id>=<model>` and collects into a map. `--mockup` takes no value.
  */
 export function parseFactoryArgs(argv) {
   const [sub, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--mockup') {
+      flags.mockup = true;
+      continue;
+    }
     const m = /^--(track|from|review|model)(?:=(.*))?$/.exec(rest[i]);
     if (!m) throw new UsageError(`unknown argument: ${rest[i]}`);
     const value = m[2] !== undefined ? m[2] : rest[++i];
@@ -89,7 +93,7 @@ export function parseFactoryArgs(argv) {
 /** The request for a `factory` subcommand, or a usage error. */
 async function factoryRequest(argv, stdin, headers) {
   const { sub, flags } = parseFactoryArgs(argv);
-  const allowed = { add: ['track', 'from'], send: ['track', 'review', 'models'], status: [] }[sub];
+  const allowed = { add: ['track', 'from', 'mockup'], send: ['track', 'review', 'models'], status: [] }[sub];
   if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send or status');
   const extra = Object.keys(flags).find((f) => !allowed.includes(f));
   if (extra) throw new UsageError(`factory ${sub} does not take --${extra === 'models' ? 'model' : extra}`);
@@ -117,6 +121,8 @@ async function factoryRequest(argv, stdin, headers) {
   const body = { text };
   if (flags.track !== undefined) body.track = flags.track;
   if (flags.from !== undefined) body.discoveredFrom = flags.from;
+  // Every feature filed gets a clickable mockup to approve before it is built.
+  if (flags.mockup) body.mockupFirst = true;
   return { path: '/api/agent/factory/add', request: post(body) };
 }
 

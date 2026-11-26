@@ -181,6 +181,11 @@ export interface AddInput {
   track?: unknown;
   /** Work a session found while on these items: filed into triage with `discovered-from` edges. */
   discoveredFrom?: string[];
+  /**
+   * Add work's "mockup first" option (`--mockup`): every feature filed gets a
+   * mockup to approve before it is built, whatever intake read in the text.
+   */
+  mockupFirst?: unknown;
 }
 
 export function checkTrackName(track: unknown): string {
@@ -203,17 +208,22 @@ export async function addWork(input: AddInput, deps: IntakeDeps = defaultIntakeD
     throw new IntakeError(400, `text is too long (${input.text.length} characters, at most ${MAX_INTAKE_CHARS})`);
   }
   const track = checkTrackName(input.track);
+  if (input.mockupFirst !== undefined && typeof input.mockupFirst !== 'boolean') {
+    throw new IntakeError(400, 'mockupFirst must be true or false');
+  }
+  const forceMockup = input.mockupFirst === true;
   const from = input.discoveredFrom ?? [];
   for (const id of from) {
     if (!getItem(project.cwd, id)) throw new IntakeError(404, `${id} is not a factory item of this project`);
   }
 
   const reply = await deps.ask(project.cwd, intakePrompt(input.text));
-  const features = parseIntakeReply(reply);
-  if (!features) {
+  const parsed = parseIntakeReply(reply);
+  if (!parsed) {
     logger.info({ cwd: project.cwd }, 'factory intake: no work found; nothing filed');
     throw new IntakeError(422, 'Intake found no work it could file in that text; nothing was written.');
   }
+  const features = forceMockup ? parsed.map((f) => ({ ...f, mockupFirst: true })) : parsed;
 
   const ids = await addPlanLines(
     project,

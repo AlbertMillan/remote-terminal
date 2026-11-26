@@ -50,12 +50,21 @@ describe('factory add', () => {
     expect(bodyOf(res.fetchImpl)).toEqual({ text: WORK, track: 'Polish', discoveredFrom: ['f-aaaaaa', 'f-bbbbbb', 'f-cccccc'] });
   });
 
+  it('sends --mockup as mockupFirst, which only add takes', async () => {
+    const res = await run(['factory', 'add', '--mockup', '--track', 'Polish']);
+    expect(bodyOf(res.fetchImpl)).toEqual({ text: WORK, track: 'Polish', mockupFirst: true });
+    const send = await run(['factory', 'send', '--mockup']);
+    expect(send.code).toBe(2);
+    expect(send.fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('fails before any request with no work, a terminal stdin, or a flag it does not take', async () => {
     for (const [argv, stdin] of [
       [['factory', 'add'], Readable.from(['  \n'])],
       [['factory', 'add'], Object.assign(Readable.from([]), { isTTY: true })],
       [['factory', 'add', '--review', 'track'], undefined],
       [['factory', 'add', '--track', ' '], undefined],
+      [['factory', 'add', '--mockup=yes'], undefined],
     ] as [string[], unknown][]) {
       const res = await run(argv, { stdin });
       expect(res.code, argv.join(' ')).toBe(2);

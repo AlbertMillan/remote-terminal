@@ -264,7 +264,7 @@ export function registerFactoryRoutes(app: FastifyInstance, deps: FactoryRouteDe
     try {
       const body = bodyOf(request.body);
       const project = boardProject(deps, body.cwd);
-      return await addWork({ project, text: body.text, track: body.track }, deps.intake);
+      return await addWork({ project, text: body.text, track: body.track, mockupFirst: body.mockupFirst }, deps.intake);
     } catch (error) {
       return sendError(reply, error);
     }
@@ -323,7 +323,10 @@ export function registerFactoryRoutes(app: FastifyInstance, deps: FactoryRouteDe
         }
         from = [...new Set(list as string[])];
       }
-      return await addWork({ project, text: body.text, track: body.track, discoveredFrom: from }, deps.intake);
+      return await addWork(
+        { project, text: body.text, track: body.track, discoveredFrom: from, mockupFirst: body.mockupFirst },
+        deps.intake
+      );
     } catch (error) {
       return sendError(reply, error);
     }
