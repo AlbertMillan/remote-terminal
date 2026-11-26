@@ -178,6 +178,32 @@ export async function addBehindMain(projects: WorkspaceProject[]): Promise<Works
 
 // --- Update from main ----------------------------------------------------
 
+/** One side of a conflicting merge, for a resolver and for the message naming both. */
+export interface MergeSide {
+  branch: string;
+  sha: string;
+}
+
+/** A merge stopped on conflicts, handed to a resolver while it is still in progress in `cwd`. */
+export interface MergeConflict {
+  cwd: string;
+  /** Unmerged paths, repo-relative. */
+  paths: string[];
+  /** The branch being merged into (checked out in `cwd`). */
+  ours: MergeSide;
+  /** The branch being merged in. */
+  theirs: MergeSide;
+}
+
+export interface UpdateOptions {
+  /**
+   * Settle the conflicts of the in-progress merge (the merge queue's resolver
+   * agent). It must leave each path resolved and staged; any path still
+   * unmerged afterwards refuses as with no resolver. A throw aborts the merge.
+   */
+  resolve?: (conflict: MergeConflict) => Promise<void>;
+}
+
 export interface UpdateResult {
   /** The merge commit on the track branch, or null when it was already up to date. */
   mergeSha: string | null;
@@ -218,7 +244,11 @@ export interface UpdateResult {
  * Says whether the merge changed a lockfile (`lockfileChanged`), and leaves
  * the reinstall to its caller (updateAndInstall), outside the lock.
  */
-export async function updateTrackFromMain(project: RegistryProject, trackName: string): Promise<UpdateResult> {
+export async function updateTrackFromMain(
+  project: RegistryProject,
+  trackName: string,
+  opts: UpdateOptions = {}
+): Promise<UpdateResult> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to update', 404);
   const docRel = docRelOf(project);
@@ -297,8 +327,29 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
       if ((await git(wt, ['checkout', 'HEAD', '--', spec])) === null) throw new Error(`Could not restore ${spec}`);
     }
 
-    // 5. Anything still unmerged is a real conflict.
-    const unmerged = await unmergedPaths(wt);
+    // 5. Anything still unmerged is a real conflict. The merge queue hands it
+    // to its resolver first (while the merge is still in progress, after the
+    // plan is back, so the resolver never sees the trap's deletions); whatever
+    // it leaves unmerged refuses as before.
+    let unmerged = await unmergedPaths(wt);
+    if (unmerged.length > 0 && opts.resolve) {
+      try {
+        await opts.resolve({
+          cwd: wt,
+          paths: unmerged,
+          ours: { branch: track.branch, sha: preMerge },
+          theirs: { branch: base, sha: baseSha },
+        });
+      } catch (error) {
+        await abortMerge(wt, base);
+        throw new TrackBranchError(
+          `Merging ${base} into the track conflicts in ${nameFiles(unmerged)}, and resolving it failed: ` +
+            `${(error as Error).message}. Nothing was changed.`,
+          409
+        );
+      }
+      unmerged = await unmergedPaths(wt);
+    }
     if (unmerged.length > 0) {
       await abortMerge(wt, base);
       throw new TrackBranchError(

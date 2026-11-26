@@ -4,10 +4,11 @@ import { sessionManager } from '../sessions/manager.js';
 import type { SessionMetadata } from '../sessions/types.js';
 import { getSession as getSessionFromDb } from '../db/queries.js';
 import { pushLandResult } from '../push/wire.js';
-import { broadcastLandResult, removeWorktreeSessions } from '../websocket/connections.js';
+import { broadcastLandResult } from '../websocket/connections.js';
 import type { LandNotificationPayload } from '../websocket/protocol.js';
 import type { RegistryProject } from '../projects/registry.js';
-import { landAndBuild, landPreflightForSession, updateAndInstall } from '../projects/track-land.js';
+import { landPreflightForSession, updateAndInstall } from '../projects/track-land.js';
+import { mergeQueueBusy, queueLand } from '../factory/merge-queue.js';
 import type { UpdateResult } from '../projects/track-update.js';
 import { trackBranchContaining, type TrackBranch } from '../projects/track-store.js';
 import type { InstallResult } from '../projects/project-deps.js';
@@ -35,9 +36,18 @@ export interface AgentLandDeps {
   projectForCwd(cwd: string): RegistryProject | null;
   /** Phase 1: every Land refusal that needs no session closed, plus a conflicting merge. */
   preflight(project: RegistryProject, trackName: string): Promise<void>;
-  /** Phase 2: close the worktree's sessions, land under the lock, rebuild. */
+  /**
+   * Phase 2, through the project's merge queue (factory/merge-queue.ts):
+   * close the worktree's sessions, land under the lock, rebuild.
+   */
   land(project: RegistryProject, trackName: string): Promise<{ detail: string }>;
   notify(payload: LandNotificationPayload): void;
+  /**
+   * What the project's merge queue is busy with, or null. A busy queue
+   * accepts the Land without phase 1: its preflight would be refused on the
+   * project lock the merge holds, and Land runs every check again at its turn.
+   */
+  queueBusy?(projectCwd: string): string | null;
 }
 
 /** What callerTrack needs to tell which track a caller may act on. */
@@ -52,16 +62,13 @@ export const defaultLandDeps: AgentLandDeps = {
   },
   projectForCwd,
   preflight: landPreflightForSession,
-  land: (project, trackName) =>
-    landAndBuild(project, trackName, {
-      sessions: sessionManager.getRunningSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
-      terminateSession: (id) => sessionManager.terminateSession(id),
-      removeSessions: removeWorktreeSessions,
-    }),
+  // The queue's land kind runs landAndBuild with the running sessions, as before.
+  land: (project, trackName) => queueLand(project, trackName).result,
   notify: (payload) => {
     broadcastLandResult(payload);
     pushLandResult(payload);
   },
+  queueBusy: mergeQueueBusy,
 };
 
 export interface AcceptedLand {
@@ -69,6 +76,8 @@ export interface AcceptedLand {
   track: string;
   /** The caller is in the track's worktree, so the Land closes it too. */
   closesCaller: boolean;
+  /** What the merge queue was busy with when it was accepted (no phase 1 then), or null. */
+  queuedBehind: string | null;
 }
 
 /** A land or update request: no track for the caller's own, or one its started session works in. */
@@ -156,13 +165,17 @@ export async function requestLand(deps: AgentLandDeps, callerId: string, body: T
   if (landsUnderWay.has(key)) {
     throw new AgentSessionError(409, `A Land of "${branch.trackName}" is already under way; its result comes as a notification`);
   }
-  await deps.preflight(project, branch.trackName);
+  // A merge in progress holds the project lock, which phase 1 would be
+  // refused on: the Land joins the queue instead, and its refusals come as
+  // the notification (landTrack checks everything again at its turn).
+  const queuedBehind = deps.queueBusy?.(project.cwd) ?? null;
+  if (queuedBehind === null) await deps.preflight(project, branch.trackName);
   // Again after the await, in case another request was accepted meanwhile.
   if (landsUnderWay.has(key)) {
     throw new AgentSessionError(409, `A Land of "${branch.trackName}" is already under way; its result comes as a notification`);
   }
   landsUnderWay.add(key);
-  return { project, track: branch.trackName, closesCaller };
+  return { project, track: branch.trackName, closesCaller, queuedBehind };
 }
 
 /**

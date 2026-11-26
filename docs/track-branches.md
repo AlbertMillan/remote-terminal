@@ -420,7 +420,56 @@ their checks and then undo each other's work: a double-clicked Delete reverts tw
 a job approved at its merge gate merges into a worktree its track's Land is removing.
 
 The lock is **try-acquire, never wait.** A second caller is refused with what holds the
-lock: a 409 from a route, or a failed stage that can be retried from the merge. A waiting
+lock: a 409 from a route, or a failed stage that can be retried from the merge. The
+factory's merge queue is the one caller that retries instead (below): nothing waits on
+the queue while holding the lock, so its retry cannot deadlock.
+
+## The merge queue
+
+`src/server/factory/merge-queue.ts` (spec: `project/code-factory.md`, "Merges go through
+one queue per project"; rows in `factory_merges`, migration 024). One slot per project:
+entries run one at a time, so two merges never interleave their checks and git calls.
+The factory engine hands its work over through `enqueueMerge(entry)`; **both Lands, the
+board's button and `POST /api/agent/land`, go through it too** (`queueLand`), so a merge
+in progress queues a Land instead of refusing it on the lock.
+
+An entry, at its turn:
+
+1. **Holds** (`holding`) while the checkout it merges into has uncommitted code, staged
+   files (even planning ones: `git merge` refuses then) or another branch checked out.
+   Planning files and the session log don't hold it, as they don't refuse Land. It
+   re-checks every 15 s, and at once on `kickMergeQueue`. A busy lock holds it too.
+2. **Updates** its branch onto the base: `git merge --no-commit <base>` in an item's own
+   worktree, or Update from main (`updateTrackFromMain`, which keeps the plan) for a
+   track. Conflicts go to a **resolver agent** (`runClaude`, tag `merge-resolve`, its own
+   lane, allowed to edit only the conflicting files) while the merge is in progress; the
+   queue then checks no conflict marker is left and stages each file itself. Anything
+   left aborts the merge, so the worktree is as it was, and **parks** the entry with both
+   sides (branch and sha) and the paths in `conflict_json`.
+3. **Verifies** with the project's declared commands (QA.md and `verify:`; the QA flows
+   stay with the engine's own verify step) whenever the code to merge changed. A failure
+   parks: a red result never merges.
+4. **Merges** under the lock, after checking the hold again and that the base has not
+   moved since verification (if it has, back to 2, at most 3 times): `--no-ff` with
+   `Job-Id: <entry id>` and one `Feature:` trailer per feature (`parseMergeLog` reads them
+   all into `featureIds`; Delete track matches any). `merge_sha` goes on the row. The
+   features are ticked in the plan file at the merge's checkout through `commitOnHead`
+   (never `git add`), the working copy keeping the user's own edits; main is pushed where
+   there is a remote and rebuilt outside the lock.
+
+Only the git that touches a shared checkout runs under the lock. An item's update,
+resolver and verification run in its own worktree without it: holding the try lock for
+minutes would refuse every Land, Delete and board write.
+
+**Lands keep every Land rule** (kind `session-land`): `landTrack` still runs all its
+refusals, closes the worktree's sessions after them, and copies the plan back before
+merging. The queue adds only the turn, plus Update from main with the resolver when the
+dry run (`behindMain`) says the Land would conflict, then verification. A session's
+request with an idle queue still runs phase 1 (every refusal reaches the agent) and lands
+after its `202`; with a busy queue it is accepted at once (`queuedBehind`), skipping
+phase 1, whose lock the merge holds, and every refusal comes as the notification. The
+board's Land answers with the result when the queue is idle, and `202` plus a
+notification when it is queued behind something. A waiting
 lock would deadlock: Delete holds it while `cancelJob` waits for a running stage to stop,
 and a merge stage waiting on the same lock would never stop. Inside the lock, the merge
 also checks again that its track branch still exists, so a track landed or deleted while
