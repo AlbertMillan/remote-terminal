@@ -29,10 +29,14 @@ project workspace over `PROJECT.md`, and a job pipeline running features in git 
   `connections.ts`, `handlers/`, `protocol.ts`, `validation.ts`, `origin.ts`) · `db/` ·
   `auth/tailscale.ts` · `projects/` (registry, `PROJECT.md`, board, tracks) · `jobs/`
   (`pipeline.ts`, `lifecycle.ts`, `store.ts`, `stages/`, `worktree.ts`; `runner.ts` only
-  re-exports) · `agent/claude-run.ts` (every headless `claude -p`) · `agent/sessions-api.ts`
-  (agent routes; CLI `scripts/cr-session.mjs`, skill `skills/claude-remote-sessions/`).
+  re-exports) · `factory/` (code factory, spec `project/code-factory.md`: `store.ts`,
+  `intake.ts`/`send.ts`/`triage.ts` in, `dispatcher.ts` + `steps.ts` run, `merge-queue.ts`
+  out, `takeover.ts`/`session-claims.ts` for sessions holding units, `factory-boot.ts`) ·
+  `agent/claude-run.ts` (every headless `claude -p`) · `agent/sessions-api.ts` (agent
+  routes; CLI `scripts/cr-session.mjs`, skill `skills/claude-remote-sessions/`).
 - Client: `terminal.ts` · `session-manager.ts` (+ its `*-view.ts`/`*-modal.ts`) ·
-  `project-workspace.ts` · `job-board*.ts` · `job-overlay.ts` · `decision-format.ts`.
+  `project-workspace.ts` · `job-board*.ts` · `factory-*.ts` (overlay, board, mockup drawer,
+  claims, settings) · `decision-format.ts`.
 
 ## WebSocket (`/ws`; message types in `protocol.ts`)
 
