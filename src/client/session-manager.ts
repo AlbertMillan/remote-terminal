@@ -7,6 +7,7 @@ import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
 import { FactoryOverlay } from './factory-overlay.js';
 import { FactoryBoardView } from './factory-board.js';
+import { FactoryClaims } from './factory-claims.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
@@ -103,6 +104,7 @@ class SessionManager {
     deleteCategory: (categoryId) => this.categoryStore.remove(categoryId),
     showCategoryModal: (mode, category) => this.categoryModal.show(mode, category),
     reorderSessions: (updates) => this.send('session.reorder', { sessions: updates }),
+    claimOf: (sessionId) => this.factoryClaims.badgeFor(sessionId),
   });
 
   /** The mobile on-screen navigation bar. */
@@ -190,6 +192,14 @@ class SessionManager {
     takeMainArea: () => this.giveMainAreaToBoard(),
     returnToMain: () => this.returnFromBoard(),
     syncOverlay: () => this.syncFactoryOverlay(),
+    openSession: (id) => this.openClaimSession(id),
+    sessionExists: (id) => this.sessions.has(id),
+  });
+  /** Which session holds which factory unit: the header's Return to factory and the sidebar badge. */
+  private factoryClaims = new FactoryClaims({
+    onChange: () => this.sessionListView.render(),
+    currentSessionId: () => this.currentSessionId,
+    showError: (message) => showHeaderToast(message),
   });
   /** Notifications, display, the session limits and Restart; after factoryOverlay and buildIndicator, which it is handed. */
   private settingsModal = new SettingsModal({
@@ -339,6 +349,7 @@ class SessionManager {
     document.getElementById('terminate-session-btn')?.addEventListener('click', () => this.terminateCurrentSession());
     document.getElementById('fork-session-btn')?.addEventListener('click', () => this.forkCurrentSession());
     document.getElementById('keep-session-btn')?.addEventListener('click', () => this.keepCurrentForkSession());
+    this.factoryClaims.attach();
     const accountChip = document.getElementById('session-account-btn') as HTMLButtonElement | null;
     const accountMenu = document.getElementById('session-account-menu');
     if (accountChip && accountMenu) {
@@ -541,6 +552,7 @@ class SessionManager {
         break;
       case 'factory.summary':
         this.factoryOverlay.update(message.payload);
+        this.factoryClaims.update(message.payload);
         this.factoryBoard.onSummary();
         break;
       case 'projects.changed':
@@ -954,6 +966,15 @@ class SessionManager {
     this.updateForkControls(session);
     this.accountMenu?.update();
     this.syncFactoryOverlay();
+    this.factoryClaims.syncHeader();
+  }
+
+  /** A claimed unit's "Open terminal": attach a running session, revive a parked one. */
+  private openClaimSession(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (s.attachable && s.status !== 'terminated') this.attachToSession(id);
+    else this.reviveSession(id);
   }
 
   private updateForkControls(session?: SessionInfo): void {

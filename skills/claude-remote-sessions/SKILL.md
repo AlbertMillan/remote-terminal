@@ -390,6 +390,23 @@ Prints the open items (step, what each waits for), parked units with their
 reason or shaping question, and pending merges. The user answers questions and
 settles triage on the board; don't answer a shaping question for them.
 
+**Take factory work into a terminal**, only when the user asks:
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory take f-ab12cd        # or a track name; none: this worktree's track
+node "$CLAUDE_REMOTE_CLI" factory return               # give back what you (or one you started) hold
+node "$CLAUDE_REMOTE_CLI" factory done                 # finished: summary, reviewer, merge queue
+```
+
+- `take` stops the factory's agent on that unit and opens a **new** session in
+  its worktree that continues its conversation; the factory skips the unit while
+  a session holds it. Sessions you started cannot `take`.
+- A session you `start --track` on a track with factory work claims that work
+  itself (the result's `factory.claimed`).
+- `done` never merges: the factory checks, summarizes and reviews the work, then
+  the merge queue lands it. `return` hands it back unfinished; the factory
+  resumes from the last commit.
+
 ## Limits
 
 - Sessions you start cannot start sessions themselves, peers included: only you add a peer.

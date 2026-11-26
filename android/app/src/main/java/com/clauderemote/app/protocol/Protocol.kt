@@ -107,7 +107,13 @@ data class FactoryUnitSummary(
     val stalled: String?,
     val heartbeatAt: String?,
     val updatedAt: String,
+    /** A terminal session holds it (Take over, or started on its track); null otherwise. */
+    val claim: FactoryUnitClaim? = null,
 )
+
+/** A terminal session's hold on a factory unit; `live` false means paused, still claimed. */
+@Serializable
+data class FactoryUnitClaim(val sessionId: String, val sessionName: String?, val live: Boolean)
 
 /** One merge-queue entry, a session's Land included. */
 @Serializable

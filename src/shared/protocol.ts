@@ -213,6 +213,20 @@ export interface FactoryUnitSummary {
   stalled: string | null;
   heartbeatAt: string | null;
   updatedAt: string;
+  /** A terminal session holds it (Take over, or a session started on its track); null otherwise. */
+  claim: FactoryUnitClaim | null;
+}
+
+/**
+ * A terminal session's hold on a unit. No heartbeat: liveness is the open terminal, so a
+ * closed one leaves the unit paused and still claimed by you until Return to factory.
+ */
+export interface FactoryUnitClaim {
+  sessionId: string;
+  /** Null once the session's row is gone (deleted); the claim stays until returned. */
+  sessionName: string | null;
+  /** Its terminal is open. False: paused, claimed by you. */
+  live: boolean;
 }
 
 /** One merge-queue entry, a session's Land included. */

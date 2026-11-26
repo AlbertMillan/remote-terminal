@@ -45,6 +45,8 @@ import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerFactorySettingsRoutes } from './factory/review-settings.js';
 import { registerFactoryBoardRoutes } from './factory/board-routes.js';
 import { registerFactoryRoutes } from './factory/factory-routes.js';
+import { registerFactorySessionRoutes } from './factory/session-routes.js';
+import { installSessionLiveness } from './factory/session-claims.js';
 import { stopFactory } from './factory/dispatcher.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
@@ -109,6 +111,11 @@ export async function createApp(): Promise<FastifyInstance> {
   startClaudeNameWatch(() => sessionManager.getSessionList(), broadcastClaudeNames);
   // A shell that exits on its own may now be revivable: refresh that row in every sidebar.
   sessionManager.onAnyExit(broadcastSessionRow);
+  // A factory unit a session holds shows paused while its terminal is closed (factory/session-claims.ts).
+  installSessionLiveness(
+    { isRunning: (id) => sessionManager.isRunning(id), nameOf: (id) => getSessionFromDb(id)?.name ?? null },
+    (listener) => sessionManager.onAnyLiveChange(listener)
+  );
   startAccountWatch(
     () => sessionManager.getRunningSessions(),
     broadcastAccountWarnings,
@@ -275,6 +282,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerFactoryBoardRoutes(app);
   // Add, send, status, answer, triage; /api/agent/factory/* authenticate like the routes below.
   registerFactoryRoutes(app);
+  // Take over / Return to factory / Done: the board's and sessions' (`cr factory take|return|done`).
+  registerFactorySessionRoutes(app);
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);
   registerPushRoutes(app);

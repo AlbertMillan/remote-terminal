@@ -78,7 +78,8 @@
       "modelTier": "sonnet",
       "stalled": null,
       "heartbeatAt": "2026-11-06T10:09:00.000Z",
-      "updatedAt": "2026-11-06T10:10:00.000Z"
+      "updatedAt": "2026-11-06T10:10:00.000Z",
+      "claim": { "sessionId": "5b1c7e0a-2f4d-4c1e-9a77-0c3d2b1a9e88", "sessionName": "history-search", "live": true }
     },
     "merge": {
       "id": "mq-1",

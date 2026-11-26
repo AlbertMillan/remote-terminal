@@ -868,3 +868,36 @@ describe('storedSessionFields', () => {
     });
   });
 });
+
+describe('a builder on a track with factory work (f-c4urw6)', () => {
+  it('claims the track\'s factory items before its claude is typed in, and says so', async () => {
+    const order: string[] = [];
+    deps.claimTrack = vi.fn(async () => {
+      order.push('claim');
+      return { claimed: ['f-aaa111', 'f-aaa222'] };
+    });
+    (deps.injectCommand as ReturnType<typeof vi.fn>).mockImplementation(() => order.push('type'));
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(deps.claimTrack).toHaveBeenCalledWith(PROJECT, 'Split view', body.sessionId, WORKTREE);
+    expect(body.factory).toEqual({ claimed: ['f-aaa111', 'f-aaa222'] });
+    expect(order).toEqual(['claim', 'type']);
+  });
+
+  it('a track with no factory work adds nothing to the result; a read-only peer claims nothing', async () => {
+    deps.claimTrack = vi.fn(async () => ({ claimed: [] }));
+    const builder = await start(GOOD);
+    expect(builder.json().factory).toBeUndefined();
+    const peer = await start({ ...GOOD, access: 'read', prompt: 'Review it.' });
+    expect(peer.statusCode).toBe(200);
+    expect(deps.claimTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it('a claim it could not take is reported, never a failed start', async () => {
+    deps.claimTrack = vi.fn(async () => ({ claimed: [], note: 'another session (s9) holds the track\'s factory work' }));
+    const res = await start(GOOD);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().factory.note).toContain('s9');
+  });
+});

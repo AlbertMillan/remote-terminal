@@ -69,6 +69,7 @@ class SessionManager {
   private exitListeners: Map<string, Set<(code: number) => void>> = new Map();
   /** Told after any session's shell exits on its own and its row is marked 'terminated'. */
   private anyExitListeners: Set<(id: string) => void> = new Set();
+  private liveChangeListeners: Set<(id: string) => void> = new Set();
   /** Each session's screen (docs/session-revive.md): what attach replays and shutdown persists. */
   private screens: Map<string, ScreenMirror> = new Map();
   private touchDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -370,6 +371,7 @@ class SessionManager {
       clearTimeout(debounceTimer);
       this.touchDebounceTimers.delete(id);
     }
+    this.emitLiveChange(id);
     return { exited };
   }
 
@@ -641,6 +643,28 @@ class SessionManager {
     };
   }
 
+  /**
+   * Called with a session's id whenever it stops running or runs again: an exit, a
+   * terminate, a stop or park, and a revive. The factory reads it to show a unit a
+   * session holds as paused the moment its terminal closes (factory/session-claims.ts).
+   */
+  onAnyLiveChange(listener: (id: string) => void): () => void {
+    this.liveChangeListeners.add(listener);
+    return () => {
+      this.liveChangeListeners.delete(listener);
+    };
+  }
+
+  private emitLiveChange(id: string): void {
+    for (const listener of this.liveChangeListeners) {
+      try {
+        listener(id);
+      } catch (err) {
+        logger.warn({ id, err }, 'Session live-change listener failed');
+      }
+    }
+  }
+
   onExit(id: string, listener: (code: number) => void): () => void {
     if (!this.exitListeners.has(id)) {
       this.exitListeners.set(id, new Set());
@@ -765,6 +789,7 @@ class SessionManager {
       session.status = 'terminated';
       updateSession(id, { status: 'terminated', lastAccessedAt: new Date().toISOString() });
       logSessionEvent(id, 'exited', String(exitCode));
+      this.emitLiveChange(id);
       for (const listener of this.anyExitListeners) {
         try {
           listener(id);
@@ -860,7 +885,9 @@ class SessionManager {
    */
   reviveSession(options: { id: string; cols?: number; rows?: number }): ActiveSession {
     if (this.movingAccount.has(options.id)) throw new Error('This session is moving to another account; try again in a moment');
-    return reviveSessionImpl(this._registry(), killPty, options);
+    const session = reviveSessionImpl(this._registry(), killPty, options);
+    this.emitLiveChange(options.id);
+    return session;
   }
 
   keepForkSession(id: string): boolean {

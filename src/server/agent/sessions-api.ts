@@ -37,6 +37,7 @@ import { isTrackError } from '../projects/routes.js';
 import { installDependencies, needsInstall, type InstallResult } from '../projects/project-deps.js';
 import { ensureLocalClaudeSettings } from '../projects/local-claude-settings.js';
 import { PROMPT_GRACE_MS, promptDelivery, type PromptDelivery } from './prompt-delivery.js';
+import { baseTakeoverDeps, claimTrackForSession, type TrackClaim } from '../factory/takeover.js';
 import { AgentSessionError, authenticate, projectForCwd } from './agent-common.js';
 import {
   defaultLandDeps,
@@ -140,6 +141,12 @@ export interface AgentSessionDeps {
   notifyPromptMissing(payload: PromptMissingNotificationPayload): void;
   /** Run `fn` once after `ms`; never keeps the process alive. */
   schedule(fn: () => void, ms: number): void;
+  /**
+   * A builder started on a track claims the track's factory items, so the dispatcher
+   * skips them (factory/takeover.ts claimTrackForSession). Never throws. Optional: a
+   * deps object without it claims nothing.
+   */
+  claimTrack?(projectCwd: string, track: string, sessionId: string, worktreePath: string): Promise<TrackClaim>;
 }
 
 /** Still running: a PTY exists and its shell has not exited. */
@@ -179,6 +186,8 @@ export const defaultDeps: AgentSessionDeps = {
   schedule: (fn, ms) => {
     setTimeout(fn, ms).unref();
   },
+  claimTrack: (projectCwd, track, sessionId, worktreePath) =>
+    claimTrackForSession(projectCwd, track, sessionId, worktreePath, baseTakeoverDeps()),
 };
 
 
@@ -206,6 +215,8 @@ export interface StartResult {
   access: Access;
   /** A peer's notes folder (forward slashes), shared by the track's peers; the parent can read it. Absent when the launch couldn't grant one. */
   notesPath?: string;
+  /** A builder on a track with factory work: the items it now holds, or why it holds none. */
+  factory?: TrackClaim;
 }
 
 export type Access = 'read' | 'write';
@@ -543,6 +554,11 @@ export async function startAgentSession(
       throw error;
     }
 
+    // A builder takes the track's factory work before its `claude` starts: a factory run
+    // working the track is stopped first, so two agents never edit one worktree. A
+    // read-only peer claims nothing; its builder holds the work.
+    const factory = access === 'write' && deps.claimTrack ? await deps.claimTrack(project.cwd, track, session.id, worktreePath) : null;
+
     deps.injectCommand(session, startCommand(launch.flags, promptDir, promptPath, session.name));
     // The check above passed, so this is a config edited since, or a file that couldn't be
     // written. Started anyway, like a failed install: the row and `list` say what it really
@@ -578,6 +594,7 @@ export async function startAgentSession(
       mcp,
       access,
       ...(notesPath ? { notesPath } : {}),
+      ...(factory && (factory.claimed.length > 0 || factory.note) ? { factory } : {}),
     };
   } finally {
     const left = (pendingStarts.get(callerId) ?? 1) - 1;

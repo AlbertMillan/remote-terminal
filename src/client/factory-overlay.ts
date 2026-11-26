@@ -1,6 +1,7 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { formatTokens } from './format.js';
 import type { FactorySummary, FactoryUnitSummary } from '../shared/protocol.js';
+import { claimStatus } from './factory-claims.js';
 
 export type { FactorySummary, FactoryUnitSummary } from '../shared/protocol.js';
 
@@ -68,6 +69,9 @@ export function newlyNeedingYou(previous: Set<string>, units: FactoryUnitSummary
 
 /** The line under a card's title: where it is and why. */
 export function cardStatus(unit: FactoryUnitSummary): string {
+  // Held by your terminal: "session · you", or paused while it is closed (factory-claims.ts).
+  const claimed = claimStatus(unit);
+  if (claimed) return claimed;
   if (unit.stalled) return `stalled: ${unit.stalled}`;
   if (unit.triage) return 'triage: accept, backlog or dismiss';
   if (unit.needsYou && unit.escalated) return unit.reason?.replace(/^review: /, '') ?? 'escalated to you';

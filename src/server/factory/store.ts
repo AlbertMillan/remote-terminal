@@ -607,3 +607,76 @@ export function reclaimExpiredLeases(now = Date.now()): FactoryItem[] {
   if (reclaimed.length > 0) factoryEvents.emitChange();
   return reclaimed;
 }
+
+// ---------------------------------------------------------------------------
+// Session claims (phase 2: project/code-factory.md, "Sessions and the factory
+// share one model of work"). A terminal session's claim has no lease and no
+// heartbeat: its liveness is the open terminal (factory/session-claims.ts).
+
+export type SessionClaimResult =
+  | {
+      ok: true;
+      items: FactoryItem[];
+      /** Run owners whose claim moved to the session: the caller stops those runs. */
+      displacedRuns: string[];
+    }
+  | { ok: false; featureId: string; reason: 'missing' | 'closed' | 'held'; holder?: Claimant };
+
+/**
+ * Claim every item of a unit for a terminal session, all or nothing, in one
+ * IMMEDIATE transaction: the claim MOVES from a run that holds it (no moment
+ * where the item is unclaimed and the dispatcher could take it back), and an
+ * unclaimed `open` or `parked` item is claimed outright. Refused when any item
+ * is gone, closed, in triage, or held by another session; re-claiming items
+ * the session already holds succeeds. No lease, no heartbeat:
+ * reclaimExpiredLeases() and recoverOrphans() only ever touch `run` claims.
+ */
+export function claimForSession(
+  projectCwd: string,
+  featureIds: string[],
+  owner: string,
+  now = Date.now()
+): SessionClaimResult {
+  const key = pathKey(projectCwd);
+  const db = getDatabase();
+  const result = db
+    .transaction((): SessionClaimResult => {
+      const displaced = new Set<string>();
+      for (const id of featureIds) {
+        const row = getRow(key, id);
+        if (!row) return { ok: false, featureId: id, reason: 'missing' };
+        if (CLOSED_STATUSES.includes(row.status as ItemStatus) || row.status === 'triage') {
+          return { ok: false, featureId: id, reason: 'closed' };
+        }
+        if (row.claim_owner !== null && row.claim_kind === 'session' && row.claim_owner !== owner) {
+          return { ok: false, featureId: id, reason: 'held', holder: { owner: row.claim_owner, kind: 'session' } };
+        }
+        if (row.claim_owner !== null && row.claim_kind === 'run') displaced.add(row.claim_owner);
+      }
+      const set = db.prepare(
+        `UPDATE factory_items
+            SET claim_owner = ?, claim_kind = 'session', lease_expires_at = NULL, heartbeat_at = NULL,
+                status = 'in_progress', updated_at = ?
+          WHERE project_key = ? AND feature_id = ?`
+      );
+      for (const id of featureIds) set.run(owner, iso(now), key, id);
+      return {
+        ok: true,
+        items: featureIds.map((id) => toItem(getRow(key, id) as ItemRow)),
+        displacedRuns: [...displaced],
+      };
+    })
+    .immediate();
+  if (result.ok) factoryEvents.emitChange();
+  return result;
+}
+
+/** Items a session's claim holds, in every project. */
+export function itemsClaimedBy(owner: string): FactoryItem[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT * FROM factory_items WHERE claim_owner = ? AND claim_kind = 'session' ORDER BY created_at, rowid`
+    )
+    .all(owner) as ItemRow[];
+  return rows.map(toItem);
+}

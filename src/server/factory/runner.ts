@@ -61,6 +61,14 @@ tree: check what is there and carry on from it rather than starting over.
 
 `;
 
+/** `progress.notes` key: what a terminal session that held the unit left for the next run. */
+export const HANDBACK_NOTE = 'handback';
+
+/** Steps whose agent calls continue the unit's working conversation. */
+export function workStepIds(template: WorkflowTemplate): string[] {
+  return template.steps.filter((s) => WORK_HANDLERS.has(s.handler)).map((s) => s.id);
+}
+
 export async function runUnit(
   unit: ClaimedUnit,
   deps: EngineDeps,
@@ -111,7 +119,10 @@ export async function runUnit(
 
   // The step the previous run died inside, if any: its first agent call is told so.
   let interruptedStep: string | null = progress.current;
-  const workSteps = template.steps.filter((s) => WORK_HANDLERS.has(s.handler)).map((s) => s.id);
+  // A terminal session held the unit since the last run (session-claims.ts): the
+  // first agent call is told what it left, whichever step that call is.
+  let handback: string | null = progress.notes[HANDBACK_NOTE] ?? null;
+  const workSteps = workStepIds(template);
   // The newest working session: recorded in agent_runs before each spawn, so it
   // survives a run killed before its envelope (and so before state.sessionId) existed.
   let sessionId: string | null = deps.lastSessionOf(jobId, workSteps) ?? state.sessionId;
@@ -153,8 +164,14 @@ export async function runUnit(
     let discovered: DiscoveredWork[] = [];
 
     const agent = async (stepId: string, req: AgentRequest): Promise<ClaudeRunResult> => {
-      const note = stepId === interruptedStep ? INTERRUPTED : '';
+      let note = stepId === interruptedStep ? INTERRUPTED : '';
       if (note) interruptedStep = null;
+      if (handback) {
+        note = `${handback.trim()}\n\n${note}`;
+        handback = null;
+        delete progress.notes[HANDBACK_NOTE];
+        save();
+      }
       // Read per call: shaping sets a loose item's tier mid-run (a sender's choice stays).
       const tier = (ref.isTrack ? null : getItem(cwd, ref.featureIds[0])?.modelTier) ?? unit.modelTier;
       const base = {
@@ -233,6 +250,17 @@ export async function runUnit(
       };
       discovered = [];
       const result = await handler(ctx);
+      // Stopped while the step settled (a Take over moved the claim, or a shutdown): a
+      // finished step's outcome is kept, so it is not paid for again, but nothing else is
+      // acted on. A park or a hand-off now would clobber the session's claim.
+      if (ac.signal.aborted) {
+        if ('outcome' in result && !result.requeue) {
+          recordOutcome(template, progress, step.id, result.outcome);
+          progress.current = null;
+          save();
+        }
+        throw new RunAbortedError();
+      }
       progress.current = null;
 
       // Filed whatever the step ended in: work seen before a park is still worth triaging.

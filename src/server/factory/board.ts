@@ -16,11 +16,13 @@ import type {
   FactoryQuestion,
   FactoryReport,
   FactorySummary,
+  FactoryUnitClaim,
   FactoryUnitDetail,
   FactoryUnitStatus,
   FactoryUnitSummary,
 } from '../../shared/protocol.js';
 import { getItem, listDependencies, listItems } from './store.js';
+import { sessionLiveness, sessionOfOwner } from './session-claims.js';
 import { getRunState, unitIdFor, type RunState } from './run-state.js';
 import { listMerges, type MergeRecord, type MergeStatus } from './merge-queue-store.js';
 import { isTrackWorkflow } from './templates.js';
@@ -421,6 +423,17 @@ function stallOf(
   return `ready and unclaimed for ${minutes(now - since)} with a seat free`;
 }
 
+/** The terminal session holding the unit, and whether its terminal is open (session-claims.ts). */
+function claimOf(items: FactoryItem[]): FactoryUnitClaim | null {
+  for (const i of items) {
+    const sessionId = i.claimKind === 'session' ? sessionOfOwner(i.claimOwner) : null;
+    if (!sessionId) continue;
+    const live = sessionLiveness();
+    return { sessionId, sessionName: live.nameOf(sessionId), live: live.isRunning(sessionId) };
+  }
+  return null;
+}
+
 function buildUnit(group: UnitGroup, ctx: BuildContext): FactoryBoardUnit {
   const { projectCwd, unitId, isTrack, items } = group;
   const ids = items.map((i) => i.featureId);
@@ -475,6 +488,7 @@ function buildUnit(group: UnitGroup, ctx: BuildContext): FactoryBoardUnit {
     stalled,
     heartbeatAt: items.map((i) => i.heartbeatAt).filter((t): t is string => !!t).sort().pop() ?? null,
     updatedAt,
+    claim: claimOf(items),
   };
   const detail: FactoryUnitDetail = {
     parkReason: state?.parkReason ?? null,

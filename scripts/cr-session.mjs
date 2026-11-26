@@ -16,12 +16,18 @@
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
  *   node "$CLAUDE_REMOTE_CLI" factory status
+ *   node "$CLAUDE_REMOTE_CLI" factory take|return|done [<feature-id>|<track>]
  *
  * `factory` drives the code factory (project/code-factory.md) for this
  * session's project: `add` files loose work into the Inbox (`--from` files it
  * as work discovered on those items, into triage); `send` hands a planned
  * track (this worktree's when none is named) to the factory with optional
  * review granularity and per-feature models; `status` prints its state.
+ * `take` stops the factory's agent on a unit and opens a new session in its
+ * worktree that continues its conversation (not from a started session);
+ * `return` gives the unit this session (or one it started) holds back to the
+ * factory, which resumes it from the last commit; `done` sends that work to
+ * the factory's summary, reviewer and merge queue — never a direct merge.
  *
  * `land` with no track lands the track whose worktree this session is in, and
  * closes this session to do it. `update` merges the base branch into that
@@ -57,9 +63,14 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... [--mockup]  (the work, free-form, on stdin)
   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
-  node "$CLAUDE_REMOTE_CLI" factory status`;
+  node "$CLAUDE_REMOTE_CLI" factory status
+  node "$CLAUDE_REMOTE_CLI" factory take [<feature-id>|<track>]
+  node "$CLAUDE_REMOTE_CLI" factory return [<feature-id>|<track>]
+  node "$CLAUDE_REMOTE_CLI" factory done [<feature-id>|<track>]`;
 
 const REVIEWS = ['track', 'feature'];
+/** Subcommands that claim or release factory work for a terminal session (claimRequest). */
+const CLAIM_SUBS = ['take', 'return', 'done'];
 
 /**
  * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
@@ -124,6 +135,35 @@ async function factoryRequest(argv, stdin, headers) {
   // Every feature filed gets a clickable mockup to approve before it is built.
   if (flags.mockup) body.mockupFirst = true;
   return { path: '/api/agent/factory/add', request: post(body) };
+}
+
+/**
+ * `factory take|return|done [<feature-id>|<track>]`: the unit named positionally
+ * (`take` also accepts `--track`), or none, which means this worktree's track for
+ * `take` and what this session holds for `return` and `done`.
+ */
+function claimRequest(argv, headers) {
+  const [sub, ...rest] = argv;
+  let target;
+  const set = (value) => {
+    if (target !== undefined) throw new UsageError(`factory ${sub} takes one feature id or track name`);
+    if (!value || !value.trim()) throw new UsageError(`factory ${sub} needs a feature id or track name there`);
+    target = value;
+  };
+  for (let i = 0; i < rest.length; i++) {
+    const m = /^--track(?:=(.*))?$/.exec(rest[i]);
+    if (m && sub === 'take') set(m[1] !== undefined ? m[1] : rest[++i]);
+    else if (rest[i].startsWith('--')) throw new UsageError(`factory ${sub} does not take ${rest[i].split('=')[0]}`);
+    else set(rest[i]);
+  }
+  return {
+    path: `/api/agent/factory/${sub}`,
+    request: {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(target !== undefined ? { target } : {}),
+    },
+  };
 }
 
 // `auto` is the server's default. `default` is the old name for `manual`, still
@@ -199,7 +239,9 @@ export async function main({
   let path = '/api/agent/sessions';
   if (command === 'factory') {
     try {
-      ({ path, request } = await factoryRequest(argv.slice(1), stdin, headers));
+      ({ path, request } = CLAIM_SUBS.includes(argv[1])
+        ? claimRequest(argv.slice(1), headers)
+        : await factoryRequest(argv.slice(1), stdin, headers));
     } catch (error) {
       if (error instanceof UsageError) return fail(`${error.message}\n${USAGE}`, 2);
       throw error;

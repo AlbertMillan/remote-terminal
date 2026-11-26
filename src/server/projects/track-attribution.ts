@@ -11,6 +11,7 @@ import { readProjectPlan } from './project-plan.js';
 import { docRelOf } from './track-plan.js';
 import { allProjectsDirs } from '../accounts.js';
 import { featuresOf, type ProjectDoc } from './project-doc-format.js';
+import { listClaimRecords, type SessionClaimRecord } from '../factory/session-claims.js';
 
 const logger = createLogger('track-attribution');
 
@@ -51,9 +52,27 @@ export interface TrackGuess {
   sessions: string[];
   files: GuessedFile[];
   commits: GuessedCommit[];
+  /**
+   * NOT a guess: terminal sessions that held this track's factory work
+   * (factory/session-claims.ts records each claim). Their transcripts are left
+   * out of the guess above: they worked in the unit's worktree, and that work
+   * reaches the base branch through the merge queue, recorded by trailer.
+   */
+  recorded: RecordedClaim[];
 }
 
-const EMPTY: TrackGuess = { sessions: [], files: [], commits: [] };
+/** A claim record as attribution reports it. */
+export interface RecordedClaim {
+  sessionId: string;
+  unitId: string;
+  featureIds: string[];
+  worktreePath: string | null;
+  baseCommit: string | null;
+  endCommit: string | null;
+  endedBy: 'returned' | 'done' | null;
+}
+
+const EMPTY: TrackGuess = { sessions: [], files: [], commits: [], recorded: [] };
 
 // --- Transcript scanning -----------------------------------------------
 
@@ -277,6 +296,8 @@ export interface AttributionContext {
   phaseGroups: PhaseGroup[];
   transcripts: TranscriptSummary[];
   status: GitStatusEntry[];
+  /** Factory session claims of this project: records, never guessed at. */
+  claims: SessionClaimRecord[];
 }
 
 export async function attributionContext(project: RegistryProject): Promise<AttributionContext> {
@@ -296,7 +317,18 @@ export async function attributionContext(project: RegistryProject): Promise<Attr
     phaseGroups,
     transcripts: await projectTranscripts(project.cwd),
     status: (await gitStatusEntries(project.cwd, { allUntracked: true })) ?? [],
+    claims: claimRecordsOf(project.cwd),
   };
+}
+
+function claimRecordsOf(cwd: string): SessionClaimRecord[] {
+  try {
+    return listClaimRecords(cwd);
+  } catch (error) {
+    // No table (a database from before migration 028 in a test): nothing recorded.
+    logger.warn({ cwd, error: (error as Error).message }, 'attribution: claim records unreadable');
+    return [];
+  }
 }
 
 /**
@@ -321,17 +353,32 @@ async function guess(ctx: AttributionContext, trackName: string): Promise<TrackG
   const track = ctx.doc.tracks.find((t) => t.name === trackName);
   const featureIds = new Set((track ? featuresOf(track) : []).map((f) => f.id));
 
+  // Records first: the factory claims of this track's work, by track or feature.
+  const mine = ctx.claims.filter((c) => c.trackName === trackName || c.featureIds.some((id) => featureIds.has(id)));
+  const recorded: RecordedClaim[] = mine.map((c) => ({
+    sessionId: c.sessionId,
+    unitId: c.unitId,
+    featureIds: [...c.featureIds],
+    worktreePath: c.worktreePath,
+    baseCommit: c.baseCommit,
+    endCommit: c.endCommit,
+    endedBy: c.endedBy,
+  }));
+  // A transcript run under ANY claim is a recorded worker of its unit, never a guess:
+  // left out here even for another track (rule 3: not attributed, never wrongly).
+  const claimed = new Set(ctx.claims.flatMap((c) => c.transcriptIds));
+
   const fromLog = new Set<string>();
   for (const g of ctx.phaseGroups) {
     if (g.group !== trackName) continue;
     for (const it of g.items) for (const id of it.sessionIds) fromLog.add(id);
   }
-  if (featureIds.size === 0 && fromLog.size === 0) return EMPTY;
+  if (featureIds.size === 0 && fromLog.size === 0) return { ...EMPTY, recorded };
 
   const sessions = ctx.transcripts.filter(
-    (s) => fromLog.has(s.sessionId) || [...s.docIds].some((id) => featureIds.has(id))
+    (s) => !claimed.has(s.sessionId) && (fromLog.has(s.sessionId) || [...s.docIds].some((id) => featureIds.has(id)))
   );
-  if (sessions.length === 0) return EMPTY;
+  if (sessions.length === 0) return { ...EMPTY, recorded };
 
   // Paths they wrote, inside the project, minus the planning documents.
   const logName = key(getConfig().projectLog.fileName);
@@ -346,7 +393,7 @@ async function guess(ctx: AttributionContext, trackName: string): Promise<TrackG
       if (rel && !excluded(rel)) written.set(key(rel), rel);
     }
   }
-  if (written.size === 0) return { sessions: sessions.map((s) => s.sessionId), files: [], commits: [] };
+  if (written.size === 0) return { sessions: sessions.map((s) => s.sessionId), files: [], commits: [], recorded };
 
   // Still dirty on main right now.
   const files: GuessedFile[] = [];
@@ -382,7 +429,7 @@ async function guess(ctx: AttributionContext, trackName: string): Promise<TrackG
     }
   }
 
-  return { sessions: sessions.map((s) => s.sessionId), files, commits: [...commits.values()] };
+  return { sessions: sessions.map((s) => s.sessionId), files, commits: [...commits.values()], recorded };
 }
 
 /** Test hook: forget the transcript cache. */
