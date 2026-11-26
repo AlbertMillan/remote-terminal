@@ -1,4 +1,4 @@
-import type { JobOverlay, OverlayPlacement } from './job-overlay.js';
+import type { FactoryOverlay, OverlayPlacement } from './factory-overlay.js';
 import { ServerRestartControl } from './server-restart.js';
 import { SessionLimitSetting } from './session-limit-setting.js';
 import { FactorySetting } from './factory-setting.js';
@@ -11,8 +11,8 @@ export interface SettingsModalHost {
   setNotificationPreferences(prefs: NotificationPreferencesPayload): void;
   /** Asks the browser if it hasn't been asked yet; resolves to the permission now held. */
   notificationPermission(): Promise<'default' | 'granted' | 'denied'>;
-  jobOverlay: Pick<JobOverlay, 'isEnabled' | 'getPlacement' | 'setPreferences'>;
-  syncJobOverlay(): void;
+  factoryOverlay: Pick<FactoryOverlay, 'isEnabled' | 'getPlacement' | 'setPreferences'>;
+  syncFactoryOverlay(): void;
   /** Re-render the session list after a sidebar preference changed. */
   renderSessionList(): void;
   /** The running build is behind (BuildIndicator): the gear then opens on the Server tab. */
@@ -63,7 +63,7 @@ export class SettingsModal {
     document.getElementById('settings-close')?.addEventListener('click', () => this.hide());
     document.getElementById('settings-save')?.addEventListener('click', () => void this.save());
     document
-      .getElementById('setting-job-overlay')
+      .getElementById('setting-factory-overlay')
       ?.addEventListener('change', () => this.updatePlacementEnabled());
     document.getElementById('settings-modal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.hide();
@@ -140,9 +140,9 @@ export class SettingsModal {
 
     // Display prefs live in localStorage (per device), not in the server's
     // notification row -- a phone and a desktop want different answers here.
-    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
-    if (overlayCheckbox) overlayCheckbox.checked = this.host.jobOverlay.isEnabled();
-    const placement = this.host.jobOverlay.getPlacement();
+    const overlayCheckbox = document.getElementById('setting-factory-overlay') as HTMLInputElement;
+    if (overlayCheckbox) overlayCheckbox.checked = this.host.factoryOverlay.isEnabled();
+    const placement = this.host.factoryOverlay.getPlacement();
     for (const radio of this.placementRadios()) radio.checked = radio.value === placement;
     this.updatePlacementEnabled();
     const keepStopped = document.getElementById('setting-keep-stopped') as HTMLInputElement | null;
@@ -241,14 +241,14 @@ export class SettingsModal {
 
   private placementRadios(): HTMLInputElement[] {
     return [
-      ...document.querySelectorAll<HTMLInputElement>('input[name="job-overlay-placement"]'),
+      ...document.querySelectorAll<HTMLInputElement>('input[name="factory-overlay-placement"]'),
     ];
   }
 
   /** The placement choice means nothing while the panel is switched off. */
   private updatePlacementEnabled(): void {
-    const on = (document.getElementById('setting-job-overlay') as HTMLInputElement)?.checked ?? true;
-    document.getElementById('setting-job-overlay-placement')?.classList.toggle('disabled', !on);
+    const on = (document.getElementById('setting-factory-overlay') as HTMLInputElement)?.checked ?? true;
+    document.getElementById('setting-factory-overlay-placement')?.classList.toggle('disabled', !on);
     for (const radio of this.placementRadios()) radio.disabled = !on;
   }
 
@@ -290,12 +290,12 @@ export class SettingsModal {
     });
 
     // Applied on Save rather than on change, so Cancel genuinely cancels.
-    const overlayCheckbox = document.getElementById('setting-job-overlay') as HTMLInputElement;
+    const overlayCheckbox = document.getElementById('setting-factory-overlay') as HTMLInputElement;
     const placement: OverlayPlacement = this.placementRadios().find((r) => r.checked)?.value === 'header'
       ? 'header'
       : 'below';
-    this.host.jobOverlay.setPreferences(overlayCheckbox?.checked ?? true, placement);
-    this.host.syncJobOverlay();
+    this.host.factoryOverlay.setPreferences(overlayCheckbox?.checked ?? true, placement);
+    this.host.syncFactoryOverlay();
     const keepStopped = document.getElementById('setting-keep-stopped') as HTMLInputElement | null;
     if (keepStopped) writeFlag(KEEP_STOPPED_IN_PLACE_KEY, keepStopped.checked);
     this.host.renderSessionList();

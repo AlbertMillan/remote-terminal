@@ -21,6 +21,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clauderemote.app.App
+import com.clauderemote.app.jobs.JobsFeed
+import com.clauderemote.app.protocol.FactoryUnitSummary
 import com.clauderemote.app.protocol.JobSummary
 import com.clauderemote.app.ui.common.Chip
 import com.clauderemote.app.ui.common.LoadingOrError
@@ -29,14 +31,29 @@ import com.clauderemote.app.ui.common.rememberLoaded
 import com.clauderemote.app.ui.common.statusColor
 import com.clauderemote.app.ui.theme.Palette
 
-/** Everything waiting on you first (live from `jobs.summary`), then every project. */
+/**
+ * Everything waiting on you first: the factory's units (live from `factory.summary`), the
+ * old pipeline's jobs (`jobs.summary`), then every project.
+ */
 @Composable
-fun ProjectsScreen(app: App, onBack: () -> Unit, openProject: (String) -> Unit, openJob: (String) -> Unit) {
+fun ProjectsScreen(
+    app: App,
+    onBack: () -> Unit,
+    openProject: (String) -> Unit,
+    openJob: (String) -> Unit,
+    openUnit: (String) -> Unit,
+) {
     val jobs by app.jobsFeed.jobs.collectAsStateWithLifecycle()
+    val factory by app.jobsFeed.factory.collectAsStateWithLifecycle()
     // The roll-up parses every PROJECT.md: loaded on open and on Refresh, not on every job write.
     val rollup = rememberLoaded(Unit) { app.jobsApi.rollup() }
     Page("Projects", onBack = onBack, actions = { TextButton(onClick = rollup.reload) { Text("Refresh") } }) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+            val units = JobsFeed.liveUnits(factory?.units.orEmpty())
+            if (units.isNotEmpty()) {
+                item { SectionHeader("Factory") }
+                items(units, key = { "u:" + it.key }) { unit -> UnitRow(unit) { openUnit(unit.key) } }
+            }
             val live = jobs.filter { it.status in setOf("parked", "running", "queued", "failed") }
             if (live.isNotEmpty()) {
                 item { SectionHeader("Jobs") }
@@ -96,6 +113,27 @@ fun JobRow(job: JobSummary, onClick: () -> Unit) {
         }
         Text(job.projectName, style = MaterialTheme.typography.bodySmall, color = Palette.muted)
     }
+}
+
+@Composable
+fun UnitRow(unit: FactoryUnitSummary, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip(JobsFeed.unitLabel(unit), unitColor(unit))
+            Text(unit.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(
+            listOfNotNull(unit.projectName, if (unit.isTrack) "track" else unit.unitId, unit.stalled ?: unit.reason).joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall, color = Palette.muted, maxLines = 2,
+        )
+    }
+}
+
+fun unitColor(unit: FactoryUnitSummary) = when {
+    unit.needsYou || unit.stalled != null -> Palette.warn
+    unit.column == "done" -> Palette.ok
+    unit.column == "intake" || unit.column == "ready" -> Palette.muted
+    else -> Palette.accent
 }
 
 /** "design gate", "question", "running: implement", "failed: review". */

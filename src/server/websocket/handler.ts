@@ -19,6 +19,9 @@ import {
 import { notificationService, type Notification } from '../notifications/service.js';
 import { jobEvents } from '../jobs/events.js';
 import { buildJobsSummary } from '../jobs/summary.js';
+import { factoryEvents } from '../factory/events.js';
+import { buildFactorySummary } from '../factory/board.js';
+import { getDispatcher } from '../factory/dispatcher.js';
 import {
   WS_OPEN,
   connections,
@@ -59,7 +62,7 @@ import {
   handleNotificationPreferencesSet,
   handleNotificationDismiss,
 } from './handlers/notifications.js';
-import type { JobsSummary } from '../../shared/protocol.js';
+import type { FactorySummary, JobsSummary } from '../../shared/protocol.js';
 
 export { getActiveConnections, closeAllConnections };
 
@@ -113,6 +116,41 @@ function broadcastJobsSummary(target?: ClientConnection): void {
   }
 
   const message = createMessage('jobs.summary', payload);
+  for (const conn of targets) conn.ws.send(message);
+}
+
+/**
+ * Push the factory feed (the Factory overlay's cards) on every factory write, the
+ * same way as the job feed: one microtask collapses a transition's several writes
+ * (a park updates the run state and every item of a track) into one send.
+ */
+let factoryBroadcastQueued = false;
+
+factoryEvents.onChange(() => {
+  if (factoryBroadcastQueued) return;
+  factoryBroadcastQueued = true;
+  queueMicrotask(() => {
+    factoryBroadcastQueued = false;
+    broadcastFactorySummary();
+  });
+});
+
+function broadcastFactorySummary(target?: ClientConnection): void {
+  const targets = (target ? [target] : [...connections.values()]).filter(
+    (conn) => conn.ws.readyState === WS_OPEN
+  );
+  // Nobody listening: a factory working overnight pays for no summaries.
+  if (targets.length === 0) return;
+
+  let payload: FactorySummary;
+  try {
+    payload = buildFactorySummary({ dispatch: getDispatcher()?.status() ?? null });
+  } catch (error) {
+    logger.error({ error }, 'Failed to build factory summary');
+    return;
+  }
+
+  const message = createMessage('factory.summary', payload);
   for (const conn of targets) conn.ws.send(message);
 }
 
@@ -182,6 +220,7 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
   // Seed the job overlay before anything moves, so a freshly loaded page is not
   // blank until the next stage transition (which may be 20 minutes away).
   broadcastJobsSummary(connection);
+  broadcastFactorySummary(connection);
 
   // Set up message handler with rate limiting
   ws.on('message', (data: Buffer | string) => {

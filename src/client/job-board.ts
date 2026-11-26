@@ -105,7 +105,6 @@ export class JobBoard {
   private findings = new Map<string, Finding[]>();
   private expanded = new Set<string>();
   /** A job the overlay asked to show, applied by the next render. */
-  private pendingFocus: string | null = null;
   /**
    * Answers typed but not yet sent, keyed `jobId#questionNumber`.
    *
@@ -134,35 +133,6 @@ export class JobBoard {
 
   jobsForFeature(featureId: string): Job[] {
     return this.jobs.filter((j) => j.featureId === featureId);
-  }
-
-  /**
-   * Expand a job and scroll it into view — how the live overlay hands a job
-   * over to the board.
-   *
-   * The caller may arrive before or after this project's jobs have loaded, so
-   * the request is remembered and applied by whichever render comes next
-   * rather than requiring the two to be sequenced.
-   */
-  focusJob(jobId: string): void {
-    this.expanded.add(jobId);
-    this.pendingFocus = jobId;
-    if (this.jobs.some((j) => j.id === jobId)) this.render();
-  }
-
-  /** Scroll to a job the overlay asked for, once it is actually on the page. */
-  private applyPendingFocus(container: HTMLElement): void {
-    if (!this.pendingFocus) return;
-    // Matched by dataset rather than a selector: job ids come from the server
-    // and never need escaping, but nothing here has to know that.
-    const el = [...container.querySelectorAll<HTMLElement>('[data-job]')].find(
-      (node) => node.dataset.job === this.pendingFocus
-    );
-    if (!el) return;
-    this.pendingFocus = null;
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    el.classList.add('jb-focused');
-    window.setTimeout(() => el.classList.remove('jb-focused'), 2000);
   }
 
   // --- Loading -----------------------------------------------------------
@@ -303,7 +273,6 @@ export class JobBoard {
         ${this.jobs.map((job) => this.renderJob(job))}
       </div>`
     );
-    this.applyPendingFocus(container);
     this.applyPendingAnchor(container);
     this.applyRefocusDocsHead(container);
   }
@@ -705,8 +674,7 @@ ${usageTooltip(usageOf(s))}` : '')
    *
    * The scroll cannot happen here: the body is still being fetched, and the
    * render that puts it on the page comes later. So the section is remembered
-   * and applied by whichever render brings it into existence — the same shape
-   * as the overlay's focusJob.
+   * and applied by whichever render brings it into existence.
    */
   private async openReference(jobId: string, path: string, section: string): Promise<void> {
     if (section) this.pendingAnchor = { jobId, section };

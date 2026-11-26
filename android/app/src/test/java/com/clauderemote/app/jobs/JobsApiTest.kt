@@ -30,6 +30,7 @@ class JobsApiTest {
                     "/api/jobs/j-1/decision" -> """{"decision":{"preamble":[],"cards":[{"question":"Which store?","context":["Context."],"options":[{"label":"a","text":"SQLite"},{"label":"b","text":"JSON"}],"recommendation":{"kind":"recommends","option":"a","text":"SQLite"}}],"questionCount":1}}"""
                     "/api/jobs/j-2/decision" -> """{"decision":null}"""
                     "/api/jobs/j-1/answer" -> """{"job":{"id":"j-1","projectCwd":"C:\\p","title":"T","status":"queued"}}"""
+                    "/api/factory/items/f-aaaaaa/release" -> """{"ok":true}"""
                     "/api/jobs/j-9" -> return MockResponse().setResponseCode(409).setBody("""{"error":"This job is not waiting for approval"}""")
                     else -> return MockResponse().setResponseCode(404).setBody("""{"error":"Unknown job"}""")
                 }
@@ -65,6 +66,16 @@ class JobsApiTest {
         val post = requests.last { it.path == "/api/jobs/j-1/answer" }
         assertEquals("POST", post.method)
         assertEquals("""{"answer":"(a) SQLite"}""", post.body.readUtf8())
+    }
+
+    @Test
+    fun releasesAFactoryUnitWithItsOutcome() = runBlocking {
+        api.releaseFactory("C:/p", "f-aaaaaa", "approved")
+        api.releaseFactory("C:/p", "f-aaaaaa", null)
+        val posts = requests.filter { it.path == "/api/factory/items/f-aaaaaa/release" }
+        assertEquals(listOf("POST", "POST"), posts.map { it.method })
+        assertEquals("""{"cwd":"C:/p","outcome":"approved"}""", posts[0].body.readUtf8())
+        assertEquals("""{"cwd":"C:/p"}""", posts[1].body.readUtf8())
     }
 
     @Test

@@ -46,10 +46,10 @@ beforeEach(() => {
         <input type="checkbox" id="setting-visual-badges">
         <input type="checkbox" id="setting-notify-input">
         <input type="checkbox" id="setting-notify-completed">
-        <input type="checkbox" id="setting-job-overlay">
-        <div id="setting-job-overlay-placement">
-          <input type="radio" name="job-overlay-placement" value="below">
-          <input type="radio" name="job-overlay-placement" value="header">
+        <input type="checkbox" id="setting-factory-overlay">
+        <div id="setting-factory-overlay-placement">
+          <input type="radio" name="factory-overlay-placement" value="below">
+          <input type="radio" name="factory-overlay-placement" value="header">
         </div>
         <span id="setting-max-sessions-counted"></span>
         <input type="number" id="setting-max-sessions" disabled>
@@ -250,13 +250,13 @@ describe('SessionLimitSetting: started sessions per session', () => {
 });
 
 describe('SettingsModal', () => {
-  function host(): SettingsModalHost & { setNotificationPreferences: ReturnType<typeof vi.fn>; jobOverlay: { isEnabled: () => boolean; getPlacement: () => 'below'; setPreferences: ReturnType<typeof vi.fn> } } {
+  function host(): SettingsModalHost & { setNotificationPreferences: ReturnType<typeof vi.fn>; factoryOverlay: { isEnabled: () => boolean; getPlacement: () => 'below'; setPreferences: ReturnType<typeof vi.fn> } } {
     return {
       notificationPreferences: () => ({ browserEnabled: true, visualEnabled: true, notifyOnInput: true, notifyOnCompleted: true }),
       setNotificationPreferences: vi.fn(),
       notificationPermission: async () => 'granted',
-      jobOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
-      syncJobOverlay: vi.fn(),
+      factoryOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
+      syncFactoryOverlay: vi.fn(),
       renderSessionList: vi.fn(),
       buildBehind: () => false,
     };
@@ -287,7 +287,7 @@ describe('SettingsModal', () => {
     await flush();
     await flush();
     expect(h.setNotificationPreferences).not.toHaveBeenCalled();
-    expect(h.jobOverlay.setPreferences).not.toHaveBeenCalled();
+    expect(h.factoryOverlay.setPreferences).not.toHaveBeenCalled();
     expect((document.getElementById('settings-save') as HTMLButtonElement).disabled).toBe(false);
     // The server took 45: Save without touching the field sends nothing more.
     await settings.show();
@@ -316,7 +316,7 @@ describe('SettingsModal', () => {
     await flush();
     await flush();
     expect(h.setNotificationPreferences).toHaveBeenCalledTimes(1);
-    expect(h.jobOverlay.setPreferences).toHaveBeenCalledWith(true, 'below');
+    expect(h.factoryOverlay.setPreferences).toHaveBeenCalledWith(true, 'below');
     expect(modal().classList.contains('hidden')).toBe(true);
   });
 });

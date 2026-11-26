@@ -5026,13 +5026,13 @@ body {
 .jb-stage.needs_decision { color: var(--warning); }
 
 /* ============================================================
-   Live job overlay (src/client/job-overlay.ts)
+   Factory overlay (src/client/factory-overlay.ts)
    ============================================================ */
 
 /* Floating placement: clear of the terminal header, and clear of
    .terminal-scrollbar — a 10px draggable strip pinned to right: 0 that an
    overlay flush to the edge would swallow the drags of. */
-.job-overlay {
+.factory-overlay {
   z-index: 40;
   width: 320px;
   display: flex;
@@ -5040,7 +5040,7 @@ body {
   font-family: var(--font-ui);
 }
 
-.job-overlay.jo-floating {
+.factory-overlay.jo-floating {
   position: absolute;
   top: 62px;
   right: 14px;
@@ -5048,14 +5048,14 @@ body {
 }
 
 /* Docked placement: a flex item in #terminal-header, list hanging beneath. */
-.job-overlay.jo-docked {
+.factory-overlay.jo-docked {
   position: relative;
   width: auto;
   margin-left: auto;
   margin-right: 12px;
 }
 
-.job-overlay.hidden { display: none; }
+.factory-overlay.hidden { display: none; }
 
 .jo-bar {
   display: flex;
@@ -5074,13 +5074,13 @@ body {
 .jo-bar:hover { border-color: var(--accent); }
 .jo-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.job-overlay.open .jo-bar {
+.factory-overlay.open .jo-bar {
   border-radius: 10px 10px 0 0;
   border-bottom-color: transparent;
 }
 
 /* Docked, the list is a detached dropdown, so the pill keeps all four corners. */
-.job-overlay.jo-docked.open .jo-bar {
+.factory-overlay.jo-docked.open .jo-bar {
   border-radius: 8px;
   border-bottom-color: var(--border);
 }
@@ -5091,7 +5091,7 @@ body {
   transition: transform var(--transition-fast);
 }
 
-.job-overlay.open .jo-chevron { transform: rotate(90deg); }
+.factory-overlay.open .jo-chevron { transform: rotate(90deg); }
 
 .jo-bar-title {
   font-size: 12px;
@@ -5102,7 +5102,7 @@ body {
   margin-right: auto;
 }
 
-#job-overlay-counts { display: flex; gap: 6px; }
+#factory-overlay-counts { display: flex; gap: 6px; }
 
 .jo-count {
   display: inline-flex;
@@ -5145,9 +5145,9 @@ body {
   overflow-y: auto;
 }
 
-.job-overlay.open .jo-list { display: flex; }
+.factory-overlay.open .jo-list { display: flex; }
 
-.job-overlay.jo-docked .jo-list {
+.factory-overlay.jo-docked .jo-list {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -5175,8 +5175,6 @@ body {
 
 .jo-card:first-child { border-top: none; }
 .jo-card:hover { background: rgba(122, 162, 247, 0.07); }
-.jo-card.fading { opacity: 0.55; }
-
 /* Status rail down the left edge. */
 .jo-card::before {
   content: '';
@@ -5187,12 +5185,6 @@ body {
   width: 3px;
   background: var(--border);
 }
-
-.jo-card.running::before { background: var(--accent); }
-.jo-card.parked::before { background: var(--warning); }
-.jo-card.failed::before { background: var(--danger); }
-.jo-card.done::before { background: var(--success); }
-.jo-card.queued::before, .jo-card.cancelled::before { background: var(--text-muted); }
 
 .jo-card-top {
   display: flex;
@@ -5210,14 +5202,6 @@ body {
   white-space: nowrap;
 }
 
-.jo-age {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-}
-
 .jo-title {
   font-size: 13px;
   line-height: 1.35;
@@ -5229,63 +5213,255 @@ body {
   margin-bottom: 6px;
 }
 
-/* One segment per pipeline stage, in STAGE_ORDER — positional, so a stage the
-   job has not reached still occupies its slot. */
-.jo-strip {
-  display: flex;
-  gap: 2px;
-  margin-bottom: 5px;
-}
 
-.jo-seg {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--bg-tertiary);
-}
+/* The factory card: rail by where the unit is, amber when it waits for you. */
+.fo-card.running::before { background: var(--accent); }
+.fo-card.you::before { background: var(--warning); }
+.fo-card.review::before { background: #bb9af7; }
+.fo-card.merging::before { background: #7dcfff; }
+.fo-card.intake::before, .fo-card.ready::before { background: var(--text-muted); }
+.fo-card.done::before { background: var(--success); }
+.fo-card.done { opacity: 0.7; }
+.fo-card.stalled .fo-meta { color: var(--warning); }
 
-.jo-seg.passed { background: var(--success); opacity: 0.75; }
-.jo-seg.skipped { background: var(--text-muted); }
-.jo-seg.failed { background: var(--danger); }
-.jo-seg.needs_decision { background: var(--warning); }
-.jo-seg.running { background: var(--accent); animation: jo-pulse 1.4s ease-in-out infinite; }
+.fo-counts { display: flex; gap: 5px; flex-wrap: wrap; }
+.jo-count.review { color: #bb9af7; background: rgba(187, 154, 247, 0.13); }
+.jo-count.merging { color: #7dcfff; background: rgba(125, 207, 255, 0.12); }
+.jo-count.idle { color: var(--text-muted); background: var(--bg-tertiary); }
 
-.jo-foot {
+.fo-cards { display: flex; flex-direction: column; }
+.fo-id { font-family: var(--font-mono); font-size: 10.5px; color: #bb9af7; white-space: nowrap; margin-left: auto; }
+.fo-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
   color: var(--text-muted);
 }
 
-.jo-stage { font-family: var(--font-mono); color: var(--text-secondary); }
+/* A track's features: done, now, to do. */
+.fo-prog { display: inline-flex; gap: 2px; width: 60px; flex-shrink: 0; }
+.fo-prog.wide { width: 100%; margin: 2px 0 4px; }
+.fo-prog i { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-tertiary); }
+.fo-prog i.d { background: var(--success); }
+.fo-prog i.n { background: var(--accent); }
 
-.jo-chip {
-  font-size: 10px;
+.fo-empty { padding: 10px 12px; font-size: 12px; color: var(--text-muted); }
+.fo-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 11px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.fo-fuel { margin-right: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.fo-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: 600 12px var(--font-ui);
+  cursor: pointer;
+}
+.fo-link:hover { text-decoration: underline; }
+
+/* Something newly waits for you: the pill flashes amber twice. */
+.jo-bar.flash { animation: fo-flash 1s ease 2; }
+@keyframes fo-flash {
+  50% { border-color: var(--warning); box-shadow: 0 0 0 3px rgba(224, 175, 104, 0.25); }
+}
+
+.factory-toast {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100% - 380px));
+  padding: 8px 10px 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid #7a6034;
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+}
+.factory-toast.hidden { display: none; }
+.factory-toast b { color: var(--warning); }
+.fo-toast-btn { padding: 5px 12px; font-size: 12px; flex-shrink: 0; }
+.fo-toast-x { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; line-height: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .jo-bar.flash, .jo-pulse { animation: none; }
+}
+
+/* ============================================================
+   Factory board (src/client/factory-board.ts)
+   ============================================================ */
+
+.factory-board-view { position: relative; }
+.fb-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.fb-body { padding-bottom: 20px; }
+.fb-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+.fb-mono { font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.fb-empty { padding: 24px; color: var(--text-muted); }
+.fb-error { color: var(--danger); }
+
+.fb-chip {
+  display: inline-block;
+  font-size: 10.5px;
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
+.fb-chip.v { background: #2b2550; color: #bb9af7; }
+.fb-chip.y { background: #3a3020; color: var(--warning); }
+.fb-chip.g { background: #253322; color: var(--success); }
+.fb-chip.b { background: #1f2f4d; color: var(--accent); }
+.fb-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 
-.jo-chip.gate, .jo-chip.question { color: var(--warning); background: rgba(224, 175, 104, 0.14); }
-.jo-chip.failed { color: var(--danger); background: rgba(247, 118, 142, 0.14); }
-.jo-chip.done { color: var(--success); background: rgba(158, 206, 106, 0.14); }
-.jo-chip.cancelled { color: var(--text-muted); background: var(--bg-tertiary); }
+.fb-notice {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  background: rgba(158, 206, 106, 0.1);
+  color: var(--success);
+}
+.fb-notice.error { background: rgba(247, 118, 142, 0.1); color: var(--danger); }
+.fb-body > .fb-notice { margin: 8px 22px; }
 
-.jo-cost { margin-left: auto; font-family: var(--font-mono); }
-
-.jo-detail {
-  margin-top: 5px;
-  font-size: 11px;
-  line-height: 1.4;
+.fb-scroll { overflow-x: auto; }
+.fb-columns {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 6px 22px 20px;
+  min-width: 960px;
+}
+.fb-col h3 {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 700;
   color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  padding-left: 7px;
-  border-left: 2px solid var(--border);
+}
+.fb-col h3 em { font-style: normal; font-weight: 500; color: var(--text-muted); }
+
+.fb-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  padding: 8px 9px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.fb-card:hover { border-color: var(--border); }
+.fb-card.open { border-color: var(--accent); }
+.fb-card.you { border-color: #7a6034; background: #2a2720; }
+.fb-card.stalled .fb-sub { color: var(--warning); }
+.fb-card-top { display: flex; gap: 6px; align-items: baseline; }
+.fb-card-top .fo-id { margin-left: 0; }
+.fb-proj { margin-left: auto; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-title { display: block; margin: 3px 0 5px; font-weight: 600; line-height: 1.3; }
+.fb-sub { display: block; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.fb-tokens { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+
+.fb-report {
+  margin: 8px 22px 14px;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+.fb-report-head { display: flex; align-items: center; }
+.fb-report-head h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.fb-report-head .fb-x { margin-left: auto; }
+.fb-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.fb-report h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
+.fb-report ul { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.fb-report p { margin: 0; }
+.fb-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+
+.fb-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  width: min(440px, 100%);
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  box-shadow: -16px 0 36px rgba(0, 0, 0, 0.45);
+}
+.fb-drawer.hidden { display: none; }
+.fb-drawer h3 { margin: 4px 0 10px; font-size: 16px; line-height: 1.25; }
+.fb-drawer h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-secondary); }
+.fb-drawer ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.fb-drawer p { margin: 0 0 8px; font-size: 13px; }
+.fb-x { float: right; background: none; border: none; color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.fb-verdict { margin: 8px 0; padding: 8px 10px; border: 1px solid #7a6034; border-radius: 8px; background: #2a2720; font-size: 13px; }
+.fb-verdict b { color: var(--warning); }
+.fb-pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--terminal-bg, #16161e);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font: 11.5px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fb-diff { max-height: 60vh; white-space: pre; }
+.fb-md h4 { margin: 10px 0 4px; }
+.fb-md p { margin: 0 0 6px; }
+.fb-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12.5px; }
+.fb-kv dt { color: var(--text-muted); }
+.fb-kv dd { margin: 0; text-align: right; }
+.fb-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.fb-tabs { margin: 4px 0; }
+.fb-features { list-style: none; padding-left: 0 !important; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.9; }
+.fb-features li.done { color: var(--text-secondary); }
+.fb-mark { display: inline-block; width: 14px; }
+.fb-question { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.fb-question legend { padding: 0 4px; font-size: 13px; font-weight: 600; }
+.fb-question label { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; cursor: pointer; }
+.fb-question input[type="radio"] { accent-color: var(--accent); }
+.fb-label { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; font-size: 12.5px; color: var(--text-secondary); }
+.fb-input, .fb-textarea {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: 13px var(--font-ui);
+}
+.fb-textarea { font-family: var(--font-mono); resize: vertical; margin-top: 4px; }
+.fb-intake li { margin-bottom: 4px; }
+
+@media (max-width: 640px) {
+  .factory-toast { max-width: calc(100% - 24px); top: auto; bottom: 14px; }
+  .fb-columns { padding: 6px 12px 16px; }
+  .fb-report { margin: 8px 12px 12px; }
 }
 
 /* Settings: the placement radios only mean something while the panel is on. */
@@ -5315,16 +5491,9 @@ body {
 /* On a phone the panel spans the width; the header has no room to dock into,
    so the floating placement is the only one that applies. */
 @media (max-width: 640px) {
-  .job-overlay.jo-floating { left: 8px; right: 8px; width: auto; max-width: none; }
-  .job-overlay.jo-docked { margin-right: 6px; }
-  .job-overlay.jo-docked .jo-list { width: min(320px, calc(100vw - 24px)); }
-}
-
-/* A job the overlay just opened: a brief ring so the eye lands on it after the
-   scroll, rather than on whichever card happens to be under the cursor. */
-.jb-job.jb-focused {
-  box-shadow: 0 0 0 2px var(--accent-glow);
-  transition: box-shadow var(--transition-slow);
+  .factory-overlay.jo-floating { left: 8px; right: 8px; width: auto; max-width: none; }
+  .factory-overlay.jo-docked { margin-right: 6px; }
+  .factory-overlay.jo-docked .jo-list { width: min(320px, calc(100vw - 24px)); }
 }
 
 /* Server restart controls in the Settings modal (server-restart.ts). */

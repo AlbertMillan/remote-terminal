@@ -154,6 +154,167 @@ export interface JobsSummary {
   jobs: JobSummary[];
 }
 
+// --- Code factory (project/code-factory.md; server factory/board.ts builds these) ---------
+
+/** The board's columns, left to right. `done` is today's (server-local midnight on). */
+export type FactoryColumn = 'intake' | 'ready' | 'running' | 'review' | 'merging' | 'done';
+
+/** A unit's state, from its items: parked if any waits for the user, then running, then done. */
+export type FactoryUnitStatus = 'open' | 'in_progress' | 'parked' | 'done';
+
+export type FactoryMergeStatus = 'queued' | 'holding' | 'running' | 'merged' | 'parked';
+
+/** One feature of a track unit, in plan order. */
+export interface FactoryFeatureProgress {
+  id: string;
+  title: string;
+  state: 'done' | 'now' | 'todo';
+}
+
+/**
+ * One unit of factory work: a loose item, or a whole track worked by one agent. A card in
+ * the Factory overlay and on the board.
+ */
+export interface FactoryUnitSummary {
+  /** Stable per project and unit, for the DOM; never parsed. */
+  key: string;
+  projectCwd: string;
+  projectName: string;
+  /** The feature id of a loose item, `track:<name>` for a track. */
+  unitId: string;
+  isTrack: boolean;
+  trackName: string;
+  title: string;
+  /** Its items' feature ids, in plan order. Actions address the first. */
+  featureIds: string[];
+  column: FactoryColumn;
+  status: FactoryUnitStatus;
+  /** The step running, or parked at; null before the first run. */
+  step: string | null;
+  needsYou: boolean;
+  /** In the review column: the reviewer agent is at it, or it waits for you. */
+  reviewer: 'agent' | 'you' | null;
+  /** Parked by the reviewer's escalation rules (review-step.ts). */
+  escalated: boolean;
+  /** Filed by an agent (`discovered-from`) and waiting for accept / backlog / dismiss. */
+  triage: boolean;
+  /** One line on why it stops or waits: its park reason, merge detail or blocker. */
+  reason: string | null;
+  /** A track's features; empty for a loose item. */
+  features: FactoryFeatureProgress[];
+  /** Feature ids whose open `blocks` edge holds it back. */
+  waitsFor: string[];
+  mergeId: string | null;
+  mergeStatus: FactoryMergeStatus | null;
+  /** Ledger tokens its runs spent (input, output and cache writes, as the runaway guard counts). */
+  tokens: number;
+  modelTier: string | null;
+  /** Why it looks stuck (no heartbeat; ready and unclaimed while a seat is free), or null. */
+  stalled: string | null;
+  heartbeatAt: string | null;
+  updatedAt: string;
+}
+
+/** One merge-queue entry, a session's Land included. */
+export interface FactoryMergeSummary {
+  id: string;
+  projectCwd: string;
+  projectName: string;
+  kind: 'item' | 'track' | 'session-land';
+  title: string;
+  branch: string;
+  featureIds: string[];
+  status: FactoryMergeStatus;
+  /** The resolver's progress, why it holds, or why it parked. */
+  detail: string | null;
+  /** For a parked conflict: the files it could not settle. */
+  conflictPaths: string[];
+  mergeSha: string | null;
+  updatedAt: string;
+}
+
+export interface FactoryCounts {
+  /** Intake, ready and running units that do not wait for you. */
+  running: number;
+  /** In review with the reviewer agent. */
+  reviewing: number;
+  needsYou: number;
+  merging: number;
+  done: number;
+}
+
+export interface FactoryDispatchState {
+  /** The dispatcher runs in this server. */
+  started: boolean;
+  /** Why nothing new starts at all, or null. */
+  paused: string | null;
+  /** Projects held back by plan usage, by cwd → why. */
+  capped: Record<string, string>;
+  seats: number;
+  running: number;
+}
+
+/**
+ * The factory feed behind the overlay (`factory.summary`), pushed on every factory write
+ * and once per client after auth. Built from the store, never by parsing PROJECT.md per
+ * event (titles come from a cache).
+ */
+export interface FactorySummary {
+  units: FactoryUnitSummary[];
+  /** Unfinished and parked entries, plus those merged today. */
+  merges: FactoryMergeSummary[];
+  counts: FactoryCounts;
+  dispatch: FactoryDispatchState;
+  /** Ledger tokens of factory runs (and merge resolvers) since `since`. */
+  tokensToday: number;
+  /** Start of "today" on the server, ISO. */
+  since: string;
+}
+
+/** A shaping question (JSON from the shaping pass): options and the default it would take. */
+export interface FactoryQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  default: string | null;
+}
+
+/** What the board's drawer shows beyond the card (GET /api/factory/board only). */
+export interface FactoryUnitDetail {
+  /** The whole park reason. */
+  parkReason: string | null;
+  /** The reviewer's last verdict, as formatted for the fix step. */
+  verdict: string | null;
+  questions: FactoryQuestion[];
+  /** A summary page exists (GET /api/factory/summary). */
+  hasSummary: boolean;
+  worktreePath: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  lastCommit: string | null;
+}
+
+export interface FactoryBoardUnit extends FactoryUnitSummary {
+  detail: FactoryUnitDetail;
+}
+
+/** GET /api/factory/board: the summary with every card's drawer detail. */
+export interface FactoryBoard extends Omit<FactorySummary, 'units'> {
+  units: FactoryBoardUnit[];
+}
+
+/** GET /api/factory/report?since=: what happened while you were away. */
+export interface FactoryReport {
+  since: string;
+  /** Merge entries merged since then, newest first. */
+  landed: FactoryMergeSummary[];
+  /** Units that look stuck now. */
+  stalls: FactoryUnitSummary[];
+  /** Tokens per unit (and merge resolver) since then, most first. */
+  tokens: { projectName: string; title: string; tokens: number }[];
+  totalTokens: number;
+}
+
 // --- Payloads -----------------------------------------------------------------
 
 export interface AuthSuccessPayload {
@@ -397,6 +558,7 @@ export interface ServerPayloads {
   'notification.preferences.updated': NotificationPreferencesPayload;
   'notification': AnyNotificationPayload;
   'jobs.summary': JobsSummary;
+  'factory.summary': FactorySummary;
   'projects.changed': { projectCwd: string };
   'error': ErrorPayload;
   'pong': undefined;

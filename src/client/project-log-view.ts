@@ -18,7 +18,9 @@ export interface ProjectLogViewHost {
   rollup: RollupView;
   /** Detach the live terminal session (if any) so the project view can take over the main area. */
   detachCurrentSession(): void;
-  syncJobOverlay(): void;
+  syncFactoryOverlay(): void;
+  /** The factory board gives the main area back when a project opens in it. */
+  hideFactoryBoard(): void;
   showNewSessionModal(prefillCwd?: string): void;
   /** Resume or fork a logged conversation in a new terminal. */
   openHistorySession(claudeSessionId: string, cwd: string, mode: 'resume' | 'fork', account?: string): void;
@@ -132,7 +134,7 @@ export class ProjectLogView {
     document.getElementById('refresh-projects-btn')?.classList.toggle('hidden', !onProjects);
     document.getElementById('overview-btn')?.classList.toggle('hidden', !onProjects);
     if (!onProjects) this.host.rollup.hide();
-    this.host.syncJobOverlay();
+    this.host.syncFactoryOverlay();
 
     if (onProjects) void this.loadProjectBoard();
   }
@@ -208,8 +210,9 @@ export class ProjectLogView {
     document.getElementById('terminal-header')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
     this.host.rollup.hide();
+    this.host.hideFactoryBoard();
     document.getElementById('project-log-view')?.classList.remove('hidden');
-    this.host.syncJobOverlay();
+    this.host.syncFactoryOverlay();
 
     const titleEl = document.getElementById('project-log-title');
     if (titleEl) titleEl.textContent = wsProject.name;

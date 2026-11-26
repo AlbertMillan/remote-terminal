@@ -73,6 +73,71 @@ data class JobSummary(
     val updatedAt: String,
 )
 
+/** One feature of a factory track, in plan order; `state` is done, now or todo. */
+@Serializable
+data class FactoryFeatureProgress(val id: String, val title: String, val state: String)
+
+/** One unit of factory work (shared/protocol.ts FactoryUnitSummary): a loose item or a whole track. */
+@Serializable
+data class FactoryUnitSummary(
+    val key: String,
+    val projectCwd: String,
+    val projectName: String,
+    val unitId: String,
+    val isTrack: Boolean,
+    val trackName: String,
+    val title: String,
+    val featureIds: List<String>,
+    /** intake, ready, running, review, merging or done. */
+    val column: String,
+    /** open, in_progress, parked or done. */
+    val status: String,
+    val step: String?,
+    val needsYou: Boolean,
+    val reviewer: String?,
+    val escalated: Boolean,
+    val triage: Boolean,
+    val reason: String?,
+    val features: List<FactoryFeatureProgress> = emptyList(),
+    val waitsFor: List<String> = emptyList(),
+    val mergeId: String?,
+    val mergeStatus: String?,
+    val tokens: Long,
+    val modelTier: String?,
+    val stalled: String?,
+    val heartbeatAt: String?,
+    val updatedAt: String,
+)
+
+/** One merge-queue entry, a session's Land included. */
+@Serializable
+data class FactoryMergeSummary(
+    val id: String,
+    val projectCwd: String,
+    val projectName: String,
+    val kind: String,
+    val title: String,
+    val branch: String,
+    val featureIds: List<String>,
+    val status: String,
+    val detail: String?,
+    val conflictPaths: List<String> = emptyList(),
+    val mergeSha: String?,
+    val updatedAt: String,
+)
+
+@Serializable
+data class FactoryCounts(val running: Int, val reviewing: Int, val needsYou: Int, val merging: Int, val done: Int)
+
+@Serializable
+data class FactoryDispatchState(
+    val started: Boolean,
+    val paused: String?,
+    val capped: Map<String, String> = emptyMap(),
+    val seats: Int,
+    val running: Int,
+)
+
 // ---- Client payloads ----
 
 @Serializable
@@ -238,6 +303,17 @@ data class NotificationPayload(
 @Serializable
 data class JobsSummaryPayload(val jobs: List<JobSummary>)
 
+/** `factory.summary`: the factory feed, pushed on every factory write and once after auth. */
+@Serializable
+data class FactorySummaryPayload(
+    val units: List<FactoryUnitSummary>,
+    val merges: List<FactoryMergeSummary> = emptyList(),
+    val counts: FactoryCounts,
+    val dispatch: FactoryDispatchState,
+    val tokensToday: Long,
+    val since: String,
+)
+
 @Serializable
 data class ProjectsChangedPayload(val projectCwd: String)
 
@@ -314,6 +390,7 @@ object ServerType {
     const val NOTIFICATION_PREFERENCES_UPDATED = "notification.preferences.updated"
     const val NOTIFICATION = "notification"
     const val JOBS_SUMMARY = "jobs.summary"
+    const val FACTORY_SUMMARY = "factory.summary"
     const val PROJECTS_CHANGED = "projects.changed"
     const val ERROR = "error"
     const val PONG = "pong"
@@ -405,6 +482,7 @@ object Protocol {
         ServerType.NOTIFICATION_PREFERENCES_UPDATED to s<NotificationPreferencesPayload>(),
         ServerType.NOTIFICATION to s<NotificationPayload>(),
         ServerType.JOBS_SUMMARY to s<JobsSummaryPayload>(),
+        ServerType.FACTORY_SUMMARY to s<FactorySummaryPayload>(),
         ServerType.PROJECTS_CHANGED to s<ProjectsChangedPayload>(),
         ServerType.ERROR to s<MessagePayload>(),
         ServerType.PONG to null,

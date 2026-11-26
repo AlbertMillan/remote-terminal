@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clauderemote.app.ui.history.HistoryScreen
+import com.clauderemote.app.ui.projects.FactoryUnitScreen
 import com.clauderemote.app.ui.projects.JobScreen
 import com.clauderemote.app.ui.projects.ProjectScreen
 import com.clauderemote.app.ui.projects.ProjectsScreen
@@ -36,6 +37,7 @@ sealed interface Screen {
     data object Projects : Screen
     data class Project(val cwd: String) : Screen
     data class Job(val jobId: String) : Screen
+    data class FactoryUnit(val key: String) : Screen
     data object History : Screen
 }
 
@@ -96,7 +98,13 @@ class MainActivity : ComponentActivity() {
                                 },
                             )
                             when (val top = stack.lastOrNull()) {
-                                Screen.Projects -> ProjectsScreen(app, ::pop, openProject = { push(Screen.Project(it)) }, openJob = { push(Screen.Job(it)) })
+                                Screen.Projects -> ProjectsScreen(
+                                    app, ::pop,
+                                    openProject = { push(Screen.Project(it)) },
+                                    openJob = { push(Screen.Job(it)) },
+                                    openUnit = { push(Screen.FactoryUnit(it)) },
+                                )
+                                is Screen.FactoryUnit -> FactoryUnitScreen(app, top.key, ::pop)
                                 is Screen.Project -> ProjectScreen(app, top.cwd, ::pop, openJob = { push(Screen.Job(it)) })
                                 is Screen.Job -> JobScreen(app, top.jobId, ::pop, openProject = { push(Screen.Project(it)) })
                                 Screen.History -> HistoryScreen(app, ::pop) { stack = emptyList() }
