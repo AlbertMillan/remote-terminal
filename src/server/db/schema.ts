@@ -475,7 +475,7 @@ function runMigrations(database: Database.Database): void {
       // per entry, processed one at a time per project. merge_sha is the
       // merge commit, kept so Delete track can revert exactly it; a parked
       // entry keeps both sides of its conflict in conflict_json.
-      name: '024_factory_merges',
+      name: '025_factory_merges',
       sql: `
         CREATE TABLE IF NOT EXISTS factory_merges (
           id TEXT PRIMARY KEY,

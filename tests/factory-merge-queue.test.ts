@@ -190,6 +190,76 @@ describe('one slot per project', () => {
   });
 });
 
+describe('enqueueMerge is idempotent per (project, branch)', () => {
+  const rows = () => getDatabase().prepare('SELECT id, status FROM factory_merges').all() as { id: string; status: string }[];
+
+  it('a second enqueue while queued or merging returns the same ticket, and merges once', async () => {
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    const first = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    const again = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    expect(again.id).toBe(first.id);
+    expect(again.done).toBe(first.done);
+    expect(rows()).toHaveLength(1);
+    expect((await first.done).status).toBe('merged');
+    // Merged: still the same entry, never a second merge.
+    const later = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    expect(later.id).toBe(first.id);
+    expect((await later.done).status).toBe('merged');
+    expect(rows()).toHaveLength(1);
+    expect(mainLog().filter((s) => s.startsWith('Merge job:'))).toEqual(['Merge job: First step']);
+  });
+
+  it('a parked entry answers with its outcome, even after a restart, and runs again only through requeueMerge', async () => {
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    verify = async () => ({ ok: false, detail: 'red' });
+    const first = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    expect((await first.done).status).toBe('parked');
+
+    queue.resetMergeQueue(); // the server restarts: nothing in memory
+    queue.configureMergeQueue({ verify: (cwd) => verify(cwd), project: (cwd) => ({ cwd }), holdPollMs: 50, busyRetryMs: 50 });
+    const again = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    expect(again.id).toBe(first.id);
+    const outcome = await again.done;
+    expect(outcome.status).toBe('parked');
+    expect(outcome.detail).toMatch(/Verification failed.*red/);
+    expect(rows()).toHaveLength(1);
+
+    verify = async () => ({ ok: true, detail: 'green' });
+    const retried = queue.requeueMerge(first.id)!;
+    expect(retried.id).toBe(first.id);
+    expect((await retried.done).status).toBe('merged');
+    expect(rows()).toEqual([{ id: first.id, status: 'merged' }]);
+  });
+
+  it('an entry a restart left queued runs again under its own row', async () => {
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    const { insertMerge } = await import('../src/server/factory/merge-queue-store.js');
+    const orphan = insertMerge(entry(a, ['f-aaaaaa']));
+    const ticket = queue.enqueueMerge(entry(a, ['f-aaaaaa']));
+    expect(ticket.id).toBe(orphan.id);
+    expect((await ticket.done).status).toBe('merged');
+    expect(rows()).toEqual([{ id: orphan.id, status: 'merged' }]);
+  });
+
+  it('never dedupes a Land: a refused Land can be landed again', async () => {
+    await ensureTrackBranch({ cwd: repo }, 'Alpha');
+    let refuse = true;
+    queue.configureMergeQueue({
+      land: async (project, name) => {
+        if (refuse) throw new (await import('../src/server/projects/track-branches.js')).TrackBranchError('not yet', 409);
+        return {
+          ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+          build: { ran: false, ok: true, detail: 'no build script' },
+        };
+      },
+    });
+    await expect(queue.queueLand({ cwd: repo }, 'Alpha').result).rejects.toMatchObject({ status: 409, message: 'not yet' });
+    refuse = false;
+    expect((await queue.queueLand({ cwd: repo }, 'Alpha').result).mergeSha).toBeTruthy();
+    expect(rows()).toHaveLength(2);
+  });
+});
+
 describe('a merge', () => {
   it('carries the Job-Id/Feature trailers, records merge_sha, ticks PROJECT.md without git add, and marks items done', async () => {
     for (const id of ['f-aaaaaa', 'f-bbbbbb']) {

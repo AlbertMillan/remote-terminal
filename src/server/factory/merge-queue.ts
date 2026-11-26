@@ -31,7 +31,15 @@ import { readQaDoc } from '../jobs/qa-doc.js';
 import { readProjectDoc } from '../projects/project-store.js';
 import { runCommand } from '../jobs/stages/qa.js';
 import { getItem, updateItem } from './store.js';
-import { insertMerge, listMerges, updateMerge, type MergeRecord, type ParkedConflict } from './merge-queue-store.js';
+import {
+  getMerge,
+  insertMerge,
+  latestMergeFor,
+  listMerges,
+  updateMerge,
+  type MergeRecord,
+  type ParkedConflict,
+} from './merge-queue-store.js';
 
 const logger = createLogger('merge-queue');
 
@@ -171,6 +179,7 @@ export function resetMergeQueue(): void {
   deps = { ...defaultDeps };
   for (const lane of lanes.values()) lane.wake?.();
   lanes.clear();
+  tickets.clear();
 }
 
 // --- Lanes: one slot per project -------------------------------------------
@@ -206,15 +215,80 @@ function laneOf(projectCwd: string): Lane {
  * set `done` when it merges and `parked` when it parks.
  */
 export function enqueueMerge(entry: MergeEntry): MergeTicket {
-  const record = insertMerge({ ...entry, featureIds: [...entry.featureIds] });
-  const lane = laneOf(entry.projectCwd);
+  // Idempotent per (project, branch): the engine may hand the same unit over
+  // twice (a crash between its enqueue and recording the handoff). An entry
+  // already queued, running, merged or parked answers with its own ticket;
+  // a parked one runs again only through requeueMerge. Not for a Land: a
+  // refused Land is parked and the user lands again once it is fixed (a
+  // second Land while one is under way is refused by its callers).
+  const existing = entry.kind === 'session-land' ? null : latestMergeFor(entry.projectCwd, entry.branch);
+  if (existing) {
+    const live = tickets.get(existing.id);
+    if (live) return { ...live, position: positionOf(existing.id) };
+    if (existing.status === 'merged' || existing.status === 'parked') return settledTicket(existing);
+    // Queued or running in a server that has since restarted: nothing runs
+    // it any more, so it goes back in the queue under its own row.
+    updateMerge(existing.id, { status: 'queued', detail: null });
+    return schedule(existing);
+  }
+  return schedule(insertMerge({ ...entry, featureIds: [...entry.featureIds] }));
+}
+
+/**
+ * Run a parked entry again (after the user settled what parked it), under the
+ * same row. Null when there is no such entry or it is not parked.
+ */
+export function requeueMerge(id: string): MergeTicket | null {
+  const record = getMerge(id);
+  if (!record || record.status !== 'parked') return null;
+  tickets.delete(id);
+  updateMerge(id, { status: 'queued', detail: null, conflict: null });
+  return schedule({ ...record, status: 'queued', detail: null, conflict: null });
+}
+
+/** Tickets of entries this server has queued, by row id (enqueueMerge's idempotency). */
+const tickets = new Map<string, MergeTicket>();
+
+function schedule(record: MergeRecord): MergeTicket {
+  const lane = laneOf(record.projectCwd);
   const position = lane.pending.length + (lane.current ? 1 : 0);
   let resolve!: (outcome: MergeOutcome) => void;
   const done = new Promise<MergeOutcome>((r) => (resolve = r));
   lane.pending.push({ record, resolve });
-  logger.info({ id: record.id, cwd: entry.projectCwd, kind: entry.kind, branch: entry.branch, position }, 'merge queued');
+  const ticket = { id: record.id, position, done };
+  tickets.set(record.id, ticket);
+  logger.info({ id: record.id, cwd: record.projectCwd, kind: record.kind, branch: record.branch, position }, 'merge queued');
   void drain(lane);
-  return { id: record.id, position, done };
+  return ticket;
+}
+
+/** Entries ahead of `id` in its lane now; 0 once it runs or has finished. */
+function positionOf(id: string): number {
+  for (const lane of lanes.values()) {
+    if (lane.current?.record.id === id) return 0;
+    const at = lane.pending.findIndex((p) => p.record.id === id);
+    if (at !== -1) return at + (lane.current ? 1 : 0);
+  }
+  return 0;
+}
+
+/** A finished entry's ticket, rebuilt from its row. */
+function settledTicket(r: MergeRecord): MergeTicket {
+  const merged = r.status === 'merged';
+  const detail = r.detail ?? (merged ? 'Merged' : 'Parked');
+  return {
+    id: r.id,
+    position: 0,
+    done: Promise.resolve({
+      id: r.id,
+      status: merged ? 'merged' : 'parked',
+      mergeSha: r.mergeSha,
+      detail,
+      conflict: r.conflict,
+      error: merged ? null : new TrackBranchError(detail, 409),
+      land: null,
+    }),
+  };
 }
 
 /**

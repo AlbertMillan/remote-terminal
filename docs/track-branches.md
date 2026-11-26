@@ -427,7 +427,7 @@ the queue while holding the lock, so its retry cannot deadlock.
 ## The merge queue
 
 `src/server/factory/merge-queue.ts` (spec: `project/code-factory.md`, "Merges go through
-one queue per project"; rows in `factory_merges`, migration 024). One slot per project:
+one queue per project"; rows in `factory_merges`, migration 025). One slot per project:
 entries run one at a time, so two merges never interleave their checks and git calls.
 The factory engine hands its work over through `enqueueMerge(entry)`; **both Lands, the
 board's button and `POST /api/agent/land`, go through it too** (`queueLand`), so a merge

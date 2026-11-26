@@ -5,7 +5,7 @@ import type { MergeSide } from '../projects/track-update.js';
 import type { MergeEntry } from './merge-queue.js';
 
 /**
- * The merge queue's rows (`factory_merges`, migration 024). The queue itself
+ * The merge queue's rows (`factory_merges`, migration 025). The queue itself
  * runs in memory (merge-queue.ts); these record what each entry did, its
  * merge commit, and, for a parked one, both sides of what stopped it.
  */
@@ -132,6 +132,17 @@ export function updateMerge(id: string, patch: MergePatch, now = Date.now()): vo
   sets.push('updated_at = ?');
   values.push(new Date(now).toISOString());
   getDatabase().prepare(`UPDATE factory_merges SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+}
+
+/** The newest factory (not Land) entry for a branch in a project, or null. */
+export function latestMergeFor(projectCwd: string, branch: string): MergeRecord | null {
+  const row = getDatabase()
+    .prepare(
+      `SELECT * FROM factory_merges WHERE project_key = ? AND branch = ? AND kind != 'session-land'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    )
+    .get(pathKey(projectCwd), branch) as MergeRow | undefined;
+  return row ? toRecord(row) : null;
 }
 
 /** A project's entries, oldest first; optionally only those in `statuses`. */
