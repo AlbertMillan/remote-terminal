@@ -147,7 +147,6 @@ attribution); retire the old pipeline code and `decision-format.ts`.
 
 ## Open questions
 
-- Whether in-flight jobs migrate to items or the old pipeline drains first.
 - How intake-inferred dependencies are shown and edited (drawer only, or also
   in `PROJECT.md`).
 - Default thresholds: seats, review budget, diff-size escalation, daily cap.
