@@ -1,8 +1,9 @@
 # Token & cost accounting — the usage ledger
 
-What every model call in a workspace project cost: pipeline stages (killed runs included),
+What every model call in a workspace project cost: factory steps (killed runs included),
 Take over, interactive sessions, subagents, and the background session-log, migration and
-QA-generation runs. Shown per stage, per job, and per project.
+QA-generation runs. Shown per factory unit and per project. The retired job pipeline's runs
+stay in the ledger, attributed as they were (per stage, per job).
 
 Status: **implemented** (spec: `project/transcript-usage-ledger.md`, feature `f-mpon58`).
 Code: `src/server/usage/` — `ledger.ts` (ingest), `store.ts` (runs + queries),
@@ -142,17 +143,18 @@ Pro/Max subscription. The UI says "est. … at API list price".
 
 ## 6. Surfaces
 
-Both reads aggregate the whole ledger and sit on poll paths (the board, the overlay after
-every job write, the project list), so they are cached against a generation counter that
+Both reads aggregate the whole ledger and sit on poll paths (the project list, and every
+factory board or overlay refresh), so they are cached against a generation counter that
 `recordRunStart`/`recordRunEnd` and any ingest pass that stores rows bump. Anything that
 writes ledger tables directly — a test, a migration — must call `invalidateUsageCache()`.
 
-- **Stage chip tooltip / job chip** — `usageByJob()`; the job total includes Take over, so
-  it can exceed the sum of its stages. A job with tokens but no runs reads "outside any
-  agent run". `runCount` is the number of recorded runs.
-- **Project header chip** — `usageByProject()` on `GET /api/projects`, with the pipeline /
-  sessions / background split in its tooltip. It moved out of the Jobs heading because it
-  now counts everything.
+- **Factory unit tokens** — the board's and overlay's per-unit figure (and the runaway
+  guard) read the ledger by the unit's run tag (`factory/deps.ts` `unitTokens`).
+  `usageByJob()` (per job, per stage) stays as ledger API; the job board that showed it
+  was retired with the pipeline.
+- **Project header chip** — `usageByProject()` on `GET /api/projects`, with the factory
+  (tagged runs with a job id: factory units and old jobs) / sessions / background split
+  in its tooltip.
 
 ## 7. Known limits
 

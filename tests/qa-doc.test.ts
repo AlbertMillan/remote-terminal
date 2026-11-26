@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseQaDoc, checkDriver, qaDocRelPath } from '../src/server/jobs/qa-doc.js';
-import { rollUp, parseFlowVerdict, type QaCheck } from '../src/server/jobs/stages/qa.js';
+import { parseQaDoc, checkDriver, qaDocRelPath } from '../src/server/qa/qa-doc.js';
 
 const DOC = [
   '---',
@@ -86,62 +85,6 @@ describe('checkDriver', () => {
     const result = checkDriver('manual', 'C:/proj');
     expect(result.available).toBe(false);
     expect(result.reason).toMatch(/manual/);
-  });
-});
-
-describe('parseFlowVerdict', () => {
-  it('reads the verdict line', () => {
-    expect(parseFlowVerdict('blah\nQA RESULT: PASS')).toBe('passed');
-    expect(parseFlowVerdict('QA RESULT: FAIL')).toBe('failed');
-    expect(parseFlowVerdict('QA RESULT: skip')).toBe('skipped');
-  });
-
-  it('returns null when the run never concluded', () => {
-    expect(parseFlowVerdict('I ran some things and got bored')).toBeNull();
-  });
-});
-
-describe('rollUp', () => {
-  const check = (status: QaCheck['status'], name = status): QaCheck => ({
-    name,
-    status,
-    detail: null,
-  });
-
-  it('passes only when something actually passed and nothing failed', () => {
-    expect(rollUp([check('passed'), check('passed')]).outcome).toBe('passed');
-  });
-
-  it('fails when any check failed, however many passed', () => {
-    expect(rollUp([check('passed'), check('passed'), check('failed')]).outcome).toBe('failed');
-  });
-
-  it('reports skipped — never passed — when nothing actually ran', () => {
-    // The rule that matters: no evidence is not the same as evidence of success.
-    expect(rollUp([check('skipped'), check('skipped')]).outcome).toBe('skipped');
-  });
-
-  it('does not let a trivial pass mask a check that never ran', () => {
-    // Found by running it: a passing `node --check` alongside a Unity flow that
-    // could not run was reporting the whole stage green.
-    expect(rollUp([check('passed', 'node --check'), check('skipped', 'unity flows')])).toEqual({
-      outcome: 'skipped',
-      summary: '1 passed, 1 skipped',
-    });
-  });
-
-  it('treats no checks at all as skipped', () => {
-    expect(rollUp([])).toEqual({ outcome: 'skipped', summary: 'no QA declared' });
-  });
-
-  it('summarises the mix', () => {
-    expect(rollUp([check('passed'), check('failed'), check('skipped')]).summary).toBe(
-      '1 passed, 1 failed, 1 skipped'
-    );
-  });
-
-  it('a failure alongside a skip still fails', () => {
-    expect(rollUp([check('skipped'), check('failed')]).outcome).toBe('failed');
   });
 });
 

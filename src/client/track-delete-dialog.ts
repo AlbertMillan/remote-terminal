@@ -18,8 +18,8 @@ export interface TrackDeletePlan {
   /** Feature lines in main's section; an in-progress track's own go with its branch. */
   mainLines?: number;
   features: { id: string; title: string; status: string }[];
-  cancel: { id: string; title: string; status: string }[];
-  discard: { id: string; title: string; status: string }[];
+  /** The track's live factory units, cancelled before anything is reverted. */
+  cancel: { featureId: string; unitId: string; title: string; status: string }[];
   branch: { name: string; worktreePath: string; uncommittedFiles: number; sessionsToClose: number } | null;
   currentBranch: string | null;
   merges: { sha: string; subject: string; via: 'track' | 'job' | 'trailer' | 'message'; baseBranch: string }[];
@@ -42,8 +42,8 @@ export interface TrackDeletePlan {
 
 const VIA_LABEL: Record<TrackDeletePlan['merges'][number]['via'], string> = {
   track: 'track land',
-  job: 'job merge',
-  trailer: 'found by its recorded job id',
+  job: 'old job merge',
+  trailer: 'found by its recorded feature or job id',
   message: 'found by its merge message',
 };
 
@@ -61,14 +61,11 @@ export function renderTrackDeletePlan(plan: TrackDeletePlan): SafeHtml {
   }
   if (plan.cancel.length > 0) {
     removed.push(
-      html`Cancel ${plural(plan.cancel.length, 'active job')}: ${joinHtml(
-        plan.cancel.map((j) => j.title),
+      html`Cancel ${plural(plan.cancel.length, 'factory unit')}: ${joinHtml(
+        plan.cancel.map((u) => u.title),
         ', '
       )}`
     );
-  }
-  if (plan.discard.length > 0) {
-    removed.push(html`Discard ${plural(plan.discard.length, 'job')} and their worktrees`);
   }
   if (plan.branch) {
     const lost =

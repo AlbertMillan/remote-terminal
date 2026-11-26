@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { createLogger } from '../utils/logger.js';
 import { AccountRefusedError, findTranscript, preflight, projectAccount, type PreflightResult } from '../accounts.js';
-import { commitAll } from '../jobs/worktree.js';
+import { commitAll } from '../worktrees/worktree.js';
 import { git } from '../utils/git.js';
 import { getActiveTrackBranch } from '../projects/track-store.js';
 import { clearParkedProgress, getDispatcher } from './dispatcher.js';

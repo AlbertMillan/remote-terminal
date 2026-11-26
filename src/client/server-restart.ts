@@ -1,5 +1,4 @@
-import { jsonPost } from './job-board-types.js';
-import { failureMessage, requestJson } from './api.js';
+import { failureMessage, jsonPost, requestJson } from './api.js';
 
 /**
  * The Restart / Build & restart controls in the Settings modal. The server side

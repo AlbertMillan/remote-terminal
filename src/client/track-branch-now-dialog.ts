@@ -1,7 +1,6 @@
 import { html, type SafeHtml } from './html-utils.js';
-import { failureMessage, requestJson } from './api.js';
+import { failureMessage, jsonPost, requestJson } from './api.js';
 import { openDialog } from './dialog.js';
-import { jsonPost } from './job-board-types.js';
 
 /**
  * Branch now: move a track's uncommitted work off main into a new track branch.

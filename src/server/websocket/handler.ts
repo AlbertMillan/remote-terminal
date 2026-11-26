@@ -17,8 +17,6 @@ import {
   extractIpFromRequest,
 } from '../auth/tailscale.js';
 import { notificationService, type Notification } from '../notifications/service.js';
-import { jobEvents } from '../jobs/events.js';
-import { buildJobsSummary } from '../jobs/summary.js';
 import { factoryEvents } from '../factory/events.js';
 import { buildFactorySummary } from '../factory/board.js';
 import { getDispatcher } from '../factory/dispatcher.js';
@@ -62,7 +60,7 @@ import {
   handleNotificationPreferencesSet,
   handleNotificationDismiss,
 } from './handlers/notifications.js';
-import type { FactorySummary, JobsSummary } from '../../shared/protocol.js';
+import type { FactorySummary } from '../../shared/protocol.js';
 
 export { getActiveConnections, closeAllConnections };
 
@@ -77,52 +75,10 @@ notificationService.onNotification((notification: Notification) => {
 });
 
 /**
- * Push the job feed to every connected client whenever a job or stage changes.
- *
- * Rebuilt per change rather than diffed: the summary is a few hundred bytes and
- * a burst of writes inside one transition collapses into whatever the last one
- * sees, which is the state we want to send anyway.
- */
-let jobsBroadcastQueued = false;
-
-jobEvents.onChange(() => {
-  // One logical transition writes several rows -- finishStage then updateJob,
-  // and a stage's usage besides -- and each write fires. Collapsing them onto a
-  // microtask sends the settled state once instead of broadcasting each
-  // intermediate one. Writes separated by an await land in different turns and
-  // are still sent separately, which is right: they are different states.
-  if (jobsBroadcastQueued) return;
-  jobsBroadcastQueued = true;
-  queueMicrotask(() => {
-    jobsBroadcastQueued = false;
-    broadcastJobsSummary();
-  });
-});
-
-function broadcastJobsSummary(target?: ClientConnection): void {
-  const targets = (target ? [target] : [...connections.values()]).filter(
-    (conn) => conn.ws.readyState === WS_OPEN
-  );
-  // Build nothing when nobody is listening: a job running overnight with no
-  // browser open would otherwise pay for a summary on every write.
-  if (targets.length === 0) return;
-
-  let payload: JobsSummary;
-  try {
-    payload = buildJobsSummary();
-  } catch (error) {
-    logger.error({ error }, 'Failed to build job summary');
-    return;
-  }
-
-  const message = createMessage('jobs.summary', payload);
-  for (const conn of targets) conn.ws.send(message);
-}
-
-/**
- * Push the factory feed (the Factory overlay's cards) on every factory write, the
- * same way as the job feed: one microtask collapses a transition's several writes
- * (a park updates the run state and every item of a track) into one send.
+ * Push the factory feed (the Factory overlay's cards) on every factory write.
+ * Rebuilt per change rather than diffed, and one microtask collapses a
+ * transition's several writes (a park updates the run state and every item of
+ * a track) into one send of the settled state.
  */
 let factoryBroadcastQueued = false;
 
@@ -217,9 +173,8 @@ export async function handleConnection(ws: WebSocket, request: FastifyRequest): 
     })
   );
 
-  // Seed the job overlay before anything moves, so a freshly loaded page is not
-  // blank until the next stage transition (which may be 20 minutes away).
-  broadcastJobsSummary(connection);
+  // Seed the Factory overlay before anything moves, so a freshly loaded page is
+  // not blank until the next factory write (which may be many minutes away).
   broadcastFactorySummary(connection);
 
   // Set up message handler with rate limiting

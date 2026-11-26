@@ -37,8 +37,7 @@ import { completeFolder, resolveCwdInput } from './sessions/folder-picker.js';
 import { registerProjectRoutes } from './projects/routes.js';
 import { migrateBranchedPlans } from './projects/track-branches.js';
 import { projectCwdFor } from './projects/worktree-owner.js';
-import { sweepLeftoverWorktrees } from './jobs/worktree.js';
-import { registerJobRoutes } from './jobs/routes.js';
+import { sweepLeftoverWorktrees } from './worktrees/worktree.js';
 import { registerPlanUsageRoutes } from './usage/plan-routes.js';
 import { registerServerRestartRoutes } from './server-restart.js';
 import { registerServerSettingsRoutes } from './server-settings.js';
@@ -54,7 +53,6 @@ import { registerUploadRoutes, sweepUploads } from './sessions/uploads.js';
 import { registerSessionFileRoutes } from './sessions/session-files.js';
 import { configureSessionEnv, loopbackUrl } from './sessions/session-env.js';
 import { loadSnapshot as loadPlanUsage } from './usage/plan-limits.js';
-import { reconcileJobsOnStartup } from './jobs/runner.js';
 import { scheduleIngest, startUsageLedger, stopUsageLedger } from './usage/ledger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -92,8 +90,6 @@ export async function createApp(): Promise<FastifyInstance> {
   sweepUploads(new Set(getAllSessionsFromDb().map((s) => s.id)));
   // Retroactively log sessions that ended via crash/OS-shutdown (no-op if disabled)
   sweepUnloggedSessions();
-  // A job marked running cannot have survived the restart — re-queue it.
-  reconcileJobsOnStartup();
   // Tracks branched before plans moved into track branches still have their
   // section on main: move each once (docs/track-branches.md). In the
   // background — it is git work per track, and a failure only logs.
@@ -256,8 +252,6 @@ export async function createApp(): Promise<FastifyInstance> {
 
   // Project workspace: canonical PROJECT.md board, registry and feature edits.
   registerProjectRoutes(app);
-  // Pipeline jobs: worktree-isolated stages with approval gates.
-  registerJobRoutes(app);
   // Files dropped, pasted or shared into a session from another device (sessions/uploads.ts).
   registerUploadRoutes(app);
   // File paths printed in a terminal, opened from the browser (sessions/session-files.ts).

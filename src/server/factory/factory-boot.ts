@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { getMerge } from './merge-queue-store.js';
-import { removeWorktree, type TeardownResult } from '../jobs/worktree.js';
+import { removeWorktree, type TeardownResult } from '../worktrees/worktree.js';
 import { startFactory } from './dispatcher.js';
 import { enqueueMerge, type MergeOutcome, type MergeTicket } from './merge-queue.js';
 import { setMergeSink, type MergeEntry, type MergeSink } from './merge-sink.js';

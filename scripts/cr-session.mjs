@@ -17,6 +17,7 @@
  *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
  *   node "$CLAUDE_REMOTE_CLI" factory status
  *   node "$CLAUDE_REMOTE_CLI" factory take|return|done [<feature-id>|<track>]
+ *   node "$CLAUDE_REMOTE_CLI" factory cancel <feature-id>|<track>
  *
  * `factory` drives the code factory (project/code-factory.md) for this
  * session's project: `add` files loose work into the Inbox (`--from` files it
@@ -28,6 +29,9 @@
  * `return` gives the unit this session (or one it started) holds back to the
  * factory, which resumes it from the last commit; `done` sends that work to
  * the factory's summary, reviewer and merge queue — never a direct merge.
+ * `cancel` stops a unit's agent (refused while a terminal session holds it),
+ * closes its items with their PROJECT.md lines unticked, and removes a loose
+ * item's worktree and branch; a track keeps its worktree.
  *
  * `land` with no track lands the track whose worktree this session is in, and
  * closes this session to do it. `update` merges the base branch into that
@@ -66,11 +70,12 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" factory status
   node "$CLAUDE_REMOTE_CLI" factory take [<feature-id>|<track>]
   node "$CLAUDE_REMOTE_CLI" factory return [<feature-id>|<track>]
-  node "$CLAUDE_REMOTE_CLI" factory done [<feature-id>|<track>]`;
+  node "$CLAUDE_REMOTE_CLI" factory done [<feature-id>|<track>]
+  node "$CLAUDE_REMOTE_CLI" factory cancel <feature-id>|<track>`;
 
 const REVIEWS = ['track', 'feature'];
-/** Subcommands that claim or release factory work for a terminal session (claimRequest). */
-const CLAIM_SUBS = ['take', 'return', 'done'];
+/** Subcommands that act on one factory unit by name (claimRequest). */
+const CLAIM_SUBS = ['take', 'return', 'done', 'cancel'];
 
 /**
  * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
@@ -140,7 +145,7 @@ async function factoryRequest(argv, stdin, headers) {
 /**
  * `factory take|return|done [<feature-id>|<track>]`: the unit named positionally
  * (`take` also accepts `--track`), or none, which means this worktree's track for
- * `take` and what this session holds for `return` and `done`.
+ * `take` and what this session holds for `return` and `done`. `cancel` needs one.
  */
 function claimRequest(argv, headers) {
   const [sub, ...rest] = argv;
@@ -156,6 +161,7 @@ function claimRequest(argv, headers) {
     else if (rest[i].startsWith('--')) throw new UsageError(`factory ${sub} does not take ${rest[i].split('=')[0]}`);
     else set(rest[i]);
   }
+  if (sub === 'cancel' && target === undefined) throw new UsageError('factory cancel needs a feature id or track name');
   return {
     path: `/api/agent/factory/${sub}`,
     request: {

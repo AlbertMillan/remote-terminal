@@ -1,10 +1,11 @@
-# Change provenance: job-built and session-built edits
+# Change provenance: factory-built and session-built edits
 
 A project here changes in two ways, and a user may do both in the same project on the
 same day:
 
-- **Job-built.** The pipeline runs a feature through its own worktree and branch, then
-  merges it with `--no-ff`.
+- **Factory-built.** The code factory (`docs/code-factory.md`) runs a unit through its own
+  worktree and branch, then its merge queue merges it with `--no-ff`. The retired job
+  pipeline worked the same way, and its merges are still in the history.
 - **Session-built.** A person, or Claude in a terminal, edits whatever the session's cwd
   holds: the main checkout, a track worktree, or any other directory.
 
@@ -14,27 +15,28 @@ does damage, for the user who works the other way.
 
 ## How the two differ
 
-| | Job-built | Session-built |
+| | Factory-built | Session-built |
 |---|---|---|
-| Where the work happens | `~/.claude-remote/worktrees/<job>`, on its own branch | The session's cwd: main, a track worktree, anywhere |
-| What records it | Job row, `baseBranch`, `merge_sha`, the merge commit's `Job-Id`/`Feature` trailers | Transcripts, dirty files, commits made during the session's time window |
+| Where the work happens | `~/.claude-remote/worktrees/factory-<feature>` (a track: its track worktree), on its own branch | The session's cwd: main, a track worktree, anywhere |
+| What records it | Factory item/run-state rows, the recorded base branch, the queue's `merge_sha`, the merge commit's `Job-Id`/`Feature` trailers (old jobs: the kept `jobs` rows) | Transcripts, dirty files, commits made during the session's time window |
 | Confidence | **Record**: exact | **Inference**: a guess |
-| Who answers questions | Nobody. The job parks at a gate and resumes the session that asked | The person at the keyboard |
-| Lifecycle | Cancel / Discard, the per-project lane queue, the project try-lock | A live PTY. On Windows its open cwd holds the directory |
-| When it ends | At merge, and at discard the row and its `merge_sha` are deleted | Never, explicitly. The transcript and the edits just stay |
+| Who answers questions | Nobody. The unit parks with a structured question and resumes the session that asked | The person at the keyboard |
+| Lifecycle | Cancel (`factory/cancel.ts`), the per-project lane queue, the merge queue, the project try-lock | A live PTY. On Windows its open cwd holds the directory |
+| When it ends | At merge. Old jobs' rows and `merge_sha` were deleted on discard | Never, explicitly. The transcript and the edits just stay |
 
-A job's database records can also disappear. Discarding a done job deletes its row and
-its `merge_sha`, and that is the normal end of a job's life. That's why the merge commit
-itself carries the job and feature ids as trailers (`jobs/merge-trailers.ts`): git keeps
-them through a discard, a lost database or a re-clone. Only merges from before trailers
+Database records can also disappear. Discarding an old job deleted its row and its
+`merge_sha`, and that was the normal end of a job's life. That's why the merge commit
+itself carries the job/entry and feature ids as trailers (`projects/merge-trailers.ts`):
+git keeps them through a lost database or a re-clone. Only merges from before trailers
 existed still fall back to the exact subject (see `track-branches.md`, *Finding a merge
-by its trailers*).
+by its trailers*). The retired pipeline's `jobs` rows are kept read-only for this
+(`projects/job-history.ts`; `docs/code-factory.md`, *Old job history*).
 
 ## A third case: a session holding factory work (a record)
 
 A terminal session that claims a factory unit (Take over from the board or
 `cr factory take`, or a builder `cr start --track` on a track with factory items)
-is session-built work with a **record**, so it is handled like job-built work:
+is session-built work with a **record**, so it is handled like factory-built work:
 
 - The claim lives on the items (`factory_items.claim_kind = 'session'`, owner
   `session:<id>`) and in `factory_session_claims` (migration 028): the session, the
@@ -43,7 +45,7 @@ is session-built work with a **record**, so it is handled like job-built work:
 - The work happens in the unit's worktree, never main. Return and Done commit the
   session's leftovers there with the unit's `Feature:` trailers (and
   `Factory-Session:`), and it reaches the base branch only through the merge queue,
-  whose merge carries the trailers, so Delete track finds it as it finds any job.
+  whose merge carries the trailers, so Delete track finds it as it finds any factory merge.
 - `track-attribution.ts` reports these claims as `recorded` and keeps their
   transcripts **out of the guess**, for every track: a claimed session is never a
   guessed one. Delete lists them (`recordedClaims`), it does not offer them unticked.
@@ -57,24 +59,24 @@ under a person who is thinking.
 
 ## Where this has already come up
 
-- **Delete track.** Job merges are reverted by `merge_sha`, or by a *unique*
-  `Merge job: <title>` subject. Session work on main can only be guessed at
+- **Delete track.** Factory and old job merges are reverted by recorded `merge_sha`, by
+  trailer, or by a *unique* `Merge job: <title>` subject. Session work on main can only be guessed at
   (`track-attribution.ts`), so it is offered **unticked**. Ticking a guess by default
   would revert unrelated work.
 - **The unbranched-work badge.** At first it counted guessed commits, which flagged every
   track with history from before track branches existed. It now counts only uncommitted
   files, the only kind of session work Branch now can act on.
-- **Land.** Jobs never block `git worktree remove`, but a live session with its cwd in the
+- **Land.** An agent run never blocks `git worktree remove` once awaited, but a live session with its cwd in the
   worktree does, on Windows. So Land refuses while one is open, and Delete closes those
   sessions before teardown.
-- **Track branches as a whole.** They exist because job-built work was always
+- **Track branches as a whole.** They exist because pipeline-built work was always
   attributable and session-built work wasn't: the Usage visibility track (2026-09-19)
   had to be undone by hand.
 
 ## Rules for a new feature
 
-1. **Name both paths in the spec.** Say what the feature does for a job's changes and
-   for a session's changes, including "nothing" and why.
+1. **Name both paths in the spec.** Say what the feature does for a factory unit's changes
+   and for a session's changes, including "nothing" and why.
 2. **Keep records and guesses apart, in code and in the UI.** A record may be acted on by
    default. A guess is shown, labelled as a guess, and needs confirming: unticked, or a
    confirmed list.
@@ -82,9 +84,9 @@ under a person who is thinking.
    (two merges with one subject, a session in two tracks) is reported for the user to
    handle by hand, not resolved by picking one.
 4. **Account for a live session in any directory you remove or rewrite.** Check for one
-   or close it first. Never assume only jobs touch a worktree.
-5. **Don't assume a job row still exists.** Discard deletes it, so fall back to what git
-   records.
+   or close it first. Never assume only the factory touches a worktree.
+5. **Don't assume a job row still exists.** Old jobs' rows were deleted on discard, and a
+   factory unit's run-state goes with its cancel, so fall back to what git records.
 6. **Know the inference's blind spots.** Transcript attribution sees Write, Edit,
    MultiEdit and NotebookEdit, not shell edits (`sed -i`, `cat >`, scripts). A feature
    that relies on it must tolerate missing files.

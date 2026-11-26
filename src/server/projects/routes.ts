@@ -15,7 +15,7 @@ import {
 } from './registry.js';
 import { migrateProject } from './migrate.js';
 import { generateQaDoc } from './qa-generate.js';
-import { readQaDoc, qaDocRelPath } from '../jobs/qa-doc.js';
+import { readQaDoc, qaDocRelPath } from '../qa/qa-doc.js';
 import { ProjectStoreError, mutateProjectDoc, readSpec } from './project-store.js';
 import {
   TrackBranchError,
@@ -35,8 +35,8 @@ import { installDependencies, needsInstall } from './project-deps.js';
 import { sessionManager } from '../sessions/manager.js';
 import { broadcastLandResult, removeWorktreeSessions } from '../websocket/connections.js';
 import { pushLandResult } from '../push/wire.js';
-import { WorktreeError } from '../jobs/worktree.js';
-import { cancelJob, discardJob } from '../jobs/runner.js';
+import { WorktreeError } from '../worktrees/worktree.js';
+import { cancelRefusal, cancelUnit } from '../factory/cancel.js';
 import { TrackDeleteError, executeTrackDelete, planTrackDelete } from './track-delete.js';
 import {
   addFeature,
@@ -615,8 +615,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
           liveSessions: runningSessions,
           terminateSession: (id) => sessionManager.terminateSession(id),
           removeSessions: removeWorktreeSessions,
-          cancelJob,
-          discardJob,
+          factoryCancelRefusal: (cwd, featureId) => cancelRefusal(cwd, featureId)?.message ?? null,
+          cancelFactoryUnit: (cwd, featureId) => cancelUnit(cwd, featureId),
         }
       ))
     );

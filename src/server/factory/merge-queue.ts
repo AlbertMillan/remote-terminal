@@ -34,10 +34,10 @@ import {
 import { findFeature, parseProjectDoc, renderProjectDoc, updateFeature } from '../projects/project-doc-format.js';
 import { readProjectPlan } from '../projects/project-plan.js';
 import { invalidateProjectCache } from '../projects/project-discovery.js';
-import { multiFeatureMergeMessageArgs } from '../jobs/merge-trailers.js';
-import { readQaDoc } from '../jobs/qa-doc.js';
+import { multiFeatureMergeMessageArgs } from '../projects/merge-trailers.js';
+import { readQaDoc } from '../qa/qa-doc.js';
 import { readProjectDoc } from '../projects/project-store.js';
-import { runCommand } from '../jobs/stages/qa.js';
+import { runCommand } from '../qa/run-command.js';
 import { getItem, updateItem } from './store.js';
 import {
   getMerge,

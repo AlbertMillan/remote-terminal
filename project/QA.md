@@ -13,14 +13,14 @@ commands:
 - **Never start a server on the default port (4220), and never run `npm start` or
   `npm run dev` with the default config.** The user runs this app on 4220 against
   `~/.claude-remote/sessions.db`, and a second instance would bind the same port and open
-  the same live database. A job that needs a running server must use the isolated boot in
+  the same live database. A run that needs a running server must use the isolated boot in
   Flow 3.
-- **Never ask the user to restart the server to test work in a track or job worktree.**
+- **Never ask the user to restart the server to test work in a track or factory worktree.**
   The server on 4220 runs the main checkout's `dist/`, so a restart loads none of the
   worktree's code, and it closes every open terminal. Test that code on the isolated boot
   (Flow 3, run from the worktree's own `dist/`). A restart is only worth asking for once
   the work has landed and main has been rebuilt.
-- The pipeline installs dependencies when it creates the worktree. If `node_modules` is
+- The factory installs dependencies when it creates the worktree. If `node_modules` is
   still missing, run `npm ci` there. Never link another checkout's `node_modules` in:
   removing the worktree would empty it.
 - No browser is available to this stage. Anything that can only be seen in the UI is out
@@ -49,10 +49,10 @@ commands:
    - Start it with `CLAUDE_REMOTE_CONFIG=<that file> node dist/server/index.js`, in the
      background. Its log goes to `logs/server.log` next to that config file, never to the
      live `~/.claude-remote/logs` (test runs write no log file at all).
-   - `curl --retry-connrefused --retry 12 --retry-delay 1 http://127.0.0.1:4399/api/jobs`
+   - `curl --retry-connrefused --retry 12 --retry-delay 1 http://127.0.0.1:4399/api/projects/rollup`
    - **Always stop it again**, by the PID listening on 4399, and confirm 4220 still
      answers. Leaving it running is a failure of this flow even if everything else passed.
-   expect: `/api/jobs` returns 200, a fresh `sessions.db` appears in the temp dir, the boot
+   expect: `/api/projects/rollup` returns 200, a fresh `sessions.db` appears in the temp dir, the boot
    log has no `uncaughtException`/`unhandledRejection`, and the live server on 4220 is
    still up afterwards.
 
@@ -68,12 +68,12 @@ commands:
 These need a driver this project does not declare yet. Report them as SKIP with this
 reason rather than as passed:
 
-- Anything in the browser UI: the job board, the document pane, terminal rendering, the
+- Anything in the browser UI: the factory board and drawer, the workspace, terminal rendering, the
   PiP overlay, keyboard shortcuts.
 - WebSocket behaviour end to end (attach, resize, scrollback replay).
 - Tailscale identity verification, which needs a real tailnet.
 
 When a browser driver is added (`driver: playwright`, or an agent driving Chrome), move
 the first two bullets into Flows and keep the commands above as the deterministic layer —
-`checkDriver()` in `src/server/jobs/qa-doc.ts` decides availability, and an unavailable
+`checkDriver()` in `src/server/qa/qa-doc.ts` decides availability, and an unavailable
 driver must still SKIP rather than pass.

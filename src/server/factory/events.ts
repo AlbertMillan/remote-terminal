@@ -6,7 +6,7 @@ const logger = createLogger('factory-events');
  * "Something in the factory changed" — an item, a dependency, a unit's run
  * state or a merge entry. Nothing more: subscribers rebuild from the store
  * (board.ts), so a burst of writes inside one transition never delivers a
- * half-applied view. The jobs/events.ts pattern, for the factory's tables.
+ * half-applied view.
  *
  * A leaf module: store.ts, run-state.ts and merge-queue-store.ts fire it, and
  * the WebSocket handler subscribes, so the data layer never imports the transport.

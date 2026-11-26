@@ -135,7 +135,7 @@ describe('rendering', () => {
     );
     expect(text(view.body)).toContain('This 5h window: 12 msgs · 3.4k in · 21k out · 1.2M cache read');
     expect(view.body).toContain('2 running sessions');
-    expect(view.body).toContain('jobs run here');
+    expect(view.body).toContain('factory runs here');
     expect(view.body).toContain('3 readings held back');
   });
 

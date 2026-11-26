@@ -67,7 +67,7 @@ third peer ("Read-only peers" below) · 400 bad body, `bypassPermissions` or `do
 caller outside any workspace project · 404 a track not in the plan · 413 prompt over 100 KB.
 `land`: 202 accepted · 400 the caller is in no track's worktree (no `track`), or a blank
 `track` · 403 a named track neither the caller's nor a started session's · 409 any Land refusal
-(uncommitted code, a live job, a conflicting merge, the project busy) or a Land of the
+(uncommitted code, a conflicting merge, the project busy) or a Land of the
 track already under way.
 
 ## Start, step by step
@@ -152,7 +152,7 @@ Spec: `project/lean-started-sessions.md`. The user's MCP roster (user-scope serv
 claude.ai connectors) was ~21k tokens of every call's prompt on this machine (a trivial
 `claude -p`: 54.5k, against 33.3k with `--strict-mcp-config`), re-read on every turn, and the
 13 sessions the rimworldy planner started called no MCP tool in 1,764 calls. So a started
-session gets `--strict-mcp-config`, as headless job runs do. Skills and built-in tools stay:
+session gets `--strict-mcp-config`, as headless factory runs do. Skills and built-in tools stay:
 skills are ~3.8k and carry `update`/`land`; trimming built-ins saves ~5.6k and an
 interactive session can't predict which it needs.
 
@@ -222,7 +222,7 @@ calls it again before creating the session.
   CLI says "the track's sessions will close". The result is the same notification.
   Confirmation is the skill's job: the agent names the track, asks the user and lands only
   on an explicit yes. Nothing server-side waits for one.
-- **Phase 1, in the request:** Land's session-free checks (`landPreflight`: live jobs,
+- **Phase 1, in the request:** Land's session-free checks (`landPreflight`:
   install, base branch, code or staged files on main, code in the worktree, with worktree
   planning committed) plus a conflicting merge (`behindMain`). Under the project try lock,
   released before the reply. A refusal is the CLI's error while the agent can still act.
@@ -259,7 +259,7 @@ runs a plain `git merge main`, which deletes the track's plan.
   own track with no body, or with `{ track }` its own or one a session it started works in;
   anything else is 400 or 403.
 - **One phase.** Nothing closes, so there is no `202`: the reply is `200 { track,
-  mergeSha, install, detail }`, or the refusal (live job, install, uncommitted code,
+  mergeSha, install, detail }`, or the refusal (install, uncommitted code,
   conflict, a busy project lock) as the CLI's error. The CLI prints `detail`.
 - **Dependencies.** When the merge changed a lockfile, or the worktree's install is
   missing or incomplete, the reply waits for a reinstall, so neither the agent nor the user

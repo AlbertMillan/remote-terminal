@@ -52,27 +52,6 @@ data class CategoryInfo(val id: String, val name: String, val sortOrder: Int, va
 @Serializable
 data class SortOrder(val id: String, val sortOrder: Int)
 
-@Serializable
-data class JobStage(val name: String, val status: String)
-
-@Serializable
-data class JobSummary(
-    val id: String,
-    val projectCwd: String,
-    val projectName: String,
-    val featureId: String?,
-    val title: String,
-    val status: String,
-    val stage: String?,
-    val gate: String?,
-    val parkReason: String?,
-    val detail: String?,
-    val stages: List<JobStage>,
-    val costUsd: Double,
-    val createdAt: String,
-    val updatedAt: String,
-)
-
 /** One feature of a factory track, in plan order; `state` is done, now or todo. */
 @Serializable
 data class FactoryFeatureProgress(val id: String, val title: String, val state: String)
@@ -306,9 +285,6 @@ data class NotificationPayload(
     val name: String? = null,
 )
 
-@Serializable
-data class JobsSummaryPayload(val jobs: List<JobSummary>)
-
 /** `factory.summary`: the factory feed, pushed on every factory write and once after auth. */
 @Serializable
 data class FactorySummaryPayload(
@@ -395,7 +371,6 @@ object ServerType {
     const val NOTIFICATION_PREFERENCES = "notification.preferences"
     const val NOTIFICATION_PREFERENCES_UPDATED = "notification.preferences.updated"
     const val NOTIFICATION = "notification"
-    const val JOBS_SUMMARY = "jobs.summary"
     const val FACTORY_SUMMARY = "factory.summary"
     const val PROJECTS_CHANGED = "projects.changed"
     const val ERROR = "error"
@@ -487,7 +462,6 @@ object Protocol {
         ServerType.NOTIFICATION_PREFERENCES to s<NotificationPreferencesPayload>(),
         ServerType.NOTIFICATION_PREFERENCES_UPDATED to s<NotificationPreferencesPayload>(),
         ServerType.NOTIFICATION to s<NotificationPayload>(),
-        ServerType.JOBS_SUMMARY to s<JobsSummaryPayload>(),
         ServerType.FACTORY_SUMMARY to s<FactorySummaryPayload>(),
         ServerType.PROJECTS_CHANGED to s<ProjectsChangedPayload>(),
         ServerType.ERROR to s<MessagePayload>(),

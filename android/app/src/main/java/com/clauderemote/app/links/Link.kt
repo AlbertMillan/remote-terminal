@@ -7,19 +7,19 @@ import java.net.URLEncoder
  * Where a tap leads: a notification, a `claude-remote://` link from elsewhere, or a share.
  *
  *   claude-remote://session/<id>
- *   claude-remote://job/<id>
+ *   claude-remote://unit?key=<url-encoded unit key>
  *   claude-remote://project?cwd=<url-encoded folder>
  *
  * Parsing never throws; anything unknown is null and the app just opens.
  */
 sealed interface Link {
     data class Session(val sessionId: String) : Link
-    data class Job(val jobId: String) : Link
+    data class Unit(val unitKey: String) : Link
     data class Project(val cwd: String) : Link
 
     fun toUri(): String = when (this) {
         is Session -> "$SCHEME://session/${enc(sessionId)}"
-        is Job -> "$SCHEME://job/${enc(jobId)}"
+        is Unit -> "$SCHEME://unit?key=${enc(unitKey)}"
         is Project -> "$SCHEME://project?cwd=${enc(cwd)}"
     }
 
@@ -40,7 +40,11 @@ sealed interface Link {
             val arg = path.substringAfter('/', "").let { dec(it) }
             return when (kind) {
                 "session" -> arg?.takeIf { ID.matches(it) }?.let { Session(it) }
-                "job" -> arg?.takeIf { ID.matches(it) }?.let { Job(it) }
+                "unit" -> query.split('&')
+                    .firstOrNull { it.startsWith("key=") }
+                    ?.let { dec(it.removePrefix("key=")) }
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { Unit(it) }
                 "project" -> query.split('&')
                     .firstOrNull { it.startsWith("cwd=") }
                     ?.let { dec(it.removePrefix("cwd=")) }
@@ -53,7 +57,7 @@ sealed interface Link {
         /** The link a push's data names (server: src/server/push/push.ts). */
         fun fromPush(data: Map<String, String>): Link? = when (data["kind"]) {
             "session" -> data["sessionId"]?.let { Session(it) }
-            "job" -> data["jobId"]?.let { Job(it) }
+            "factory" -> data["unitKey"]?.takeIf { it.isNotBlank() }?.let { Unit(it) }
             "project" -> data["projectCwd"]?.let { Project(it) }
             else -> null
         }

@@ -76,7 +76,7 @@ export async function ensureGitRepo(cwd: string): Promise<{ initialised: boolean
     'user.email=claude-remote@localhost',
     'commit',
     '-m',
-    'Initial commit (created by claude-remote to enable job isolation)',
+    'Initial commit (created by claude-remote to enable worktree isolation)',
     '--no-verify',
   ]);
   if (committed === null) {
@@ -90,7 +90,7 @@ export async function ensureGitRepo(cwd: string): Promise<{ initialised: boolean
       'commit',
       '--allow-empty',
       '-m',
-      'Initial commit (created by claude-remote to enable job isolation)',
+      'Initial commit (created by claude-remote to enable worktree isolation)',
       '--no-verify',
     ]);
   }

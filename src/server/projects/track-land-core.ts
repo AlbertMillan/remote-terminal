@@ -2,7 +2,7 @@ import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, gitStatusEntries, hasRemote, offBranch, type GitStatusEntry } from '../utils/git.js';
 import { deletePeerNotes } from '../sessions/prompt-file.js';
 import { sessionsInWorktree } from '../utils/paths.js';
-import { describeLinksLeft, removeWorktree } from '../jobs/worktree.js';
+import { describeLinksLeft, removeWorktree } from '../worktrees/worktree.js';
 import { type RegistryProject } from './registry.js';
 import { getActiveTrackBranch, markLanded, type TrackBranch } from './track-store.js';
 import { isInstalling } from './project-deps.js';
@@ -17,7 +17,7 @@ import {
 } from './track-plan.js';
 
 const logger = createLogger('track-branches');
-import { TrackBranchError, liveJobsOf, reattachIfMissing } from './track-branches.js';
+import { TrackBranchError, reattachIfMissing } from './track-branches.js';
 
 /**
  * Land's git half (docs/track-branches.md): copy the section back to main, merge, reset the
@@ -178,10 +178,10 @@ export async function landTrack(
 }
 
 /**
- * Land's checks that need no session, in Land's order: no live job, no
- * running install, the project on the base branch, no code (and nothing
- * staged) on main, no code in the worktree. Uncommitted planning in the
- * worktree is committed on the track branch, as Land does. A session that
+ * Land's checks that need no session, in Land's order: no running install,
+ * the project on the base branch, no code (and nothing staged) on main, no
+ * code in the worktree. Uncommitted planning in the worktree is committed on
+ * the track branch, as Land does. A session that
  * asks to Land runs this first, while its agent can still act on a refusal
  * (POST /api/agent/land); Land itself runs it again.
  *
@@ -195,14 +195,6 @@ export async function landPreflight(
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
   const docRel = docRelOf(project);
-
-  const liveJobs = liveJobsOf(project, track);
-  if (liveJobs.length > 0) {
-    throw new TrackBranchError(
-      `${liveJobs.length} job(s) for this track are still active — let them finish or cancel them first`,
-      409
-    );
-  }
 
   // No session exists yet while Open session waits on the install, so the
   // sessions Land closes can't include it; the teardown would delete under a

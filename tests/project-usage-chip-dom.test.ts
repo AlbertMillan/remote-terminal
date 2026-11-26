@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
 import { ProjectWorkspace, type WorkspaceProject } from '../src/client/project-workspace.js';
-import { formatUsageCost, type StageUsage } from '../src/client/job-board.js';
+import { formatUsageCost, type UsageTotals } from '../src/client/usage-format.js';
 
 /**
  * The project's spend chip in its header.
@@ -11,7 +11,7 @@ import { formatUsageCost, type StageUsage } from '../src/client/job-board.js';
  * tooltip. And it must never read "$0.00" for spend it merely cannot price.
  */
 
-const ZERO: StageUsage = {
+const ZERO: UsageTotals = {
   inputTokens: 0,
   outputTokens: 0,
   cacheReadTokens: 0,
@@ -19,7 +19,7 @@ const ZERO: StageUsage = {
   costUsd: 0,
   runCount: 0,
 };
-const spent = (costUsd: number, extra: Partial<StageUsage> = {}): StageUsage => ({
+const spent = (costUsd: number, extra: Partial<UsageTotals> = {}): UsageTotals => ({
   ...ZERO,
   outputTokens: 1000,
   costUsd,
@@ -49,9 +49,9 @@ function project(usage: WorkspaceProject['usage']): WorkspaceProject {
 }
 
 function chip(usage: WorkspaceProject['usage']): HTMLElement | null {
-  const ws = new ProjectWorkspace(() => {}, () => {}, () => {}, () => {});
+  const ws = new ProjectWorkspace(() => {}, () => {}, () => {});
   document.body.innerHTML = `<div id="badges">${ws.renderHeaderBadges(project(usage))}</div>`;
-  return document.querySelector<HTMLElement>('.jb-usage.project');
+  return document.querySelector<HTMLElement>('.pw-usage.project');
 }
 
 describe('project spend chip', () => {
@@ -59,7 +59,7 @@ describe('project spend chip', () => {
     const el = chip({ total: spent(12.5), pipeline: spent(2), sessions: spent(10), background: spent(0.5) });
     expect(el?.textContent).toBe('$12.50');
     expect(el?.title).toContain('est. $12.50 at API list price');
-    expect(el?.title).toContain('pipeline $2.00');
+    expect(el?.title).toContain('factory $2.00');
     expect(el?.title).toContain('sessions $10.00');
     expect(el?.title).toContain('background');
   });

@@ -292,8 +292,8 @@ describe('guesses in Delete track', () => {
     liveSessions: () => [],
     terminateSession: vi.fn(async () => true),
     removeSessions: vi.fn(async () => undefined),
-    cancelJob: vi.fn(async () => undefined),
-    discardJob: vi.fn(async () => undefined),
+    factoryCancelRefusal: vi.fn(() => null),
+    cancelFactoryUnit: vi.fn(async () => undefined),
   });
 
   it('lists guessed files and commits, and touches none unless ticked', async () => {

@@ -5,7 +5,7 @@ import { createLogger } from '../utils/logger.js';
 import { pathKey, sessionsInWorktree } from '../utils/paths.js';
 import { discoverProjects } from './project-discovery.js';
 import { decodeProjectSlugs } from './slug-decode.js';
-import { worktreeRoot } from '../jobs/worktree.js';
+import { worktreeRoot } from '../worktrees/worktree.js';
 import { allProjectsDirs, defaultAccount, projectAccountEntry } from '../accounts.js';
 import { loadRegistry, rollUpProjects, type Registry, type RegistryProject } from './registry.js';
 import { capabilitiesFor, detectVcs, type VcsCapabilities } from './vcs.js';

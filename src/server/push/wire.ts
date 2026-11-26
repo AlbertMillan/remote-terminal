@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { createLogger } from '../utils/logger.js';
 import { notificationService } from '../notifications/service.js';
-import { jobEvents } from '../jobs/events.js';
-import { buildJobsSummary, type JobSummary } from '../jobs/summary.js';
+import { factoryEvents } from '../factory/events.js';
+import { buildFactorySummary } from '../factory/board.js';
+import type { FactoryUnitSummary } from '../../shared/protocol.js';
 import type { LandNotificationPayload } from '../websocket/protocol.js';
 import {
   initPush,
-  jobGateMessage,
+  factoryWaitMessage,
   landMessage,
   listDevices,
   pushEnabled,
@@ -18,7 +19,7 @@ import {
 
 /**
  * What the server pushes to the Android app, and when (docs/android-app.md): a session
- * that needs input or finished, a job newly parked at a gate, and a Land's result. Each
+ * that needs input or finished, a factory unit newly waiting for you, and a Land's result. Each
  * goes to every registered device not in the foreground.
  */
 
@@ -31,24 +32,27 @@ export interface PushDeps {
 }
 
 let deps: PushDeps | null = null;
-let parkedKeys = new Set<string>();
+let waitingKeys = new Set<string>();
 
-/** A parked job's identity for "is this a new wait": the same job parking again later counts. */
-function parkKey(job: JobSummary): string {
-  return `${job.id}:${job.stage}:${job.gate}:${job.parkReason}`;
+/** A waiting unit's identity for "is this a new wait": the same unit waiting again later, at another step or for another reason, counts. */
+function waitKey(unit: FactoryUnitSummary): string {
+  return `${unit.key}:${unit.step}:${unit.reason}`;
 }
 
-/** Jobs that are parked now and were not at the last look; returns the new set too. */
-export function newlyParked(previous: Set<string>, jobs: JobSummary[]): { keys: Set<string>; parked: JobSummary[] } {
+/** Units that wait for you now and did not at the last look; returns the new set too. */
+export function newlyWaiting(
+  previous: Set<string>,
+  units: FactoryUnitSummary[]
+): { keys: Set<string>; waiting: FactoryUnitSummary[] } {
   const keys = new Set<string>();
-  const parked: JobSummary[] = [];
-  for (const job of jobs) {
-    if (job.status !== 'parked') continue;
-    const key = parkKey(job);
+  const waiting: FactoryUnitSummary[] = [];
+  for (const unit of units) {
+    if (!unit.needsYou) continue;
+    const key = waitKey(unit);
     keys.add(key);
-    if (!previous.has(key)) parked.push(job);
+    if (!previous.has(key)) waiting.push(unit);
   }
-  return { keys, parked };
+  return { keys, waiting };
 }
 
 function send(message: Parameters<typeof pushToDevices>[0]): void {
@@ -68,25 +72,27 @@ export function startPush(pushDeps: PushDeps): void {
     if (session) send(sessionMessage(session, n.type));
   });
 
-  // Seed with what is parked already, so a restart does not re-announce old waits.
+  // Seed with what waits already, so a restart does not re-announce old waits.
   try {
-    parkedKeys = newlyParked(new Set(), buildJobsSummary().jobs).keys;
+    waitingKeys = newlyWaiting(new Set(), buildFactorySummary().units).keys;
   } catch {
-    parkedKeys = new Set();
+    waitingKeys = new Set();
   }
   let queued = false;
-  jobEvents.onChange(() => {
+  factoryEvents.onChange(() => {
+    // Every heartbeat writes: build nothing when push is off.
+    if (!pushEnabled()) return;
     // A transition writes several rows; look once they have settled (as the WS feed does).
     if (queued) return;
     queued = true;
     queueMicrotask(() => {
       queued = false;
       try {
-        const { keys, parked } = newlyParked(parkedKeys, buildJobsSummary().jobs);
-        parkedKeys = keys;
-        for (const job of parked) send(jobGateMessage(job));
+        const { keys, waiting } = newlyWaiting(waitingKeys, buildFactorySummary().units);
+        waitingKeys = keys;
+        for (const unit of waiting) send(factoryWaitMessage(unit));
       } catch (error) {
-        logger.warn({ error: (error as Error).message }, 'push: job check failed');
+        logger.warn({ error: (error as Error).message }, 'push: factory check failed');
       }
     });
   });

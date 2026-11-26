@@ -24,6 +24,7 @@ const runState = await import('../src/server/factory/run-state.js');
 const { sessionOwner } = await import('../src/server/factory/session-claims.js');
 const { registerFactorySessionRoutes } = await import('../src/server/factory/session-routes.js');
 const { isInside } = await import('../src/server/utils/paths.js');
+const { cancelUnit } = await import('../src/server/factory/cancel.js');
 type SessionRouteDeps = import('../src/server/factory/session-routes.js').SessionRouteDeps;
 type TakeoverDeps = import('../src/server/factory/takeover.js').TakeoverDeps;
 type SessionMetadata = import('../src/server/sessions/types.js').SessionMetadata;
@@ -79,6 +80,14 @@ function deps(): SessionRouteDeps {
     getSession: (id) => (sessions[id] as SessionMetadata) ?? null,
     trackOfFolder: (cwd) => (cwd === wt ? 'Search' : null),
     childrenOf: (id) => (id === 'sess-main' ? ['sess-child'] : []),
+    // The real cancel, minus the dispatcher and git.
+    cancel: (cwd, featureId) =>
+      cancelUnit(cwd, featureId, {
+        stopUnit: async () => false,
+        teardown: async () => ({ removed: true, branchDeleted: false, linksLeft: [] }),
+        sessionName: (id) => (id === 'sess-child' ? 'child' : null),
+        now: () => Date.now(),
+      }),
   };
 }
 
@@ -132,6 +141,36 @@ describe('the board', () => {
     expect((await post('/api/factory/items/f-bbb111/take', { cwd: 'C:\\nowhere' })).statusCode).toBe(404);
     expect((await post('/api/factory/items/nope/take', { cwd: project })).statusCode).toBe(400);
     expect((await post('/api/factory/items/f-bbb111/done', { cwd: project })).statusCode).toBe(409);
+  });
+});
+
+describe('cancel', () => {
+  it('cancels from the board, and refuses a unit a session holds, naming it', async () => {
+    const res = await post('/api/factory/items/f-bbb111/cancel', { cwd: project });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ unitId: 'f-bbb111', worktreeRemoved: true });
+    expect(store.getItem(project, 'f-bbb111')?.status).toBe('cancelled');
+
+    store.claimForSession(project, ['f-aaa111', 'f-aaa222'], sessionOwner('sess-child'), Date.now());
+    const held = await post('/api/factory/items/f-aaa111/cancel', { cwd: project });
+    expect(held.statusCode).toBe(409);
+    expect(held.json().error).toContain('"child" (sess-child)');
+    expect(store.getItem(project, 'f-aaa111')?.status).toBe('in_progress');
+  });
+
+  it('a started session cannot cancel, and nothing changes', async () => {
+    const res = await post('/api/agent/factory/cancel', { target: 'f-bbb111' }, bearer('tok-child'));
+    expect(res.statusCode).toBe(403);
+    expect(store.getItem(project, 'f-bbb111')?.status).toBe('open');
+  });
+
+  it('cr factory cancel resolves a track name, and needs a target and a token', async () => {
+    expect((await post('/api/agent/factory/cancel', {}, bearer('tok-main'))).statusCode).toBe(400);
+    expect((await post('/api/agent/factory/cancel', { target: 'Search' })).statusCode).toBe(401);
+    const res = await post('/api/agent/factory/cancel', { target: 'Search' }, bearer('tok-main'));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ unitId: 'track:Search', worktreeRemoved: false });
+    expect(store.getItem(project, 'f-aaa222')?.status).toBe('cancelled');
   });
 });
 

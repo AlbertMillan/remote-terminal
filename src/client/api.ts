@@ -33,3 +33,12 @@ export async function requestJson<T extends object = object>(
 export function failureMessage(result: ApiResult<object>, fallback: string): string {
   return result.data.error || (result.status ? `${fallback} (${result.status})` : fallback);
 }
+
+/** A POST with a JSON body. */
+export function jsonPost(body: Record<string, unknown>) {
+  return {
+    method: 'POST' as const,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}

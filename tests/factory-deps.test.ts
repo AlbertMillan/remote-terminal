@@ -14,8 +14,8 @@ const { installDependencies, needsInstall } = vi.hoisted(() => ({
   needsInstall: vi.fn(),
 }));
 vi.mock('../src/server/projects/project-deps.js', () => ({ installDependencies, needsInstall }));
-vi.mock('../src/server/jobs/worktree.js', async (importActual) => ({
-  ...(await importActual<typeof import('../src/server/jobs/worktree.js')>()),
+vi.mock('../src/server/worktrees/worktree.js', async (importActual) => ({
+  ...(await importActual<typeof import('../src/server/worktrees/worktree.js')>()),
   createWorktree: vi.fn(async (_cwd: string, _id: string, _title: string, target: { path: string; branch: string }) => ({
     path: target.path,
     branch: target.branch,

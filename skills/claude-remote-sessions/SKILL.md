@@ -407,6 +407,17 @@ node "$CLAUDE_REMOTE_CLI" factory done                 # finished: summary, revi
   the merge queue lands it. `return` hands it back unfinished; the factory
   resumes from the last commit.
 
+**Cancel factory work**, only when the user asks:
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory cancel f-ab12cd       # or a track name
+```
+
+It stops the unit's agent, closes its items (their PROJECT.md lines stay
+unticked) and removes a loose item's worktree and branch; a track keeps its
+worktree. Refused (409) while a terminal session holds the unit: `return` it
+first. Refused once its merge is running.
+
 ## Limits
 
 - Sessions you start cannot start sessions themselves, peers included: only you add a peer.

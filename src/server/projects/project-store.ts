@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { relativeInside } from '../utils/paths.js';
 import { docPathFor, type RegistryProject } from './registry.js';
-import { resolveInWorktree } from '../jobs/docs.js';
+import { resolveInWorktree } from '../worktrees/resolve.js';
 import {
   healMissingIds,
   parseProjectDoc,

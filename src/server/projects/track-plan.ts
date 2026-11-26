@@ -5,7 +5,7 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { posixKey, toPosix } from '../utils/paths.js';
 import { COMMIT_IDENTITY, git, gitStatusEntries } from '../utils/git.js';
-import { resolveInWorktree } from '../jobs/docs.js';
+import { resolveInWorktree } from '../worktrees/resolve.js';
 import type { RegistryProject } from './registry.js';
 import { readProjectDoc, writeProjectDoc } from './project-store.js';
 import {

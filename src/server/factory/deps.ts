@@ -10,7 +10,7 @@ import { pathKey } from '../utils/paths.js';
 import { killTree, runClaude } from '../agent/claude-run.js';
 import { projectAccount } from '../accounts.js';
 import { getSnapshot, type PlanUsageSnapshot } from '../usage/plan-limits.js';
-import { commitAll, createWorktree, worktreePathFor } from '../jobs/worktree.js';
+import { commitAll, createWorktree, worktreePathFor } from '../worktrees/worktree.js';
 import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { readProjectPlan, worktreeProject } from '../projects/project-plan.js';
 import { mutateProjectDoc, readProjectDoc } from '../projects/project-store.js';

@@ -20,7 +20,7 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/server/db/schema.js');
 const { FcmSender, signJwt, parseServiceAccount } = await import('../src/server/push/fcm.js');
 const push = await import('../src/server/push/push.js');
-const { newlyParked } = await import('../src/server/push/wire.js');
+const { newlyWaiting } = await import('../src/server/push/wire.js');
 const { deviceIdFromUrl } = await import('../src/server/websocket/validation.js');
 const { connections, isDeviceForeground, FOREGROUND_STALE_MS, WS_OPEN } = await import('../src/server/websocket/connections.js');
 
@@ -97,7 +97,7 @@ describe('FcmSender', () => {
     const { transport, calls } = fakeTransport();
     const sender = new FcmSender(account, transport);
     expect(await sender.send('device-token', { data: { kind: 'session', sessionId: 's-1' }, collapseKey: 'session-s-1' })).toEqual({ ok: true });
-    expect(await sender.send('device-token', { data: { kind: 'job' } })).toEqual({ ok: true });
+    expect(await sender.send('device-token', { data: { kind: 'factory' } })).toEqual({ ok: true });
 
     expect(calls.filter((c) => c.url.includes('oauth2'))).toHaveLength(1);
     const exchange = new URLSearchParams(calls[0].body);
@@ -198,17 +198,23 @@ describe('what is pushed', () => {
     for (const value of Object.values(land.data)) expect(typeof value).toBe('string');
   });
 
-  it('announces a job once per wait, not on every write while it stays parked', () => {
-    const job = (status: string, stage = 'design', gate: string | null = 'design') =>
-      ({ id: 'j-1', status, stage, gate, parkReason: 'gate', title: 't', projectName: 'p' }) as never;
-    let state = newlyParked(new Set(), [job('running', 'design', null)]);
-    expect(state.parked).toEqual([]);
-    state = newlyParked(state.keys, [job('parked')]);
-    expect(state.parked).toHaveLength(1);
-    state = newlyParked(state.keys, [job('parked')]);
-    expect(state.parked).toEqual([]);
-    state = newlyParked(state.keys, [job('parked', 'review', 'review')]);
-    expect(state.parked).toHaveLength(1);
+  it('announces a factory unit once per wait, not on every write while it stays waiting', () => {
+    const unit = (needsYou: boolean, step = 'review', reason: string | null = 'escalated') =>
+      ({ key: 'c:/p|f-aaaaaa', needsYou, step, reason, title: 't', projectName: 'p', projectCwd: 'C:\p' }) as never;
+    let state = newlyWaiting(new Set(), [unit(false, 'implement', null)]);
+    expect(state.waiting).toEqual([]);
+    state = newlyWaiting(state.keys, [unit(true)]);
+    expect(state.waiting).toHaveLength(1);
+    state = newlyWaiting(state.keys, [unit(true)]);
+    expect(state.waiting).toEqual([]);
+    state = newlyWaiting(state.keys, [unit(true, 'mockup', 'mockup')]);
+    expect(state.waiting).toHaveLength(1);
+  });
+
+  it('names the factory unit it opens, all values strings', () => {
+    const m = push.factoryWaitMessage({ key: 'c:/p|track:A', projectCwd: 'C:\p', projectName: 'p', title: 'A', reason: null, step: 'review' });
+    expect(m.data).toMatchObject({ kind: 'factory', event: 'parked', unitKey: 'c:/p|track:A', title: 'p: A' });
+    for (const value of Object.values(m.data)) expect(typeof value).toBe('string');
   });
 });
 

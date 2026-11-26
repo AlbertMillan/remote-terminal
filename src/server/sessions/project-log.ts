@@ -17,7 +17,7 @@ import { runClaude } from '../agent/claude-run.js';
 import { git, isGitRepo } from '../utils/git.js';
 import { worktreeOwner, type WorktreeOwner } from '../projects/worktree-owner.js';
 import { loadRegistry } from '../projects/registry.js';
-import { worktreeRoot } from '../jobs/worktree.js';
+import { worktreeRoot } from '../worktrees/worktree.js';
 import { isInside, pathKey } from '../utils/paths.js';
 import { findTranscript } from '../accounts.js';
 
@@ -362,15 +362,15 @@ export async function generateSessionLogForced(ctx: SessionLogContext): Promise<
   const cfg = getConfig().projectLog;
 
   try {
-    // A session in a track or job worktree is logged into its project's main
+    // A session in a track worktree is logged into its project's main
     // checkout: the worktree's copy dies with the folder at Land or Delete, and
     // a run whose cwd is the worktree holds it open, so teardown fails EBUSY on
     // Windows. Evidence (transcript, git) is still read from where the work was.
     const owner = worktreeOwner(ctx.cwd);
     const projectCwd = owner?.projectCwd ?? ctx.cwd;
     if (!owner && !existsSync(ctx.cwd) && isInside(worktreeRoot(), ctx.cwd)) {
-      // A worktree nothing records any more (a deleted track's, a discarded
-      // job's) leaves nowhere to write, and it never comes back, so retrying
+      // A worktree nothing records any more (a deleted track's, a cancelled
+      // factory item's) leaves nowhere to write, and it never comes back, so retrying
       // at every boot would never succeed. Only under the worktree root: any
       // other missing folder may be an unmounted drive, worth a retry later.
       logger.info({ sessionId: ctx.sessionId, cwd: ctx.cwd }, 'project-log: worktree is gone, skipping');

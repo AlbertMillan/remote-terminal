@@ -137,6 +137,13 @@ export function updateMerge(id: string, patch: MergePatch, now = Date.now()): vo
   factoryEvents.emitChange();
 }
 
+/** Drop a parked entry (its unit was cancelled: a Retry would land cancelled work). False when it is not parked. */
+export function deleteParkedMerge(id: string): boolean {
+  const info = getDatabase().prepare("DELETE FROM factory_merges WHERE id = ? AND status = 'parked'").run(id);
+  if (info.changes > 0) factoryEvents.emitChange();
+  return info.changes > 0;
+}
+
 /** The newest factory (not Land) entry for a branch in a project, or null. */
 export function latestMergeFor(projectCwd: string, branch: string): MergeRecord | null {
   const row = getDatabase()

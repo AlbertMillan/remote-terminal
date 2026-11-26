@@ -153,7 +153,7 @@ fun MainScreen(app: App, onChangeServer: () -> Unit, extraScreens: ExtraScreens 
         ) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    // A notification tap or a link: open its session once connected (jobs and projects are
+    // A notification tap or a link: open its session once connected (units and projects are
     // taken by their own screens).
     val link by app.pendingLink.collectAsStateWithLifecycle()
     val isConnected = connection is Connection.State.Connected

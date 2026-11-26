@@ -31,25 +31,6 @@
       "sortOrder": 0,
       "collapsed": false
     },
-    "job": {
-      "id": "job-1",
-      "projectCwd": "C:\\projects\\alpha",
-      "projectName": "alpha",
-      "featureId": "f-abc123",
-      "title": "A feature",
-      "status": "parked",
-      "stage": "design",
-      "gate": "design",
-      "parkReason": "question",
-      "detail": "- Which store? (a) SQLite (b) JSON. Recommends (a).",
-      "stages": [
-        { "name": "design", "status": "done" },
-        { "name": "implement", "status": "pending" }
-      ],
-      "costUsd": 0.42,
-      "createdAt": "2026-11-06T10:00:00.000Z",
-      "updatedAt": "2026-11-06T10:10:00.000Z"
-    },
     "unit": {
       "key": "c:\\projects\\alpha|track:History search",
       "projectCwd": "C:\\projects\\alpha",
@@ -164,7 +145,6 @@
     { "type": "notification", "payload": { "kind": "land", "projectCwd": "C:\\projects\\alpha", "track": "Android app", "ok": true, "detail": "Landed.", "timestamp": "2026-11-06T10:00:00.000Z" } },
     { "type": "notification", "payload": { "kind": "prompt-missing", "sessionId": "s-1", "name": "builder", "detail": "The prompt never arrived.", "timestamp": "2026-11-06T10:00:00.000Z" } },
     { "type": "notification", "payload": { "kind": "account-changed", "sessionId": "s-1", "name": "builder", "detail": "Now logged in as someone else.", "timestamp": "2026-11-06T10:00:00.000Z" } },
-    { "type": "jobs.summary", "payload": { "jobs": ["$job"] } },
     { "type": "factory.summary", "payload": { "units": ["$unit"], "merges": ["$merge"], "counts": { "running": 2, "reviewing": 1, "needsYou": 1, "merging": 1, "done": 3 }, "dispatch": { "started": true, "paused": null, "capped": { "C:\\projects\\beta": "5-hour usage at 82% (cap 80%)" }, "seats": 3, "running": 2 }, "tokensToday": 1900000, "since": "2026-11-06T00:00:00.000Z" } },
     { "type": "projects.changed", "payload": { "projectCwd": "C:\\projects\\alpha" } },
     { "type": "error", "payload": { "message": "Rate limit exceeded" } },

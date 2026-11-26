@@ -188,13 +188,14 @@ describe('the mockup drawer', () => {
     expect(drawer().querySelector<HTMLTextAreaElement>('textarea[data-draft]')?.value ?? '').toBe('');
   });
 
-  it('at the revision cap it escalates: no comment box, Approve stays', async () => {
+  it('at the revision cap it escalates: no comment box, Approve stays, and Cancel is offered', async () => {
     info = { ...INFO, revisions: 3 };
     await openUnit();
     expect(drawer().textContent).toContain('Mockup escalated to you');
     expect(drawer().textContent).toContain('revision 3 of 3');
     expect(drawer().querySelector('[data-fb="mockup-comment"]')).toBeNull();
     expect(drawer().querySelector('[data-fb="mockup-approve"]')).not.toBeNull();
+    expect(drawer().querySelector('[data-fb="view"][data-view="cancel"]')).not.toBeNull();
   });
 
   it('with no page yet it offers to build it again (a release with no outcome)', async () => {

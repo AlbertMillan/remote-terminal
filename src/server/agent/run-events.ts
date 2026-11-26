@@ -4,7 +4,7 @@
  * Its own module, with no imports, so `claude-run` can announce it without
  * depending on whoever listens. The usage ledger subscribes to ingest the run's
  * transcript; having claude-run import the ledger instead made the ledger unable
- * to import anything that imports claude-run (jobs/worktree among them).
+ * to import anything that imports claude-run (worktrees/worktree among them).
  */
 type Listener = () => void;
 
