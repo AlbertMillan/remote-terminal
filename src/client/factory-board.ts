@@ -49,9 +49,13 @@ type Drawer =
   | { kind: 'merge'; id: string }
   | { kind: 'add' };
 
+/**
+ * What POST /api/factory/add answers (server factory/intake.ts): the features
+ * it filed, all into the request's track. A refusal (400/422) carries `error`,
+ * read by failureMessage() like every route's.
+ */
 interface AddResult {
-  features: { id?: string; title: string; requirements?: string[]; track?: string }[];
-  message: string | null;
+  features: { id: string; title: string; requirements: string[]; mockupFirst: boolean }[];
 }
 
 interface Notice {
@@ -137,19 +141,18 @@ export function joinAnswers(questions: FactoryQuestion[], answers: string[]): st
   return answers.map((a, i) => `${i + 1}) ${questions[i]?.question ?? ''}\n   ${a.trim()}`).join('\n');
 }
 
-/** What intake parsed, read leniently: the route belongs to the factory's other half. */
+/** The features intake filed, as POST /api/factory/add answers them; malformed entries are dropped. */
 export function readAddResult(data: Record<string, unknown>): AddResult {
-  const list = (Array.isArray(data.features) ? data.features : Array.isArray(data.items) ? data.items : []) as unknown[];
+  const list = (Array.isArray(data.features) ? data.features : []) as unknown[];
   const features = list
-    .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
+    .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && typeof (f as Record<string, unknown>).featureId === 'string')
     .map((f) => ({
-      id: typeof f.id === 'string' ? f.id : typeof f.featureId === 'string' ? f.featureId : undefined,
-      title: typeof f.title === 'string' ? f.title : String(f.id ?? f.featureId ?? '(untitled)'),
+      id: f.featureId as string,
+      title: typeof f.title === 'string' ? f.title : (f.featureId as string),
       requirements: Array.isArray(f.requirements) ? f.requirements.filter((r): r is string => typeof r === 'string') : [],
-      track: typeof f.track === 'string' ? f.track : undefined,
+      mockupFirst: f.mockupFirst === true,
     }));
-  const message = typeof data.message === 'string' ? data.message : typeof data.detail === 'string' ? data.detail : null;
-  return { features, message };
+  return { features };
 }
 
 export class FactoryBoardView {
@@ -751,11 +754,11 @@ export class FactoryBoardView {
       <div class="fb-acts"><button type="button" class="btn-primary" data-fb="submit-add" ${this.busy ? 'disabled' : ''}>${this.busy ? 'Filing…' : 'Add work'}</button></div>
       ${result && html`<h4>Intake filed</h4>${result.features.length > 0
         ? html`<ul class="fb-intake">${result.features.map(
-            (f) => html`<li>${f.id && html`<span class="fo-id">${f.id}</span> `}${f.title}${f.track && html` <span class="fb-path">→ ${f.track}</span>`}${(f.requirements ?? []).length > 0
-              ? html`<ul>${(f.requirements ?? []).map((r) => html`<li class="fb-path">requirement: ${r}</li>`)}</ul>`
+            (f) => html`<li><span class="fo-id">${f.id}</span> ${f.title}${f.mockupFirst ? html` <span class="fb-path">· mockup first</span>` : ''}${f.requirements.length > 0
+              ? html`<ul>${f.requirements.map((r) => html`<li class="fb-path">requirement: ${r}</li>`)}</ul>`
               : ''}</li>`
           )}</ul>`
-        : html`<p class="fb-path">${result.message ?? 'Nothing was filed.'}</p>`}`}`;
+        : html`<p class="fb-path">Nothing was filed.</p>`}`}`;
   }
 
   private viewButton(view: 'main' | 'summary' | 'diff' | 'changes', label: string): SafeHtml {

@@ -1,14 +1,17 @@
 import { RunAbortedError, type ClaudeRunResult } from '../agent/claude-run.js';
 import { createLogger } from '../utils/logger.js';
 import { ProjectBusyError } from '../projects/project-lock.js';
-import { heartbeat, releaseClaim, updateItem } from './store.js';
+import { getItem, heartbeat, releaseClaim, updateItem } from './store.js';
 import { LEASE_RENEW_MS, type Claimant } from './types.js';
 import { unitJobId, type EngineDeps, type UnitRef, type UnitWorktree } from './deps.js';
 import { DEFAULT_FACTORY_LIMITS, type FactoryLimits } from './limits.js';
 import { ensureRunState, saveRunState } from './run-state.js';
 import { stepHandler, type AgentRequest, type StepContext } from './steps.js';
+import { parseDiscovered, type DiscoveredWork } from './triage.js';
 // Registers the reviewer's step handlers (review, review-fix, per-feature track steps).
 import './review-step.js';
+// Registers the shaping pass (shape).
+import './shape-step.js';
 import { nextStep, recordOutcome, templateFor, type Progress, type WorkflowTemplate } from './templates.js';
 
 const logger = createLogger('factory-runner');
@@ -144,9 +147,14 @@ export async function runUnit(
       deps.now()
     );
 
+    // Work the current step's agent replies listed as discovered (triage.ts).
+    let discovered: DiscoveredWork[] = [];
+
     const agent = async (stepId: string, req: AgentRequest): Promise<ClaudeRunResult> => {
       const note = stepId === interruptedStep ? INTERRUPTED : '';
       if (note) interruptedStep = null;
+      // Read per call: shaping sets a loose item's tier mid-run (a sender's choice stays).
+      const tier = (ref.isTrack ? null : getItem(cwd, ref.featureIds[0])?.modelTier) ?? unit.modelTier;
       const base = {
         allowedTools: req.access === 'write' ? WRITE_TOOLS : READ_TOOLS,
         timeoutMs: deps.stepTimeoutMs(),
@@ -154,7 +162,7 @@ export async function runUnit(
         failOnDenial: false,
         laneKey: cwd,
         tag: { projectCwd: cwd, kind: 'factory' as const, jobId, stage: stepId },
-        ...(unit.modelTier ? { model: unit.modelTier } : {}),
+        ...(tier ? { model: tier } : {}),
       };
       // `read` access reverts every edit; `write` may change the whole worktree.
       const globs = req.access === 'write' ? ['**'] : [];
@@ -177,6 +185,7 @@ export async function runUnit(
         sessionId = result.sessionId;
         saveRunState(cwd, ref.unitId, { sessionId }, deps.now());
       }
+      discovered.push(...parseDiscovered(result.result));
       return result;
     };
 
@@ -220,12 +229,27 @@ export async function runUnit(
         commit,
         saveProgress: save,
       };
+      discovered = [];
       const result = await handler(ctx);
       progress.current = null;
+
+      // Filed whatever the step ended in: work seen before a park is still worth triaging.
+      const found = [...discovered, ...('outcome' in result ? (result.discovered ?? []) : [])];
+      if (found.length > 0 && deps.fileDiscovered) {
+        const from = ref.featureIds.find((id) => !progress.featuresDone.includes(id)) ?? ref.featureIds[ref.featureIds.length - 1];
+        await deps.fileDiscovered(cwd, from, found);
+      }
 
       if ('outcome' in result) {
         recordOutcome(template, progress, step.id, result.outcome);
         save();
+        if (result.requeue) {
+          // It waits on something now (an overlapping item): back to the queue,
+          // which claims it again once nothing blocks it.
+          releaseAll(cwd, ref.featureIds, claimant, deps.now());
+          logger.info({ cwd, unit: ref.unitId, reason: result.requeue }, 'factory: requeued');
+          return { kind: 'deferred', reason: result.requeue };
+        }
         continue;
       }
       if ('park' in result) return park(result.park, step.id);

@@ -228,6 +228,12 @@ export function renderTrackActions(
     ? html`<button class="pw-track-land" data-cwd="${cwd}" data-track="${name}"
                title="Merge this track into ${track.branch.baseBranch} and retire its worktree">Land</button>`
     : '';
+  // The Inbox is loose work: the factory runs it item by item on its own.
+  const send =
+    name === 'Inbox'
+      ? ''
+      : html`<button class="pw-track-factory" data-cwd="${cwd}" data-track="${name}"
+               title="Send this track's open features to the factory with your Settings → Factory defaults">▶</button>`;
   return html`
     <span class="pw-track-actions">
       ${badge}
@@ -236,6 +242,7 @@ export function renderTrackActions(
       ${onMain}
       <button class="pw-track-session" data-cwd="${cwd}" data-track="${name}"
               title="${track.branch ? 'Open a session in this track’s worktree' : 'Create this track’s branch and open a session in it'}">Open session</button>
+      ${send}
       ${land}
       ${del}
     </span>`;

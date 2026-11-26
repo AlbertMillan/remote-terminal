@@ -266,8 +266,7 @@ export function releaseParked(
 }
 
 // ---------------------------------------------------------------------------
-// The server's one dispatcher. Not started at boot yet: nothing files items
-// until intake (f-wlr5dc) and `cr factory send` (item 6) exist.
+// The server's one dispatcher, started at boot by factory-boot.ts.
 
 let dispatcher: Dispatcher | null = null;
 

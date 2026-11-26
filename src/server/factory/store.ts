@@ -110,7 +110,7 @@ function checkPriority(priority: number): void {
   }
 }
 
-const SETTABLE_STATUSES: readonly string[] = ['open', 'parked', 'done', 'cancelled'] satisfies SettableItemStatus[];
+const SETTABLE_STATUSES: readonly string[] = ['open', 'parked', 'done', 'cancelled', 'triage'] satisfies SettableItemStatus[];
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -167,6 +167,8 @@ export interface CreateItemInput {
   priority?: number;
   modelTier?: string | null;
   reviewGranularity?: ReviewGranularity | null;
+  /** `triage` files discovered work that never runs until accepted; `open` otherwise. */
+  status?: 'open' | 'triage';
 }
 
 function isGranularity(value: unknown): value is ReviewGranularity {
@@ -179,7 +181,7 @@ function checkGranularity(value: unknown): void {
   }
 }
 
-/** Add a feature to the factory as an `open` item. Refuses one already there. */
+/** Add a feature to the factory as an `open` (or `triage`) item. Refuses one already there. */
 export function createItem(input: CreateItemInput, now = Date.now()): FactoryItem {
   checkFeatureId(input.featureId);
   if (input.priority !== undefined) checkPriority(input.priority);
@@ -194,7 +196,7 @@ export function createItem(input: CreateItemInput, now = Date.now()): FactoryIte
       `INSERT INTO factory_items
          (project_key, project_cwd, feature_id, track_name, workflow, step, status,
           priority, model_tier, review_granularity, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       key,
@@ -203,6 +205,7 @@ export function createItem(input: CreateItemInput, now = Date.now()): FactoryIte
       input.trackName,
       input.workflow,
       input.step ?? null,
+      input.status === 'triage' ? 'triage' : 'open',
       input.priority ?? DEFAULT_PRIORITY,
       input.modelTier ?? null,
       input.reviewGranularity ?? null,

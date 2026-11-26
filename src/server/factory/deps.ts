@@ -20,6 +20,8 @@ import { installDependencies, needsInstall } from '../projects/project-deps.js';
 import { getActiveTrackBranch } from '../projects/track-store.js';
 import { reattachIfMissing } from '../projects/track-branches.js';
 import { getMergeSink, type MergeSink } from './merge-sink.js';
+import { getIntake } from './intake-store.js';
+import { fileDiscovered, type DiscoveredWork } from './triage.js';
 
 const logger = createLogger('factory');
 
@@ -82,12 +84,18 @@ export interface EngineDeps {
   writeSummary(projectCwd: string, unitId: string, markdown: string): string;
   planUsage(projectCwd: string): PlanUsageSnapshot | null;
   mergeSink(): MergeSink;
+  /**
+   * File work a step found outside its scope as triage items found on
+   * `fromFeature` (triage.ts). Never throws. Optional: without it, discovered
+   * work is dropped (the engine's tests run without a plan to write to).
+   */
+  fileDiscovered?(projectCwd: string, fromFeature: string, work: DiscoveredWork[]): Promise<string[]>;
   notify(event: FactoryEvent): void;
   stepTimeoutMs(): number;
   now(): number;
 }
 
-const projectHash = (projectCwd: string) => createHash('sha1').update(pathKey(projectCwd)).digest('hex').slice(0, 8);
+export const projectHash = (projectCwd: string) => createHash('sha1').update(pathKey(projectCwd)).digest('hex').slice(0, 8);
 
 /**
  * The id a unit's runs are tagged with in `agent_runs.job_id`, which is what
@@ -98,7 +106,7 @@ export function unitJobId(projectCwd: string, unitId: string): string {
   return `factory:${projectHash(projectCwd)}:${unitId}`;
 }
 
-function registryProject(projectCwd: string): RegistryProject {
+export function registryProject(projectCwd: string): RegistryProject {
   try {
     const key = pathKey(projectCwd);
     const found = loadRegistry().projects.find((p) => pathKey(p.cwd) === key);
@@ -189,9 +197,14 @@ export function defaultEngineDeps(): EngineDeps {
         worktree = { path: track.worktreePath, branch: track.branch, baseBranch: track.baseBranch };
       } else {
         const featureId = unit.featureIds[0];
+        // An item of a branched track starts from (and merges into) its track's
+        // branch, where its line lives: the merge queue ticks it there. Others
+        // (the Inbox) start from the project's current branch.
+        const trackBranch = getActiveTrackBranch(unit.projectCwd, unit.trackName);
         const created = await createWorktree(unit.projectCwd, featureId, title, {
           path: worktreePathFor(`factory-${featureId}`),
           branch: `factory/${slug(title)}-${featureId}`,
+          ...(trackBranch ? { base: trackBranch.branch } : {}),
         });
         worktree = { path: created.path, branch: created.branch, baseBranch: created.baseBranch };
       }
@@ -223,7 +236,9 @@ export function defaultEngineDeps(): EngineDeps {
       const found = new Set(inOrder.map((f) => f.id));
       // An item whose line is gone from the plan still runs under its id.
       const missing = featureIds.filter((id) => !found.has(id)).map((id) => ({ id, title: id, spec: null }));
-      return [...inOrder.map((f) => ({ id: f.id, title: f.title, spec: f.spec })), ...missing];
+      // A loose item's line links no spec: shaping's (shape-step.ts) is its spec.
+      const spec = (f: { id: string; spec: string | null }) => f.spec ?? getIntake(projectCwd, f.id)?.specPath ?? null;
+      return [...inOrder.map((f) => ({ id: f.id, title: f.title, spec: spec(f) })), ...missing];
     },
 
     verifyCommands(worktreePath) {
@@ -271,6 +286,8 @@ export function defaultEngineDeps(): EngineDeps {
     },
 
     mergeSink: getMergeSink,
+
+    fileDiscovered: (projectCwd, fromFeature, work) => fileDiscovered(registryProject(projectCwd), fromFeature, work),
 
     notify(event) {
       logger.info({ ...event }, `factory: ${event.kind}`);

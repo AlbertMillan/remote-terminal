@@ -44,6 +44,8 @@ import { registerServerRestartRoutes } from './server-restart.js';
 import { registerServerSettingsRoutes } from './server-settings.js';
 import { registerFactorySettingsRoutes } from './factory/review-settings.js';
 import { registerFactoryBoardRoutes } from './factory/board-routes.js';
+import { registerFactoryRoutes } from './factory/factory-routes.js';
+import { stopFactory } from './factory/dispatcher.js';
 import { registerAgentSessionRoutes } from './agent/sessions-api.js';
 import { registerPushRoutes, startPush } from './push/wire.js';
 import { registerUploadRoutes, sweepUploads } from './sessions/uploads.js';
@@ -271,6 +273,8 @@ export async function createApp(): Promise<FastifyInstance> {
   registerServerSettingsRoutes(app);
   registerFactorySettingsRoutes(app);
   registerFactoryBoardRoutes(app);
+  // Add, send, status, answer, triage; /api/agent/factory/* authenticate like the routes below.
+  registerFactoryRoutes(app);
   // Sessions that start sessions: loopback + per-session token, unlike the rest of /api/*.
   registerAgentSessionRoutes(app);
   registerPushRoutes(app);
@@ -482,6 +486,10 @@ export async function createApp(): Promise<FastifyInstance> {
     stopUsageLedger();
     stopClaudeNameWatch();
     stopAccountWatch();
+
+    // Factory runs give their claims back (to resume at the next boot) while the
+    // database is still open; bounded, so a run slow to die never holds shutdown.
+    await Promise.race([stopFactory(), new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
 
     // Close database
     closeDatabase();

@@ -8,9 +8,11 @@
 /**
  * `open` is waiting to be claimed (ready once nothing blocks it); `in_progress`
  * is claimed and only ever set by a claim; `parked` waits for the user;
- * `done` and `cancelled` are closed and no longer block anything.
+ * `done` and `cancelled` are closed and no longer block anything. `triage` is
+ * discovered work waiting to be accepted (factory/triage.ts): never ready,
+ * never claimed, and not "waiting for you" in the dispatcher's pause count.
  */
-export type ItemStatus = 'open' | 'in_progress' | 'parked' | 'done' | 'cancelled';
+export type ItemStatus = 'open' | 'in_progress' | 'parked' | 'done' | 'cancelled' | 'triage';
 
 /** Statuses an item can be moved to by an update; `in_progress` only comes from a claim. */
 export type SettableItemStatus = Exclude<ItemStatus, 'in_progress'>;
