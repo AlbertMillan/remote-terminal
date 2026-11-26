@@ -524,6 +524,14 @@ function runMigrations(database: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_factory_merges_project ON factory_merges(project_key, status);
       `,
     },
+    {
+      // A track's (or item's) override of Settings → Factory's review
+      // granularity: 'track' or 'feature', NULL for the server setting
+      // (factory/review-settings.ts). Set when the work is sent, by the session
+      // that planned it.
+      name: '026_factory_review_granularity',
+      sql: `ALTER TABLE factory_items ADD COLUMN review_granularity TEXT;`,
+    },
   ];
 
   const appliedMigrations = database
