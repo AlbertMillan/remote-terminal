@@ -48,3 +48,6 @@ SESSION-LOG.md
 
 # claude-remote: per-job review findings (scratch, not source)
 project/reviews/
+
+# Local MCP server config (per machine)
+.mcp.json
