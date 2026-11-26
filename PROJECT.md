@@ -143,4 +143,4 @@ status: active
 - [x] `f-c23d5b` P2 Protocol and Android — new `/ws` payloads in `shared/protocol.ts`, the fixture and `Protocol.kt` → project/code-factory.md
 
 ## Track: Factory mockup step
-- [x] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
+- [ ] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
