@@ -397,6 +397,93 @@ describe('conflicts', () => {
   });
 });
 
+describe('after the merge', () => {
+  /** A bare remote main pushes to, as a project with an origin. */
+  function withRemote(): string {
+    const remote = join(scratch, 'remote.git');
+    git(scratch, 'init', '-q', '--bare', remote);
+    git(repo, 'remote', 'add', 'origin', remote);
+    git(repo, 'push', '-q', '-u', 'origin', 'main');
+    return remote;
+  }
+
+  it('an item merge into main pushes the merge and the tick together', async () => {
+    const remote = withRemote();
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    const outcome = await queue.enqueueMerge(entry(a, ['f-aaaaaa'])).done;
+    expect(outcome.status).toBe('merged');
+    expect(outcome.detail).toMatch(/ticked f-aaaaaa; pushed$/);
+    expect(git(remote, 'rev-parse', 'main')).toBe(git(repo, 'rev-parse', 'HEAD'));
+    expect(git(remote, 'show', 'main:PROJECT.md')).toContain('- [x] `f-aaaaaa` First step');
+  });
+
+  it('a factory track lands, then its features are ticked on main and the tick is pushed after Land’s push', async () => {
+    const remote = withRemote();
+    const track = await ensureTrackBranch({ cwd: repo }, 'Alpha');
+    git(repo, 'push', '-q');
+    commitFile(track.worktreePath, 'alpha.ts', 'alpha\n', 'track work');
+    queue.configureMergeQueue({
+      land: async (project, name) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+        build: { ran: false, ok: true, detail: 'no build script' },
+      }),
+    });
+    const outcome = await queue.enqueueMerge({
+      projectCwd: repo,
+      kind: 'track',
+      branch: track.branch,
+      worktreePath: track.worktreePath,
+      baseBranch: 'main',
+      featureIds: ['f-aaaaaa', 'f-bbbbbb'],
+      trackName: 'Alpha',
+    }).done;
+    expect(outcome.status, outcome.detail).toBe('merged');
+    expect(verified).toEqual([track.worktreePath]);
+    expect(git(repo, 'show', 'HEAD:PROJECT.md')).toContain('- [x] `f-bbbbbb` Second step');
+    expect(git(remote, 'rev-parse', 'main')).toBe(git(repo, 'rev-parse', 'HEAD'));
+    expect(getMerge(outcome.id)?.mergeSha).toBe(outcome.mergeSha);
+  });
+
+  it('a tick that fails after the merge is reported, never turned into a park', async () => {
+    factory.createItem({ projectCwd: repo, featureId: 'f-aaaaaa', trackName: 'Alpha', workflow: 'track' });
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    // The working copy's PROJECT.md is a folder: the tick can't be written there.
+    rmSync(join(repo, 'PROJECT.md'));
+    mkdirSync(join(repo, 'PROJECT.md'));
+    const outcome = await queue.enqueueMerge(entry(a, ['f-aaaaaa'])).done;
+    expect(outcome.status).toBe('merged');
+    expect(outcome.detail).toMatch(/could not tick f-aaaaaa/);
+    expect(outcome.mergeSha).toBeTruthy();
+    expect(factory.getItem(repo, 'f-aaaaaa')?.status).toBe('done');
+  });
+});
+
+describe('a second Land of a queued track', () => {
+  it('is refused (409) instead of queueing a Land that can only fail', async () => {
+    await ensureTrackBranch({ cwd: repo }, 'Alpha');
+    const a = itemWorktree('a', 'a.ts', 'a\n');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    verify = async () => {
+      await gate;
+      return { ok: true, detail: 'ok' };
+    };
+    queue.configureMergeQueue({
+      land: async (project, name) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+        build: { ran: false, ok: true, detail: 'no build script' },
+      }),
+    });
+    const item = queue.enqueueMerge({ ...entry(a, ['f-cccccc']), trackName: 'Beta' });
+    const first = queue.queueLand({ cwd: repo }, 'Alpha');
+    expect(first.queuedBehind).toMatch(/1 merge/);
+    expect(() => queue.queueLand({ cwd: repo }, 'Alpha')).toThrow(/already in the merge queue/);
+    release();
+    expect((await item.done).status).toBe('merged');
+    expect((await first.result).mergeSha).toBeTruthy();
+  });
+});
+
 describe('the resolver never holds the project lock', () => {
   it('another track operation takes the lock while a track’s conflict is being resolved, and the track worktree stays untouched', async () => {
     const track = await ensureTrackBranch({ cwd: repo }, 'Alpha');

@@ -71,8 +71,9 @@ const logger = createLogger('merge-queue');
  *     never `git add`), pushes main where there is a remote, and rebuilds.
  *
  * The project lock is taken only around the git that touches a shared
- * checkout (the merge, Update from main, Land), never across a resolver run
- * on an item's own worktree or a verification: the lock is try-only, and
+ * checkout (the merge, the fast-forward of a track's Update, Land), never
+ * across a resolver run or a verification — an item resolves in its own
+ * worktree, a track in a scratch checkout: the lock is try-only, and
  * holding it for minutes would refuse every Land, Delete and board write.
  * A busy lock makes the entry hold and retry; nothing waits on the queue
  * while holding the lock, so this cannot deadlock.
@@ -381,6 +382,13 @@ export interface QueuedLand {
 export function queueLand(project: RegistryProject, trackName: string): QueuedLand {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
+  // A second Land of the same track (a double click, a Land resumed at boot)
+  // would only fail at its turn with "no branch to land", after the first.
+  const lane = lanes.get(pathKey(project.cwd));
+  const sameLand = (p: Pending | null) => p?.record.kind === 'session-land' && p.record.branch === track.branch;
+  if (lane && (sameLand(lane.current) || lane.pending.some(sameLand))) {
+    throw new TrackBranchError(`A Land of "${trackName}" is already in the merge queue; its result comes as a notification`, 409);
+  }
   const queuedBehind = mergeQueueBusy(project.cwd);
   const ticket = enqueueMerge({
     projectCwd: project.cwd,
@@ -423,8 +431,20 @@ async function drain(lane: Lane): Promise<void> {
   try {
     for (let next = lane.pending.shift(); next; next = lane.pending.shift()) {
       lane.current = next;
-      const outcome = await processEntry(lane, next.record);
+      let outcome: MergeOutcome;
+      try {
+        outcome = await processEntry(lane, next.record);
+      } catch (error) {
+        // processEntry catches the entry's own failures; what reaches here is
+        // its bookkeeping failing (the database). Never let it escape: `drain`
+        // runs unawaited, and an unhandled rejection shuts the server down.
+        logger.error({ id: next.record.id, error: (error as Error).message }, 'merge queue: entry bookkeeping failed');
+        const detail = `The merge queue could not record this entry: ${(error as Error).message}`;
+        outcome = { id: next.record.id, status: 'parked', mergeSha: null, detail, conflict: null, error: error as Error, land: null };
+      }
       lane.current = null;
+      // Only unfinished entries need a live ticket; a finished one answers from its row.
+      tickets.delete(next.record.id);
       next.resolve(outcome);
     }
   } finally {
@@ -691,12 +711,31 @@ async function mergeIntoBase(
   }
   const mergeSha = (await git(mergeCwd, ['rev-parse', 'HEAD']))?.trim() ?? '';
   updateMerge(record.id, { mergeSha });
-  const ticked = await tickFeatures(mergeCwd, docRel, record.featureIds, title);
-  let pushed = false;
-  if (!intoTrack && (await hasRemote(mergeCwd))) pushed = (await git(mergeCwd, ['push'])) !== null;
   const where = intoTrack ? `the track branch ${record.baseBranch}` : record.baseBranch;
-  const tick = ticked.length > 0 ? `; ticked ${ticked.join(', ')}` : '';
-  return { mergeSha, detail: `Merged ${record.branch} into ${where}${pushed ? ' and pushed' : ''}${tick}` };
+  // Track branches are local and never pushed (as the job merge stage).
+  const after = await tickAndPush(mergeCwd, docRel, record.featureIds, title, !intoTrack);
+  return { mergeSha, detail: `Merged ${record.branch} into ${where}${after}` };
+}
+
+/**
+ * After a merge has landed: tick its features, then push (main only, where
+ * there is a remote). Never throws — the merge stands, so a failure here is
+ * reported in the detail and logged, never turned into a park. The push goes
+ * after the tick so the tick commit is published with the merge.
+ */
+async function tickAndPush(cwd: string, docRel: string, featureIds: string[], title: string, push: boolean): Promise<string> {
+  let note = '';
+  try {
+    const ticked = await tickFeatures(cwd, docRel, featureIds, title);
+    if (ticked.length > 0) note += `; ticked ${ticked.join(', ')}`;
+  } catch (error) {
+    logger.warn({ cwd, featureIds, error: (error as Error).message }, 'merge queue: ticking failed after the merge');
+    note += `; could not tick ${featureIds.join(', ')} in ${docRel} (${(error as Error).message}): tick them by hand`;
+  }
+  if (push && (await hasRemote(cwd))) {
+    note += (await git(cwd, ['push'])) !== null ? '; pushed' : '; the push failed — push by hand';
+  }
+  return note;
 }
 
 // --- track and session-land --------------------------------------------------
@@ -747,9 +786,13 @@ async function mergeTrack(lane: Lane, record: MergeRecord): Promise<Done> {
       throw new ParkError((error as Error).message, null, error as Error);
     }
     updateMerge(record.id, { mergeSha: landed.mergeSha });
-    // The section is back on main now: the factory's features are ticked there.
-    const ticked = record.featureIds.length > 0 ? await tickFeatures(record.projectCwd, docRel, record.featureIds, track.trackName) : [];
-    const detail = landed.detail + (ticked.length > 0 ? `; ticked ${ticked.join(', ')}` : '');
+    // The section is back on main now: the factory's features are ticked
+    // there, and the tick pushed after Land's own push.
+    const after =
+      record.featureIds.length > 0
+        ? await tickAndPush(record.projectCwd, docRel, record.featureIds, track.trackName, landed.pushed)
+        : '';
+    const detail = landed.detail + after;
     return { mergeSha: landed.mergeSha, detail, land: { ...landed, detail } };
   }
 }
