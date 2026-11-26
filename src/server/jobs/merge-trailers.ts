@@ -18,11 +18,23 @@ export function jobMergeMessageArgs(title: string, ids: { jobId: string; feature
   return ['-m', `Merge job: ${title}`, '-m', trailers.join('\n')];
 }
 
+/**
+ * The `-m` arguments for a merge that carries several features at once (the
+ * factory's merge queue, one agent run over a track's features in order): one
+ * `Feature:` trailer per feature, so Delete track ties the merge to each.
+ */
+export function multiFeatureMergeMessageArgs(title: string, ids: { jobId: string; featureIds: string[] }): string[] {
+  const trailers = [`${JOB_ID_TRAILER}: ${ids.jobId}`, ...ids.featureIds.map((f) => `${FEATURE_TRAILER}: ${f}`)];
+  return ['-m', `Merge job: ${title}`, '-m', trailers.join('\n')];
+}
+
 export interface MergeCommit {
   sha: string;
   subject: string;
   jobId: string | null;
   featureId: string | null;
+  /** Every `Feature:` trailer, in order (a factory merge can carry several). */
+  featureIds: string[];
 }
 
 /** `git log --format` for `parseMergeLog`: one line per commit, tab-separated. */
@@ -42,6 +54,7 @@ export function parseMergeLog(out: string): MergeCommit[] {
       // A hand-amended merge could carry the key twice; the first one wins.
       jobId: jobId.split(',')[0].trim() || null,
       featureId: featureId.split(',')[0].trim() || null,
+      featureIds: featureId.split(',').map((f) => f.trim()).filter(Boolean),
     });
   }
   return commits;

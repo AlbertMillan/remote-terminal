@@ -135,6 +135,9 @@ status: active
 - [x] `f-8rep2o` P2 History, share and links — Resume/Fork from history, Android share-to, `claude-remote://` links → project/android-app.md
 - [x] `f-q2m7vx` P2 Attach and share any file — pinned Attach key (Photo / File menu), share target for any file(s), Paste takes any URI → project/file-uploads.md
 
+## Track: Factory merge queue
+- [x] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
+
 ## Track: Code factory
 - [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
 - [x] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and a plan-usage cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md

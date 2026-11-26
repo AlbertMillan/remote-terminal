@@ -50,7 +50,7 @@ function tail(text: string, limit = MAX_OUTPUT_CHARS): string {
  * Run one declared command in the worktree. Non-zero exit is a failure, full
  * stop — this is the deterministic half, so it does not get to interpret.
  */
-async function runCommand(cwd: string, command: string): Promise<QaCheck> {
+export async function runCommand(cwd: string, command: string): Promise<QaCheck> {
   try {
     const { stdout, stderr } = await execAsync(command, {
       cwd,
