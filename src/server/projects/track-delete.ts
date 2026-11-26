@@ -23,7 +23,7 @@ import {
 import { deleteTrackBranchRows, listTrackBranches, type TrackBranch } from './track-store.js';
 import { readProjectPlan } from './project-plan.js';
 import { isInstalling } from './project-deps.js';
-import { guessTrackWork, type GuessedCommit, type GuessedFile } from './track-attribution.js';
+import { guessTrackWork, type GuessedCommit, type GuessedFile, type RecordedClaim } from './track-attribution.js';
 import { deletePeerNotes } from '../sessions/prompt-file.js';
 
 const logger = createLogger('track-delete');
@@ -130,6 +130,13 @@ export interface TrackDeletePlan {
   guessedFiles: GuessedFile[];
   /** Commits on main this track's sessions made. A guess: offered unticked. */
   guessedCommits: GuessedCommit[];
+  /**
+   * Terminal sessions that held the track's factory work (Take over, or started on the
+   * track). A RECORD, not a guess: their transcripts are kept out of the guesses above,
+   * and their commits are on the track's branch (removed with it) or inside a factory
+   * merge listed in `merges` (reverted with it, found by its `Feature:` trailers).
+   */
+  recordedClaims: RecordedClaim[];
   /**
    * The track never had a branch, so any other code written for it on main
    * cannot be told apart from anything else, and this delete leaves it alone.
@@ -251,7 +258,7 @@ export async function planTrackDelete(
 
   const sessionLogGroup = hasSessionLogGroup(cwd, trackName, docRel);
 
-  const guess = repo ? await guessTrackWork(project, trackName) : { files: [], commits: [] };
+  const guess = repo ? await guessTrackWork(project, trackName) : { files: [], commits: [], recorded: [] };
   const recorded = new Set(merges.map((m) => m.sha));
   const guessedFiles = guess.files;
   const guessedCommits = guess.commits.filter((c) => !recorded.has(c.sha));
@@ -275,6 +282,7 @@ export async function planTrackDelete(
         rows: rows.map((r) => [r.id, r.landedAt]),
         guessedFiles: guessedFiles.map((g) => [g.path, g.status]),
         guessedCommits: guessedCommits.map((c) => c.sha),
+        recordedClaims: guess.recorded.map((c) => [c.sessionId, c.unitId, c.endCommit]),
       })
     )
     .digest('hex');
@@ -296,6 +304,7 @@ export async function planTrackDelete(
     mainDirty,
     guessedFiles,
     guessedCommits,
+    recordedClaims: guess.recorded,
     unattributed,
   };
 }

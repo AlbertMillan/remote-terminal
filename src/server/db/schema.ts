@@ -562,6 +562,35 @@ function runMigrations(database: Database.Database): void {
         );
       `,
     },
+    {
+      // A terminal session's hold on a factory unit (factory/session-claims.ts):
+      // one row per claim, from Take over (or a spawned session's start on the
+      // track) to Return or Done. It is the RECORD of the session's work on the
+      // unit (docs/change-provenance.md): the worktree, the commits it spans
+      // (base_commit..end_commit) and the Claude transcripts the session ran,
+      // so attribution reads it instead of guessing. Kept after the claim ends.
+      name: '028_factory_session_claims',
+      sql: `
+        CREATE TABLE IF NOT EXISTS factory_session_claims (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_key TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          unit_id TEXT NOT NULL,
+          track_name TEXT NOT NULL,
+          feature_ids TEXT NOT NULL DEFAULT '[]',
+          session_id TEXT NOT NULL,
+          transcript_ids TEXT NOT NULL DEFAULT '[]',
+          worktree_path TEXT,
+          base_commit TEXT,
+          end_commit TEXT,
+          claimed_at TEXT NOT NULL,
+          released_at TEXT,
+          ended_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_session_claims_project ON factory_session_claims(project_key, unit_id);
+        CREATE INDEX IF NOT EXISTS idx_factory_session_claims_session ON factory_session_claims(session_id);
+      `,
+    },
   ];
 
   const appliedMigrations = database

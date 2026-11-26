@@ -56,6 +56,7 @@ const tracks = {
   ...(await import('../src/server/projects/track-update.js')),
 };
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
+const sessionClaims = await import('../src/server/factory/session-claims.js');
 
 const PLAN = `## Track: Usage
 - [ ] \`f-u11111\` Step 1
@@ -358,5 +359,70 @@ describe('guesses in Delete track', () => {
 
     expect(readFileSync(join(repo, 'src', 'usage', 'pricing.ts'), 'utf-8')).toBe('keep me\n');
     expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).toContain('Usage');
+  });
+});
+
+describe('recorded factory claims (f-c4urw6)', () => {
+  const { recordClaimStart, recordClaimEnd } = sessionClaims;
+
+  beforeEach(() => {
+    getDatabase().exec('DELETE FROM factory_session_claims');
+  });
+
+  /** A terminal session that held the Usage track's factory work, under transcript `sess-usage`. */
+  function claimUsage(): void {
+    const record = recordClaimStart({
+      projectCwd: repo,
+      unitId: 'track:Usage',
+      trackName: 'Usage',
+      featureIds: ['f-u11111'],
+      sessionId: 'term-1',
+      worktreePath: join(repo, '..', 'wt-usage'),
+      baseCommit: 'aaa',
+      transcriptId: 'sess-usage',
+    });
+    recordClaimEnd(record.id, { endCommit: 'bbb', endedBy: 'done' });
+  }
+
+  it('reports a claimed session as a record and keeps its transcript out of the guess', async () => {
+    usageSession();
+    writeFileSync(join(repo, 'src', 'schema.ts'), 'b\n');
+    claimUsage();
+
+    const guess = await guessTrackWork(project(), 'Usage');
+
+    expect(guess.sessions).toEqual([]);
+    expect(guess.files).toEqual([]);
+    expect(guess.recorded).toEqual([
+      {
+        sessionId: 'term-1',
+        unitId: 'track:Usage',
+        featureIds: ['f-u11111'],
+        worktreePath: join(repo, '..', 'wt-usage'),
+        baseCommit: 'aaa',
+        endCommit: 'bbb',
+        endedBy: 'done',
+      },
+    ]);
+    // Another track's guess neither lists the record nor guesses with its transcript.
+    expect((await guessTrackWork(project(), 'Other')).recorded).toEqual([]);
+  });
+
+  it('leaves unclaimed sessions to today\'s inference', async () => {
+    usageSession();
+    writeFileSync(join(repo, 'src', 'schema.ts'), 'b\n');
+    const guess = await guessTrackWork(project(), 'Usage');
+    expect(guess.sessions).toEqual(['sess-usage']);
+    expect(guess.recorded).toEqual([]);
+  });
+
+  it('Delete lists the record instead of guessing the claimed session\'s files', async () => {
+    usageSession();
+    writeFileSync(join(repo, 'src', 'schema.ts'), 'b\n');
+    claimUsage();
+    const plan = await planTrackDelete(project(), 'Usage', []);
+    expect(plan.guessedFiles).toEqual([]);
+    expect(plan.guessedCommits).toEqual([]);
+    expect(plan.recordedClaims.map((c) => [c.sessionId, c.unitId, c.endedBy])).toEqual([['term-1', 'track:Usage', 'done']]);
   });
 });

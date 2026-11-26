@@ -2,6 +2,7 @@ import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { requestJson, failureMessage } from './api.js';
 import { formatTokens, shortAge } from './format.js';
 import { cardKind, cardStatus, progressStrip } from './factory-overlay.js';
+import { isClaimAction, renderClaimActions, runClaimAction } from './factory-claims.js';
 import type {
   FactoryBoard,
   FactoryBoardUnit,
@@ -70,6 +71,10 @@ export interface FactoryBoardHost {
   returnToMain(): void;
   /** The overlay hides while the board is up; re-check after a change. */
   syncOverlay(): void;
+  /** Show a session's terminal (a claimed unit's "Open terminal"); a parked one is revived. */
+  openSession?(sessionId: string): void;
+  /** The session's row is still in the sidebar. */
+  sessionExists?(sessionId: string): boolean;
 }
 
 function readStorage(key: string): string | null {
@@ -435,6 +440,19 @@ export class FactoryBoardView {
         this.render();
         return;
       }
+      default:
+        // Take over / Open terminal / Return to factory / Done (factory-claims.ts).
+        if (unit && kind && isClaimAction(kind)) {
+          return runClaimAction(kind, {
+            unit,
+            act: (label, call, done) => this.act(label, call, done),
+            post: (url, body) => this.post(url, body),
+            openSession: (id) => {
+              this.hide();
+              this.host.openSession?.(id);
+            },
+          });
+        }
     }
   }
 
@@ -685,9 +703,10 @@ export class FactoryBoardView {
           (f) => html`<li class="${f.state}"><span class="fb-mark">${f.state === 'done' ? '✓' : f.state === 'now' ? '…' : '○'}</span> ${f.state === 'now' ? html`<b>${f.title}</b> <span class="fb-path">(now)</span>` : f.title}</li>`
         )}</ul>`);
     }
+    parts.push(renderClaimActions(u, this.busy, (id) => this.host.sessionExists?.(id) ?? false));
     parts.push(html`<h4>Live</h4><dl class="fb-kv">
       <dt>Step</dt><dd>${u.step ?? '—'}</dd>
-      <dt>Heartbeat</dt><dd>${u.heartbeatAt ? `${shortAge(u.heartbeatAt)} ago` : '—'}</dd>
+      <dt>Heartbeat</dt><dd>${u.claim ? (u.claim.live ? 'your terminal' : 'terminal closed') : u.heartbeatAt ? `${shortAge(u.heartbeatAt)} ago` : '—'}</dd>
       <dt>Tokens</dt><dd>${formatTokens(u.tokens)}</dd>
       ${u.detail.worktreePath && html`<dt>Worktree</dt><dd class="fb-mono">${u.detail.worktreePath}</dd>`}
       ${u.detail.branch && html`<dt>Branch</dt><dd class="fb-mono">${u.detail.branch}</dd>`}

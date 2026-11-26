@@ -125,6 +125,8 @@
       <div id="terminal-header" class="terminal-header hidden">
         <span id="session-name">Session</span>
         <div class="terminal-controls">
+          <!-- Shown only while this session holds factory work (factory-claims.ts). -->
+          <button id="return-factory-btn" type="button" class="btn-secondary return-factory-btn hidden">Return to factory</button>
           <!-- The session's Claude account; moves its conversation to another (account-menu.ts). -->
           <button id="session-account-btn" type="button" class="account-chip hidden" aria-haspopup="menu" aria-expanded="false"></button>
           <div id="session-account-menu" class="account-menu hidden" role="menu" aria-label="Claude account"></div>

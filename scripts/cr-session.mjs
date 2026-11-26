@@ -16,12 +16,18 @@
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
  *   node "$CLAUDE_REMOTE_CLI" factory status
+ *   node "$CLAUDE_REMOTE_CLI" factory take|return|done [<feature-id>|<track>]
  *
  * `factory` drives the code factory (project/code-factory.md) for this
  * session's project: `add` files loose work into the Inbox (`--from` files it
  * as work discovered on those items, into triage); `send` hands a planned
  * track (this worktree's when none is named) to the factory with optional
  * review granularity and per-feature models; `status` prints its state.
+ * `take` stops the factory's agent on a unit and opens a new session in its
+ * worktree that continues its conversation (not from a started session);
+ * `return` gives the unit this session (or one it started) holds back to the
+ * factory, which resumes it from the last commit; `done` sends that work to
+ * the factory's summary, reviewer and merge queue — never a direct merge.
  *
  * `land` with no track lands the track whose worktree this session is in, and
  * closes this session to do it. `update` merges the base branch into that
@@ -57,9 +63,14 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]...  (the work, free-form, on stdin)
   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
-  node "$CLAUDE_REMOTE_CLI" factory status`;
+  node "$CLAUDE_REMOTE_CLI" factory status
+  node "$CLAUDE_REMOTE_CLI" factory take [<feature-id>|<track>]
+  node "$CLAUDE_REMOTE_CLI" factory return [<feature-id>|<track>]
+  node "$CLAUDE_REMOTE_CLI" factory done [<feature-id>|<track>]`;
 
 const REVIEWS = ['track', 'feature'];
+/** Subcommands that claim or release factory work for a terminal session. */
+const CLAIM_SUBS = ['take', 'return', 'done'];
 
 /**
  * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
@@ -69,6 +80,12 @@ export function parseFactoryArgs(argv) {
   const [sub, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
+    // take|return|done name their unit positionally: a feature id or a track name.
+    if (CLAIM_SUBS.includes(sub) && !rest[i].startsWith('--')) {
+      if (flags.target !== undefined) throw new UsageError(`factory ${sub} takes one feature id or track name`);
+      flags.target = rest[i];
+      continue;
+    }
     const m = /^--(track|from|review|model)(?:=(.*))?$/.exec(rest[i]);
     if (!m) throw new UsageError(`unknown argument: ${rest[i]}`);
     const value = m[2] !== undefined ? m[2] : rest[++i];
@@ -89,8 +106,15 @@ export function parseFactoryArgs(argv) {
 /** The request for a `factory` subcommand, or a usage error. */
 async function factoryRequest(argv, stdin, headers) {
   const { sub, flags } = parseFactoryArgs(argv);
-  const allowed = { add: ['track', 'from'], send: ['track', 'review', 'models'], status: [] }[sub];
-  if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send or status');
+  const allowed = {
+    add: ['track', 'from'],
+    send: ['track', 'review', 'models'],
+    status: [],
+    take: ['target', 'track'],
+    return: ['target'],
+    done: ['target'],
+  }[sub];
+  if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send, status, take, return or done');
   const extra = Object.keys(flags).find((f) => !allowed.includes(f));
   if (extra) throw new UsageError(`factory ${sub} does not take --${extra === 'models' ? 'model' : extra}`);
   if (flags.track !== undefined && !flags.track.trim()) throw new UsageError('--track needs a track name');
@@ -100,6 +124,11 @@ async function factoryRequest(argv, stdin, headers) {
     body: JSON.stringify(body),
   });
   if (sub === 'status') return { path: '/api/agent/factory/status', request: { method: 'GET', headers } };
+  if (CLAIM_SUBS.includes(sub)) {
+    const target = flags.target ?? flags.track;
+    if (flags.target !== undefined && flags.track !== undefined) throw new UsageError(`factory ${sub} takes a target or --track, not both`);
+    return { path: `/api/agent/factory/${sub}`, request: post(target !== undefined ? { target } : {}) };
+  }
   if (sub === 'send') {
     if (flags.review !== undefined && !REVIEWS.includes(flags.review)) {
       throw new UsageError(`--review must be one of: ${REVIEWS.join(', ')}`);

@@ -123,3 +123,38 @@ describe('factory status and usage', () => {
     });
   });
 });
+
+describe('factory take|return|done', () => {
+  it('take names its unit positionally (a feature id or a track), or sends none', async () => {
+    const byId = await run(['factory', 'take', 'f-abc123']);
+    expect(byId.code).toBe(0);
+    expect(byId.fetchImpl.mock.calls[0][0]).toBe('http://127.0.0.1:4399/api/agent/factory/take');
+    expect(bodyOf(byId.fetchImpl)).toEqual({ target: 'f-abc123' });
+    const byTrack = await run(['factory', 'take', '--track', 'Split view']);
+    expect(bodyOf(byTrack.fetchImpl)).toEqual({ target: 'Split view' });
+    const none = await run(['factory', 'take']);
+    expect(bodyOf(none.fetchImpl)).toEqual({});
+  });
+
+  it('return and done post to their routes, with an optional target', async () => {
+    const back = await run(['factory', 'return']);
+    expect(back.fetchImpl.mock.calls[0][0]).toBe('http://127.0.0.1:4399/api/agent/factory/return');
+    expect(bodyOf(back.fetchImpl)).toEqual({});
+    const done = await run(['factory', 'done', 'Search']);
+    expect(done.fetchImpl.mock.calls[0][0]).toBe('http://127.0.0.1:4399/api/agent/factory/done');
+    expect(bodyOf(done.fetchImpl)).toEqual({ target: 'Search' });
+  });
+
+  it('refuses two targets, and flags the subcommand does not take, before any request', async () => {
+    for (const argv of [
+      ['factory', 'take', 'f-a', 'f-b'],
+      ['factory', 'return', '--track', 'X'],
+      ['factory', 'done', '--review', 'track'],
+      ['factory', 'take', 'f-a', '--track', 'X'],
+    ]) {
+      const res = await run(argv);
+      expect(res.code).not.toBe(0);
+      expect(res.fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+});

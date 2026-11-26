@@ -39,6 +39,8 @@ export interface SessionListViewHost {
   deleteCategory(categoryId: string): void;
   showCategoryModal(mode: 'create' | 'rename', category?: CategoryInfo): void;
   reorderSessions(updates: { id: string; sortOrder: number }[]): void;
+  /** The factory unit the session holds (factory-claims.ts), for the row's claim badge. */
+  claimOf?(sessionId: string): { label: string; unit: { title: string } } | null;
 }
 
 // Per browser, so a phone and a desktop can each keep their own view
@@ -771,7 +773,7 @@ export class SessionListView {
         ${lead}
         ${glyphs}
         <span class="session-name">${session.name}</span>
-        ${context}${warning}${chip}${trackChip}${tally}
+        ${this.claimBadge(session.id)}${context}${warning}${chip}${trackChip}${tally}
         ${this.accountDot(session)}
         <span class="session-actions">${copyHtml}${stopHtml}${reviveHtml}${deleteHtml}</span>
       </div>
@@ -834,6 +836,13 @@ export class SessionListView {
   }
 
   /** Open a session; a started one also unfolds its parent (and track) so it shows in the tree. */
+  /** A small badge naming the factory unit this session holds (Take over, or started on its track). */
+  private claimBadge(sessionId: string): SafeHtml {
+    const held = this.host.claimOf?.(sessionId);
+    if (!held) return html``;
+    return html`<span class="session-claim" title="Holds factory work: ${held.unit.title}. The factory skips it until you return it.">${held.label}</span>`;
+  }
+
   private open(session: SessionInfo): void {
     if (!session.attachable) return;
     if (this.nested.has(session.id) && session.spawnedBy) {

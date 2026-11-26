@@ -5327,6 +5327,11 @@ body {
 .fb-chip.y { background: #3a3020; color: var(--warning); }
 .fb-chip.g { background: #253322; color: var(--success); }
 .fb-chip.b { background: #1f2f4d; color: var(--accent); }
+/* A unit a terminal session holds (factory-claims.ts). */
+.fb-chip.c { background: #1f3a44; color: #7dcfff; }
+.fb-claim { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.return-factory-btn { font-size: 12px; padding: 2px 8px; margin-right: 6px; }
+.session-claim { font: 10px var(--font-mono); color: #7dcfff; background: #1f3a44; border-radius: 4px; padding: 0 5px; white-space: nowrap; flex-shrink: 0; }
 .fb-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 
 .fb-notice {

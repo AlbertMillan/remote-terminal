@@ -89,6 +89,11 @@ track already under way.
 6. Write the prompt to `<dataDir>/prompts/<id>/prompt.md`. **Never inside the worktree**, or
    the next stage's `commitAll` sweeps it into the branch. The folder is the session's own
    and is deleted with the session row.
+6b. A builder (`access` write) on a track with factory items claims them
+   (`claimTrackForSession`, factory/takeover.ts) **before** its `claude` is typed: a factory
+   run working the track is displaced and stopped first, so two agents never edit one
+   worktree. Never fails the start; the response's `factory` says what it holds, or why
+   nothing. Its work is then recorded against the unit (docs/change-provenance.md).
 7. `injectCommand()` types
    `claude [--permission-mode <mode>] --strict-mcp-config [--mcp-config "<dataDir>/mcp/<id>.json"] --add-dir "<dir>" -- "Read <dir>/prompt.md and follow it."`
    (the MCP flags are the launch profile, below)

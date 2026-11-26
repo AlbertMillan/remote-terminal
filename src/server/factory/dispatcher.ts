@@ -100,6 +100,21 @@ export class Dispatcher {
     await this.idle();
   }
 
+  /**
+   * Stop one unit's run (a Take over) and settle once it has unwound. The
+   * caller moves the claim first (store.ts claimForSession), so the run's
+   * owner-checked release touches nothing and the seat's refill cannot claim
+   * the unit back. Its partial work stays in the worktree; nothing is reset.
+   * False when no run of this unit is active here.
+   */
+  async stopUnit(key: string): Promise<boolean> {
+    const run = this.active.get(key);
+    if (!run) return false;
+    run.ac.abort();
+    await run.done;
+    return true;
+  }
+
   /** Settles once every run started so far has ended. */
   async idle(): Promise<void> {
     await Promise.all([...this.active.values()].map((a) => a.done));
@@ -136,9 +151,13 @@ export class Dispatcher {
     }
 
     // Seats held, by claim owner: ours, and any a dead run still holds until its lease expires.
+    // A unit a terminal session holds takes no seat and is never started: not even an
+    // open sibling of its track, which would put a second agent in the session's worktree.
     const owners = new Map<string, string>();
+    const sessionHeld = new Set<string>();
     for (const item of listItems({ status: ['in_progress'] })) {
       if (item.claimKind === 'run' && item.claimOwner) owners.set(item.claimOwner, pathKey(item.projectCwd));
+      if (item.claimKind === 'session') sessionHeld.add(groupKey(item));
     }
     let total = owners.size;
     const perProject = new Map<string, number>();
@@ -151,7 +170,7 @@ export class Dispatcher {
     for (const item of readyItems()) {
       if (total >= this.limits.seats) break;
       const key = groupKey(item);
-      if (handedOff.has(key) || this.active.has(key)) continue;
+      if (handedOff.has(key) || this.active.has(key) || sessionHeld.has(key)) continue;
       if ((this.notBefore.get(key) ?? 0) > now) continue;
       const pk = pathKey(item.projectCwd);
       if ((perProject.get(pk) ?? 0) >= this.limits.seatsPerProject) continue;
@@ -247,22 +266,35 @@ export function releaseParked(
   const item = getItem(projectCwd, featureId);
   if (!item || item.status !== 'parked') throw new FactoryEngineError(`${featureId} is not parked`);
   const isTrack = isTrackWorkflow(item.workflow);
-  const unitId = unitIdFor(item, isTrack);
-  const state = getRunState(projectCwd, unitId);
-  const template = templateFor(item.workflow);
-  if (state && template) {
-    const { progress } = state;
-    const step = template.steps.find((s) => s.id === progress.parked);
-    if (step && opts.outcome) recordOutcome(template, progress, step.id, opts.outcome);
-    else if (step?.loop && (progress.loops[step.id] ?? 0) >= step.loop.max) progress.loops[step.id] = 0;
-    if (state.parkReason?.startsWith('runaway')) progress.tokenBase = deps.tokensUsed(unitJobId(projectCwd, unitId));
-    progress.parked = null;
-    saveRunState(projectCwd, unitId, { progress, parkReason: null }, deps.now());
-  }
+  clearParkedProgress(item, opts, deps);
   const members = isTrack
     ? listItems({ projectCwd, status: ['parked'] }).filter((i) => i.trackName === item.trackName && isTrackWorkflow(i.workflow))
     : [item];
   for (const m of members) updateItem(projectCwd, m.featureId, { status: 'open' }, deps.now());
+}
+
+/**
+ * A parked unit's progress made runnable again (releaseParked, and a Take over
+ * of a parked unit): the outcome recorded against the parked step when given,
+ * a loop cap's runs given back, a runaway's token allowance renewed.
+ */
+export function clearParkedProgress(
+  item: FactoryItem,
+  opts: { outcome?: string },
+  deps: Pick<EngineDeps, 'tokensUsed' | 'now'>
+): void {
+  const { projectCwd } = item;
+  const unitId = unitIdFor(item, isTrackWorkflow(item.workflow));
+  const state = getRunState(projectCwd, unitId);
+  const template = templateFor(item.workflow);
+  if (!state || !template) return;
+  const { progress } = state;
+  const step = template.steps.find((s) => s.id === progress.parked);
+  if (step && opts.outcome) recordOutcome(template, progress, step.id, opts.outcome);
+  else if (step?.loop && (progress.loops[step.id] ?? 0) >= step.loop.max) progress.loops[step.id] = 0;
+  if (state.parkReason?.startsWith('runaway')) progress.tokenBase = deps.tokensUsed(unitJobId(projectCwd, unitId));
+  progress.parked = null;
+  saveRunState(projectCwd, unitId, { progress, parkReason: null }, deps.now());
 }
 
 // ---------------------------------------------------------------------------

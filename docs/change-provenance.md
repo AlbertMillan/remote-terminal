@@ -30,6 +30,31 @@ them through a discard, a lost database or a re-clone. Only merges from before t
 existed still fall back to the exact subject (see `track-branches.md`, *Finding a merge
 by its trailers*).
 
+## A third case: a session holding factory work (a record)
+
+A terminal session that claims a factory unit (Take over from the board or
+`cr factory take`, or a builder `cr start --track` on a track with factory items)
+is session-built work with a **record**, so it is handled like job-built work:
+
+- The claim lives on the items (`factory_items.claim_kind = 'session'`, owner
+  `session:<id>`) and in `factory_session_claims` (migration 028): the session, the
+  unit, the worktree, the commits it spans (`base_commit..end_commit`) and every
+  Claude transcript it ran (`factory/session-claims.ts`). The record outlives the claim.
+- The work happens in the unit's worktree, never main. Return and Done commit the
+  session's leftovers there with the unit's `Feature:` trailers (and
+  `Factory-Session:`), and it reaches the base branch only through the merge queue,
+  whose merge carries the trailers, so Delete track finds it as it finds any job.
+- `track-attribution.ts` reports these claims as `recorded` and keeps their
+  transcripts **out of the guess**, for every track: a claimed session is never a
+  guessed one. Delete lists them (`recordedClaims`), it does not offer them unticked.
+  An edit such a session made outside its worktree is therefore not attributed at
+  all (rule 3 below), rather than guessed.
+- Unclaimed ad-hoc sessions keep today's inference, unchanged.
+
+Liveness is the open terminal, never a heartbeat: a closed terminal leaves the unit
+paused and claimed until Return to factory or Done, so nothing is ever reclaimed from
+under a person who is thinking.
+
 ## Where this has already come up
 
 - **Delete track.** Job merges are reverted by `merge_sha`, or by a *unique*
@@ -84,4 +109,6 @@ recorded around each Bash call. That covers shell edits and the commits a sessio
 actually made. Open questions: the hook is optional user config, two sessions in one
 checkout make before/after comparisons ambiguous, and it costs a `git status` per call.
 It hasn't been designed yet. Before adding a new inference, check whether a small record
-would do the job instead.
+would do the job instead. Factory session claims (above) are the first such record: they
+settle *which* session worked *which* unit, and git (the commit range and trailers) says
+what it changed. A session working outside any claim is still only inferred.
