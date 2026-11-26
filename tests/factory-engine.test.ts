@@ -21,7 +21,8 @@ const store = await import('../src/server/factory/store.js');
 const { LEASE_EXPIRY_MS, LEASE_RENEW_MS } = await import('../src/server/factory/types.js');
 const { RunAbortedError } = await import('../src/server/agent/claude-run.js');
 const { runUnit } = await import('../src/server/factory/runner.js');
-const { Dispatcher, releaseParked } = await import('../src/server/factory/dispatcher.js');
+const { Dispatcher, releaseParked, DEFER_MS } = await import('../src/server/factory/dispatcher.js');
+const { ProjectBusyError } = await import('../src/server/projects/project-lock.js');
 const runState = await import('../src/server/factory/run-state.js');
 const { DEFAULT_FACTORY_LIMITS } = await import('../src/server/factory/limits.js');
 type EngineDeps = import('../src/server/factory/deps.js').EngineDeps;
@@ -66,7 +67,12 @@ function fake(opts: { reply?: (step: string, n: number) => string; hold?: boolea
   const commits: string[] = [];
   const ticks: string[] = [];
   let verifyRuns = 0;
-  const state = { tokens: 0, lastSession: null as string | null, planUsage: null as EngineDeps['planUsage'] extends (c: string) => infer R ? R : never };
+  const state = {
+    tokens: 0,
+    lastSession: null as string | null,
+    planUsage: null as EngineDeps['planUsage'] extends (c: string) => infer R ? R : never,
+    dirty: [] as string[],
+  };
   let sessions = 0;
   const deps: EngineDeps = {
     runClaude: vi.fn(async (cwd: string, prompt: string, globs: string[], o: RunOptions = {}) => {
@@ -83,6 +89,7 @@ function fake(opts: { reply?: (step: string, n: number) => string; hold?: boolea
       return { isError: false, result, permissionDenials: 0, sessionId: o.resumeSessionId ?? `sess-${++sessions}` };
     }) as unknown as EngineDeps['runClaude'],
     prepareWorktree: async (unit) => ({ path: `C:\\wt\\${unit.unitId}`, branch: `factory/${unit.unitId}`, baseBranch: 'main' }),
+    dirtyFiles: async () => state.dirty,
     commit: async (_path, message) => {
       commits.push(message);
       return true;
@@ -279,6 +286,74 @@ describe('runner: a track as one agent', () => {
   });
 });
 
+describe('runner: a track in a shared worktree', () => {
+  it('refuses a fresh track whose worktree already has uncommitted changes', async () => {
+    trackItem('f-ttt001');
+    const f = fake();
+    f.state.dirty = ['src/a.ts', 'notes.md'];
+    const d = new Dispatcher(f.deps);
+    await d.tick();
+    await d.idle();
+    expect(f.runs).toHaveLength(0);
+    expect(f.commits).toHaveLength(0);
+    expect(store.getItem(ALPHA, 'f-ttt001')?.status).toBe('parked');
+    expect(runState.getRunState(ALPHA, 'track:Factory')?.parkReason).toMatch(/uncommitted changes \(src\/a\.ts, notes\.md\)/);
+  });
+
+  it('does not refuse a resumed track: the dirt is its own unfinished step', async () => {
+    trackItem('f-ttt001');
+    runState.ensureRunState(ALPHA, 'track:Factory');
+    const progress = runState.getRunState(ALPHA, 'track:Factory')!.progress;
+    progress.current = 'features';
+    runState.saveRunState(ALPHA, 'track:Factory', { progress });
+    const f = fake();
+    f.state.dirty = ['src/a.ts'];
+    const d = new Dispatcher(f.deps);
+    await d.tick();
+    await d.idle();
+    expect(stepsRun(f.runs)[0]).toBe('features');
+  });
+
+  it('steps aside on a busy project lock, then ticks and commits without re-running the agent', async () => {
+    for (const id of ['f-ttt001', 'f-ttt002']) trackItem(id);
+    const f = fake();
+    let busy = true;
+    const tick = f.deps.tickFeature;
+    f.deps.tickFeature = async (cwd, wt, id) => {
+      if (id === 'f-ttt002' && busy) {
+        busy = false;
+        throw new ProjectBusyError('This project is busy (Land). Try again when that finishes.');
+      }
+      return tick(cwd, wt, id);
+    };
+    const d = new Dispatcher(f.deps);
+    await d.tick();
+    await d.idle();
+
+    // Gave its claims back, nothing parked, the built feature remembered.
+    for (const id of ['f-ttt001', 'f-ttt002']) {
+      expect(store.getItem(ALPHA, id)).toMatchObject({ status: 'open', claimOwner: null });
+    }
+    const progress = runState.getRunState(ALPHA, 'track:Factory')!.progress;
+    expect(progress.featuresDone).toEqual(['f-ttt001']);
+    expect(progress.featuresBuilt).toEqual(['f-ttt002']);
+    expect(progress.current).toBeNull();
+    expect(stepsRun(f.runs)).toEqual(['features', 'features']);
+
+    // Cooling down: not claimed straight back into the busy lock.
+    expect(await d.tick()).toEqual([]);
+    clock += DEFER_MS + 1;
+    expect(await d.tick()).toHaveLength(1);
+    await d.idle();
+
+    // f-ttt002's agent did not run again; only its tick and commit happened.
+    expect(stepsRun(f.runs).filter((s) => s === 'features')).toHaveLength(2);
+    expect(f.ticks).toEqual(['f-ttt001', 'f-ttt002']);
+    expect(f.commits.filter((c) => c.endsWith('Feature: f-ttt002'))).toHaveLength(1);
+    expect(runState.getRunState(ALPHA, 'track:Factory')!.progress.featuresDone).toEqual(['f-ttt001', 'f-ttt002']);
+  });
+});
+
 describe('resume after a reclaim', () => {
   it('continues the interrupted step in its session and never redoes finished ones', async () => {
     loose('f-aaa111');
@@ -339,6 +414,24 @@ describe('resume after a reclaim', () => {
 
     expect(await running).toEqual({ kind: 'lost' });
     expect(store.getItem(ALPHA, 'f-aaa111')).toMatchObject({ status: 'in_progress', claimOwner: 'run:other' });
+  });
+
+  it('gives back the claims it still holds when one of a track’s features is taken from it', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    for (const id of ['f-ttt001', 'f-ttt002']) trackItem(id);
+    const f = fake({ hold: true });
+    const d = new Dispatcher(f.deps);
+    await d.tick();
+    await vi.waitFor(() => expect(f.runs).toHaveLength(1));
+
+    // The user cancels one feature mid-run: its claim is gone, the heartbeat refused.
+    store.updateItem(ALPHA, 'f-ttt002', { status: 'cancelled' });
+    vi.advanceTimersByTime(LEASE_RENEW_MS);
+    await d.idle();
+
+    // The other feature does not keep a seat until its lease expires.
+    expect(store.getItem(ALPHA, 'f-ttt001')).toMatchObject({ status: 'open', claimOwner: null });
+    expect(store.listItems({ status: ['in_progress'] })).toHaveLength(0);
   });
 });
 
@@ -412,6 +505,21 @@ describe('dispatcher limits', () => {
     expect(store.claimItem(ALPHA, 'f-a00001', { owner: 'run:dead', kind: 'run' }, clock).ok).toBe(true);
     const f = fake({ hold: true });
     const d = new Dispatcher(f.deps);
+    expect(await d.tick()).toHaveLength(1);
+    await d.stop();
+  });
+
+  it('at start, releases run claims a previous server process left, never its own', async () => {
+    loose('f-a00001');
+    loose('f-a00002', BETA);
+    expect(store.claimItem(ALPHA, 'f-a00001', { owner: 'run:old-boot:1', kind: 'run' }, clock).ok).toBe(true);
+    const f = fake({ hold: true });
+    const d = new Dispatcher(f.deps);
+    await d.tick(); // claims f-a00002 under this boot
+    expect(d.recoverOrphans()).toEqual(['f-a00001']);
+    expect(store.getItem(ALPHA, 'f-a00001')).toMatchObject({ status: 'open', claimOwner: null });
+    expect(store.getItem(BETA, 'f-a00002')?.status).toBe('in_progress');
+    // ...and the freed unit is claimed at once, without waiting out the old lease.
     expect(await d.tick()).toHaveLength(1);
     await d.stop();
   });

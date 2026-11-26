@@ -54,6 +54,12 @@ export interface Progress {
   skip: string[];
   /** A track run's features already implemented and committed, in order. */
   featuresDone: string[];
+  /**
+   * Features whose agent run finished but which are not committed yet. A resume
+   * (or a unit stepped aside on a busy project lock) only ticks and commits
+   * these: the work is in the tree, and re-running the agent would pay for it twice.
+   */
+  featuresBuilt: string[];
   /** What a step leaves for a later one (verify's failing output, self-review's findings). */
   notes: Record<string, string>;
   /** The step started and not yet recorded: set means the last run died inside it. */
@@ -71,6 +77,7 @@ export function emptyProgress(skip: string[] = []): Progress {
     loops: {},
     skip: [...skip],
     featuresDone: [],
+    featuresBuilt: [],
     notes: {},
     current: null,
     parked: null,
@@ -93,6 +100,7 @@ export function parseProgress(json: string | null | undefined): Progress {
     loops: raw.loops && typeof raw.loops === 'object' ? { ...raw.loops } : {},
     skip: Array.isArray(raw.skip) ? [...raw.skip] : [],
     featuresDone: Array.isArray(raw.featuresDone) ? [...raw.featuresDone] : [],
+    featuresBuilt: Array.isArray(raw.featuresBuilt) ? [...raw.featuresBuilt] : [],
     notes: raw.notes && typeof raw.notes === 'object' ? { ...raw.notes } : {},
     current: typeof raw.current === 'string' ? raw.current : null,
     parked: typeof raw.parked === 'string' ? raw.parked : null,

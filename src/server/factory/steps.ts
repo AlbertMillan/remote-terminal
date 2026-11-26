@@ -94,35 +94,49 @@ registerStepHandler('implement', async (ctx) => {
 /**
  * A track run as one agent: its features in plan order, in one conversation,
  * each committed on its own with its tick in the worktree's PROJECT.md. A
- * resumed run skips the features already committed.
+ * resumed run skips the features already committed, and for one already built
+ * (agent finished, commit not made) only ticks and commits. The tick and the
+ * commit are idempotent, so a run that died between them redoes them safely.
  */
 registerStepHandler('track-features', async (ctx) => {
   const all = ctx.features;
   for (const f of all) {
     if (ctx.progress.featuresDone.includes(f.id)) continue;
-    const first = ctx.progress.featuresDone.length === 0;
-    const plan = all.map((x) => `- ${x.id} ${x.title}${ctx.progress.featuresDone.includes(x.id) ? ' (done)' : ''}`).join('\n');
-    const intro = `You are working the track "${ctx.unit.trackName}" in this worktree, one feature at a time,
+    if (!ctx.progress.featuresBuilt.includes(f.id)) {
+      await buildFeature(ctx, f);
+      ctx.progress.featuresBuilt.push(f.id);
+      ctx.saveProgress();
+    }
+    // May throw ProjectBusyError (the lock is never waited on): the runner steps
+    // the unit aside, and the retry lands here again without re-running the agent.
+    await ctx.deps.tickFeature(ctx.unit.projectCwd, ctx.worktree.path, f.id);
+    await ctx.commit(f.title, f.id);
+    ctx.progress.featuresBuilt = ctx.progress.featuresBuilt.filter((id) => id !== f.id);
+    ctx.progress.featuresDone.push(f.id);
+    ctx.saveProgress();
+  }
+  return { outcome: DONE };
+});
+
+async function buildFeature(ctx: StepContext, f: UnitFeature): Promise<void> {
+  const all = ctx.features;
+  const first = ctx.progress.featuresDone.length === 0;
+  const plan = all.map((x) => `- ${x.id} ${x.title}${ctx.progress.featuresDone.includes(x.id) ? ' (done)' : ''}`).join('\n');
+  const intro = `You are working the track "${ctx.unit.trackName}" in this worktree, one feature at a time,
 in this order:
 ${plan}
 
 Do only the feature named below now; the next ones come after it is committed.
 
 `;
-    await ctx.agent({
-      prompt: `${intro}${implementPrompt(f)}`,
-      // The conversation already holds the track; it needs only the next feature.
-      resumePrompt: first ? undefined : `${f.id} is next.\n\n${implementPrompt(f)}`,
-      work: true,
-      access: 'write',
-    });
-    await ctx.deps.tickFeature(ctx.unit.projectCwd, ctx.worktree.path, f.id);
-    await ctx.commit(f.title, f.id);
-    ctx.progress.featuresDone.push(f.id);
-    ctx.saveProgress();
-  }
-  return { outcome: DONE };
-});
+  await ctx.agent({
+    prompt: `${intro}${implementPrompt(f)}`,
+    // The conversation already holds the track; it needs only the next feature.
+    resumePrompt: first ? undefined : `${f.id} is next.\n\n${implementPrompt(f)}`,
+    work: true,
+    access: 'write',
+  });
+}
 
 registerStepHandler('verify', async (ctx) => {
   const commands = ctx.deps.verifyCommands(ctx.worktree.path);

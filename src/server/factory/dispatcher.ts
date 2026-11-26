@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { pathKey } from '../utils/paths.js';
-import { claimItem, getItem, listItems, readyItems, reclaimExpiredLeases, updateItem } from './store.js';
+import { claimItem, getItem, listItems, readyItems, reclaimExpiredLeases, releaseClaim, updateItem } from './store.js';
 import type { FactoryItem } from './types.js';
 import { defaultEngineDeps, unitJobId, type EngineDeps } from './deps.js';
 import { DEFAULT_FACTORY_LIMITS, planCapReason, type FactoryLimits } from './limits.js';
@@ -36,11 +36,22 @@ interface Active {
 }
 
 const TICK_MS = 15_000;
+/** How long a unit that stepped aside (busy project lock) waits before it is claimed again. */
+export const DEFER_MS = 60_000;
+
+/**
+ * This process. Every run claim's owner carries it (`run:<boot>:<uuid>`), so a
+ * restarted server can tell its own claims from a dead process's.
+ */
+const BOOT_ID = randomUUID();
+const OWNER_PREFIX = `run:${BOOT_ID}:`;
 
 const groupKey = (item: FactoryItem) => unitKey(item.projectCwd, unitIdFor(item, isTrackWorkflow(item.workflow)));
 
 export class Dispatcher {
   private readonly active = new Map<string, Active>();
+  /** Units that stepped aside, and the time before which they are not claimed again. */
+  private readonly notBefore = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<string[]> | null = null;
   private last: DispatchStatus = { paused: null, capped: {}, running: 0 };
@@ -56,8 +67,28 @@ export class Dispatcher {
 
   start(intervalMs = TICK_MS): void {
     if (this.timer) return;
+    this.recoverOrphans();
     this.timer = setInterval(() => void this.tick(), intervalMs);
     void this.tick();
+  }
+
+  /**
+   * Give back every run claim held by an earlier server process. The server is
+   * the only writer, so a claim from another boot belongs to a run that died
+   * with it: waiting out its lease would hold a seat and stall the unit's
+   * resume for up to LEASE_EXPIRY_MS for nothing. Called once, at start.
+   * Returns the feature ids released.
+   */
+  recoverOrphans(): string[] {
+    const now = this.deps.now();
+    const released: string[] = [];
+    for (const item of listItems({ status: ['in_progress'] })) {
+      const owner = item.claimOwner;
+      if (item.claimKind !== 'run' || !owner || owner.startsWith(OWNER_PREFIX)) continue;
+      if (releaseClaim(item.projectCwd, item.featureId, { owner, kind: 'run' }, now)) released.push(item.featureId);
+    }
+    if (released.length > 0) logger.info({ items: released }, 'factory: released claims left by a previous server');
+    return released;
   }
 
   /** Stop dispatching and stop every run; each gives its claim back, to resume on the next start. */
@@ -121,6 +152,7 @@ export class Dispatcher {
       if (total >= this.limits.seats) break;
       const key = groupKey(item);
       if (handedOff.has(key) || this.active.has(key)) continue;
+      if ((this.notBefore.get(key) ?? 0) > now) continue;
       const pk = pathKey(item.projectCwd);
       if ((perProject.get(pk) ?? 0) >= this.limits.seatsPerProject) continue;
       if (!capOf.has(pk)) capOf.set(pk, planCapReason(this.deps.planUsage(item.projectCwd), this.limits, now));
@@ -130,7 +162,7 @@ export class Dispatcher {
         continue;
       }
 
-      const claimed = this.claimUnit(item, `run:${randomUUID()}`, now);
+      const claimed = this.claimUnit(item, `${OWNER_PREFIX}${randomUUID()}`, now);
       if (!claimed) continue;
       this.launch(key, item, claimed.owner, claimed.ids);
       started.push(key);
@@ -178,6 +210,13 @@ export class Dispatcher {
       .catch((error): RunEnd => {
         logger.error({ error, unit: key }, 'factory: run crashed');
         return { kind: 'lost' };
+      })
+      .then((end) => {
+        // Without the cool-down the finally below would claim it straight back
+        // into the same busy lock, again and again.
+        if (end.kind === 'deferred') this.notBefore.set(key, this.deps.now() + DEFER_MS);
+        else this.notBefore.delete(key);
+        return end;
       })
       .finally(() => {
         this.active.delete(key);

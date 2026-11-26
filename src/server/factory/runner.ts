@@ -1,5 +1,6 @@
 import { RunAbortedError, type ClaudeRunResult } from '../agent/claude-run.js';
 import { createLogger } from '../utils/logger.js';
+import { ProjectBusyError } from '../projects/project-lock.js';
 import { heartbeat, releaseClaim, updateItem } from './store.js';
 import { LEASE_RENEW_MS, type Claimant } from './types.js';
 import { unitJobId, type EngineDeps, type UnitRef, type UnitWorktree } from './deps.js';
@@ -37,6 +38,8 @@ export type RunEnd =
   | { kind: 'lost' }
   /** Stopped by the dispatcher (shutdown); the claim was given back. */
   | { kind: 'stopped' }
+  /** Stepped aside (the project lock was busy); claim given back, retry after a cool-down. */
+  | { kind: 'deferred'; reason: string }
   | { kind: 'finished' };
 
 /** Handlers that continue the unit's working conversation; its session is theirs. */
@@ -110,7 +113,28 @@ export async function runUnit(
   try {
     const features = deps.features(cwd, ref.featureIds);
     const title = ref.isTrack ? ref.trackName : features[0]?.title ?? ref.unitId;
-    const worktree: UnitWorktree = await deps.prepareWorktree(ref, title);
+    const worktree: UnitWorktree = await deps.prepareWorktree(ref, title, ac.signal);
+
+    // A track's worktree is usually where the session that planned it works.
+    // Its first commit is `git add -A`, so a tree that is already dirty when the
+    // factory first takes the track would sweep that session's edits into a
+    // feature commit. Refuse until they are committed or stashed. Only a fresh
+    // unit: on a resume, the dirt is the factory's own unfinished step.
+    const fresh =
+      !state.lastCommit &&
+      Object.keys(progress.outcomes).length === 0 &&
+      progress.featuresDone.length === 0 &&
+      progress.featuresBuilt.length === 0 &&
+      progress.current === null &&
+      !sessionId;
+    if (ref.isTrack && fresh) {
+      const dirty = await deps.dirtyFiles(worktree.path);
+      if (dirty.length > 0) {
+        const shown = dirty.slice(0, 5).join(', ') + (dirty.length > 5 ? `, … (${dirty.length} files)` : '');
+        return park(`the track worktree has uncommitted changes (${shown}); commit or stash them first`, null);
+      }
+    }
+
     saveRunState(
       cwd,
       ref.unitId,
@@ -216,6 +240,10 @@ export async function runUnit(
     }
   } catch (error) {
     if (stopReason === 'lost') {
+      // Give back whatever this run still holds (a track's other features, when
+      // one was cancelled or reclaimed), or each keeps a seat until its lease
+      // expires. releaseClaim is owner-checked: a new holder is never touched.
+      releaseAll(cwd, ref.featureIds, claimant, deps.now());
       logger.warn({ cwd, unit: ref.unitId }, 'factory: lost the claim; stopping without touching the unit');
       return { kind: 'lost' };
     }
@@ -228,6 +256,15 @@ export async function runUnit(
       const tokens = deps.tokensUsed(jobId);
       deps.notify({ kind: 'runaway', projectCwd: cwd, unitId: ref.unitId, tokens });
       return park(`runaway: ${tokens.toLocaleString('en-US')} tokens (guard ${limits.runawayTokens.toLocaleString('en-US')})`, currentStep);
+    }
+    if (error instanceof ProjectBusyError) {
+      // The project lock is try-only and never waited on. Nothing is half-done:
+      // the step records what it finished (a built feature) before taking it.
+      progress.current = null;
+      save();
+      releaseAll(cwd, ref.featureIds, claimant, deps.now());
+      logger.info({ cwd, unit: ref.unitId, step: currentStep }, 'factory: project busy; stepping aside');
+      return { kind: 'deferred', reason: error.message };
     }
     const message = error instanceof Error ? error.message : String(error);
     logger.warn({ cwd, unit: ref.unitId, step: currentStep, error: message }, 'factory: step failed');

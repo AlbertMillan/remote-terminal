@@ -5,7 +5,7 @@ import { join } from 'path';
 import { getConfig } from '../config.js';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
-import { git } from '../utils/git.js';
+import { git, gitStatusEntries } from '../utils/git.js';
 import { pathKey } from '../utils/paths.js';
 import { killTree, runClaude } from '../agent/claude-run.js';
 import { projectAccount } from '../accounts.js';
@@ -15,7 +15,8 @@ import { loadRegistry, type RegistryProject } from '../projects/registry.js';
 import { readProjectPlan, worktreeProject } from '../projects/project-plan.js';
 import { mutateProjectDoc, readProjectDoc } from '../projects/project-store.js';
 import { featuresOf, findFeature, updateFeature } from '../projects/project-doc-format.js';
-import { ProjectBusyError, withProjectLock } from '../projects/project-lock.js';
+import { withProjectLock } from '../projects/project-lock.js';
+import { installDependencies, needsInstall } from '../projects/project-deps.js';
 import { getActiveTrackBranch } from '../projects/track-store.js';
 import { reattachIfMissing } from '../projects/track-branches.js';
 import { getMergeSink, type MergeSink } from './merge-sink.js';
@@ -59,7 +60,9 @@ export type FactoryEvent =
 export interface EngineDeps {
   runClaude: typeof runClaude;
   /** The unit's worktree: created for a loose item, the track's own for a track. Throws when there is none. */
-  prepareWorktree(unit: UnitRef, title: string): Promise<UnitWorktree>;
+  prepareWorktree(unit: UnitRef, title: string, signal: AbortSignal): Promise<UnitWorktree>;
+  /** Paths git reports changed or untracked in the folder (ignored files excluded). */
+  dirtyFiles(worktreePath: string): Promise<string[]>;
   commit(worktreePath: string, message: string): Promise<boolean>;
   headCommit(worktreePath: string): Promise<string | null>;
   /** Titles and specs of these features, from the plan (a track's worktree copy included), in plan order. */
@@ -67,9 +70,12 @@ export interface EngineDeps {
   /** The `verify:` commands of the PROJECT.md in this folder. */
   verifyCommands(worktreePath: string): string[];
   runCommand(cwd: string, command: string, opts: { timeoutMs: number; signal: AbortSignal }): Promise<{ ok: boolean; output: string }>;
-  /** Tick a feature done in the track worktree's PROJECT.md (the commit is the caller's). */
+  /**
+   * Tick a feature done in the track worktree's PROJECT.md (the commit is the
+   * caller's). Throws ProjectBusyError, never waits, when the project lock is held.
+   */
   tickFeature(projectCwd: string, worktreePath: string, featureId: string): Promise<void>;
-  /** Tokens the unit's runs have processed so far, from the usage ledger. */
+  /** Tokens the unit's runs have spent so far, from the usage ledger (see unitTokens). */
   tokensUsed(jobId: string): number;
   /** The newest session one of these steps ran in, recorded before its spawn. */
   lastSessionOf(jobId: string, steps: string[]): string | null;
@@ -148,26 +154,60 @@ function runCommand(
   });
 }
 
-const TICK_ATTEMPTS = 3;
-const TICK_RETRY_MS = 2000;
+/**
+ * What the runaway guard counts: input, output and cache writes. Cache READS
+ * are left out on purpose: a resumed session re-reads its whole context on
+ * every turn, so they grow with the conversation's length rather than with
+ * the work, and would trip the guard on almost any track.
+ */
+export function unitTokens(jobId: string): number {
+  try {
+    const row = getDatabase()
+      .prepare(
+        `SELECT COALESCE(SUM(input_tokens + output_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
+                AS tokens
+           FROM usage_messages WHERE job_id = ?`
+      )
+      .get(jobId) as { tokens: number };
+    return row.tokens;
+  } catch (error) {
+    logger.warn({ error, jobId }, 'factory: could not read the ledger');
+    return 0;
+  }
+}
 
 export function defaultEngineDeps(): EngineDeps {
   return {
     runClaude,
 
-    async prepareWorktree(unit, title) {
+    async prepareWorktree(unit, title, signal) {
+      let worktree: UnitWorktree;
       if (unit.isTrack) {
         const track = getActiveTrackBranch(unit.projectCwd, unit.trackName);
         if (!track) throw new Error(`Track "${unit.trackName}" has no branch yet; branch it before sending it to the factory`);
         if (!existsSync(track.worktreePath)) await reattachIfMissing(registryProject(unit.projectCwd), track);
-        return { path: track.worktreePath, branch: track.branch, baseBranch: track.baseBranch };
+        worktree = { path: track.worktreePath, branch: track.branch, baseBranch: track.baseBranch };
+      } else {
+        const featureId = unit.featureIds[0];
+        const created = await createWorktree(unit.projectCwd, featureId, title, {
+          path: worktreePathFor(`factory-${featureId}`),
+          branch: `factory/${slug(title)}-${featureId}`,
+        });
+        worktree = { path: created.path, branch: created.branch, baseBranch: created.baseBranch };
       }
-      const featureId = unit.featureIds[0];
-      const created = await createWorktree(unit.projectCwd, featureId, title, {
-        path: worktreePathFor(`factory-${featureId}`),
-        branch: `factory/${slug(title)}-${featureId}`,
-      });
-      return { path: created.path, branch: created.branch, baseBranch: created.baseBranch };
+      // The worktree's own dependencies, from its lockfile, so verify can run the
+      // tests. Never a link to the main checkout's: `git worktree remove` deletes
+      // through a junction. Checked on every run: a failed install leaves
+      // needsInstall() true, and a resume must not verify against half a folder.
+      if (needsInstall(worktree.path)) {
+        const install = await installDependencies(worktree.path, signal);
+        if (!install.ok) throw new Error(`Installing dependencies failed: ${install.detail}`);
+      }
+      return worktree;
+    },
+
+    async dirtyFiles(worktreePath) {
+      return ((await gitStatusEntries(worktreePath, { allUntracked: true })) ?? []).map((e) => e.path);
     },
 
     commit: commitAll,
@@ -196,37 +236,16 @@ export function defaultEngineDeps(): EngineDeps {
     async tickFeature(projectCwd, worktreePath, featureId) {
       const wt = worktreeProject(registryProject(projectCwd), worktreePath);
       // Worktree-file writes take the project lock (docs/track-branches.md). It is a
-      // try-lock, never a wait; a Land or merge holding it finishes in seconds.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          await withProjectLock(projectCwd, 'factory: ticking a feature', async () => {
-            mutateProjectDoc(wt, null, (doc) => {
-              if (findFeature(doc, featureId)) updateFeature(doc, featureId, { status: 'done' });
-            });
-          });
-          return;
-        } catch (error) {
-          if (!(error instanceof ProjectBusyError) || attempt >= TICK_ATTEMPTS) throw error;
-          await new Promise((r) => setTimeout(r, TICK_RETRY_MS));
-        }
-      }
+      // try-lock and is never waited on: a ProjectBusyError goes to the runner,
+      // which steps the unit aside and retries it after a cool-down.
+      await withProjectLock(projectCwd, 'factory: ticking a feature', async () => {
+        mutateProjectDoc(wt, null, (doc) => {
+          if (findFeature(doc, featureId)) updateFeature(doc, featureId, { status: 'done' });
+        });
+      });
     },
 
-    tokensUsed(jobId) {
-      try {
-        const row = getDatabase()
-          .prepare(
-            `SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens
-                                 + cache_write_5m_tokens + cache_write_1h_tokens), 0) AS tokens
-               FROM usage_messages WHERE job_id = ?`
-          )
-          .get(jobId) as { tokens: number };
-        return row.tokens;
-      } catch (error) {
-        logger.warn({ error, jobId }, 'factory: could not read the ledger');
-        return 0;
-      }
-    },
+    tokensUsed: unitTokens,
 
     lastSessionOf(jobId, steps) {
       if (steps.length === 0) return null;

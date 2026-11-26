@@ -22,6 +22,12 @@ export interface MergeEntry {
 }
 
 export interface MergeSink {
+  /**
+   * Must be idempotent per (projectCwd, branch). The engine enqueues BEFORE it
+   * records the handoff and lets go of the claims (so a refusal here parks the
+   * unit instead of stranding it); a server that dies between the two re-runs
+   * the merge step after its lease expires and enqueues the same unit again.
+   */
   enqueue(entry: MergeEntry): void;
 }
 
