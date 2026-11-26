@@ -1,5 +1,6 @@
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../utils/paths.js';
+import { factoryEvents } from './events.js';
 import { emptyProgress, parseProgress, type Progress } from './templates.js';
 
 /**
@@ -86,6 +87,7 @@ export function ensureRunState(projectCwd: string, unitId: string, skip: string[
        ON CONFLICT (project_key, unit_id) DO NOTHING`
     )
     .run(pathKey(projectCwd), projectCwd, unitId, JSON.stringify(emptyProgress(skip)), at, at);
+  factoryEvents.emitChange();
   return getRunState(projectCwd, unitId) as RunState;
 }
 
@@ -115,6 +117,7 @@ export function saveRunState(projectCwd: string, unitId: string, patch: RunState
   getDatabase()
     .prepare(`UPDATE factory_runs SET ${sets.join(', ')} WHERE project_key = ? AND unit_id = ?`)
     .run(...values, pathKey(projectCwd), unitId);
+  factoryEvents.emitChange();
 }
 
 /** Forget a unit's progress (a track sent again after its earlier unit closed). */

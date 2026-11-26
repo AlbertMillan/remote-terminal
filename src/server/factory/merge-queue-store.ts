@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../utils/paths.js';
+import { factoryEvents } from './events.js';
 import type { MergeSide } from '../projects/track-update.js';
 import type { MergeEntry } from './merge-queue.js';
 
@@ -103,6 +104,7 @@ export function insertMerge(entry: MergeEntry, now = Date.now()): MergeRecord {
       at,
       at
     );
+  factoryEvents.emitChange();
   return getMerge(id) as MergeRecord;
 }
 
@@ -132,6 +134,7 @@ export function updateMerge(id: string, patch: MergePatch, now = Date.now()): vo
   sets.push('updated_at = ?');
   values.push(new Date(now).toISOString());
   getDatabase().prepare(`UPDATE factory_merges SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+  factoryEvents.emitChange();
 }
 
 /** The newest factory (not Land) entry for a branch in a project, or null. */

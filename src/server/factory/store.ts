@@ -1,5 +1,6 @@
 import { getDatabase } from '../db/schema.js';
 import { pathKey } from '../utils/paths.js';
+import { factoryEvents } from './events.js';
 import {
   CLOSED_STATUSES,
   DEFAULT_PRIORITY,
@@ -211,6 +212,7 @@ export function createItem(input: CreateItemInput, now = Date.now()): FactoryIte
       at,
       at
     );
+  factoryEvents.emitChange();
   return getItem(input.projectCwd, input.featureId) as FactoryItem;
 }
 
@@ -314,6 +316,7 @@ export function updateItem(
       ).run(key, featureId);
     }
   })();
+  factoryEvents.emitChange();
   return getItem(projectCwd, featureId);
 }
 
@@ -322,6 +325,7 @@ export function deleteItem(projectCwd: string, featureId: string): boolean {
   const info = getDatabase()
     .prepare('DELETE FROM factory_items WHERE project_key = ? AND feature_id = ?')
     .run(pathKey(projectCwd), featureId);
+  if (info.changes > 0) factoryEvents.emitChange();
   return info.changes > 0;
 }
 
@@ -368,6 +372,7 @@ export function addDependency(input: AddDependencyInput, now = Date.now()): Fact
     ).run(key, fromFeature, toFeature, type, input.inferred ? 1 : 0, iso(now));
   })();
 
+  factoryEvents.emitChange();
   return listDependencies(input.projectCwd).find(
     (d) => d.fromFeature === fromFeature && d.toFeature === toFeature && d.type === type
   ) as FactoryDependency;
@@ -406,6 +411,7 @@ export function removeDependency(
             'DELETE FROM factory_deps WHERE project_key = ? AND from_feature = ? AND to_feature = ? AND type = ?'
           )
           .run(key, fromFeature, toFeature, type);
+  if (info.changes > 0) factoryEvents.emitChange();
   return info.changes;
 }
 
@@ -441,6 +447,7 @@ export function dropResolvedInferredDeps(projectCwd?: string): number {
                          AND b.status = 'done')`
     )
     .run(key, key);
+  if (info.changes > 0) factoryEvents.emitChange();
   return info.changes;
 }
 
@@ -488,7 +495,7 @@ export function claimItem(
   const lease = claimant.kind === 'run' ? iso(now + LEASE_EXPIRY_MS) : null;
   const beat = claimant.kind === 'run' ? iso(now) : null;
 
-  return db
+  const result = db
     .transaction((): ClaimResult => {
       const row = getRow(key, featureId);
       if (!row) return { ok: false, reason: 'missing' };
@@ -526,6 +533,8 @@ export function claimItem(
       };
     })
     .immediate();
+  if (result.ok) factoryEvents.emitChange();
+  return result;
 }
 
 /**
@@ -541,6 +550,7 @@ export function heartbeat(projectCwd: string, featureId: string, owner: string, 
           AND status = 'in_progress'`
     )
     .run(iso(now), iso(now + LEASE_EXPIRY_MS), iso(now), pathKey(projectCwd), featureId, owner);
+  if (info.changes === 1) factoryEvents.emitChange();
   return info.changes === 1;
 }
 
@@ -562,6 +572,7 @@ export function releaseClaim(
         WHERE project_key = ? AND feature_id = ? AND claim_owner = ? AND claim_kind = ?`
     )
     .run(iso(now), pathKey(projectCwd), featureId, claimant.owner, claimant.kind);
+  if (info.changes === 1) factoryEvents.emitChange();
   return info.changes === 1;
 }
 
@@ -574,7 +585,7 @@ export function releaseClaim(
 export function reclaimExpiredLeases(now = Date.now()): FactoryItem[] {
   const db = getDatabase();
   const at = iso(now);
-  return db
+  const reclaimed = db
     .transaction(() => {
       const expired = db
         .prepare(
@@ -593,4 +604,6 @@ export function reclaimExpiredLeases(now = Date.now()): FactoryItem[] {
       return expired.map((row) => toItem(getRow(row.project_key, row.feature_id) as ItemRow));
     })
     .immediate();
+  if (reclaimed.length > 0) factoryEvents.emitChange();
+  return reclaimed;
 }

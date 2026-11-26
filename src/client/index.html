@@ -168,18 +168,24 @@
       <!-- A session-requested Land's outcome (src/client/land-result.ts): fixed over every view. -->
       <div id="land-result-toast" class="land-result-toast hidden" role="status" aria-live="polite"></div>
 
-      <!-- Live job overlay: pushed job cards over the main area (src/client/job-overlay.ts).
+      <!-- Factory overlay: pushed factory cards over the main area (src/client/factory-overlay.ts).
            Reparented into #terminal-header in "header" placement. -->
-      <div id="job-overlay" class="job-overlay jo-floating hidden">
-        <div id="job-overlay-bar" class="jo-bar" role="button" tabindex="0" title="Pipeline jobs in flight">
+      <div id="factory-overlay" class="factory-overlay jo-floating hidden">
+        <div id="factory-overlay-bar" class="jo-bar" role="button" tabindex="0" title="The code factory: what runs, what waits for you">
           <svg class="jo-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
-          <span class="jo-bar-title">Jobs</span>
-          <span id="job-overlay-counts"></span>
+          <span class="jo-bar-title">Factory</span>
+          <span id="factory-overlay-counts" class="fo-counts"></span>
         </div>
-        <div id="job-overlay-list" class="jo-list"></div>
+        <div class="jo-list">
+          <div id="factory-overlay-list" class="fo-cards"></div>
+          <div id="factory-overlay-foot" class="fo-foot"></div>
+        </div>
       </div>
+
+      <!-- Something newly waits for you in the factory (factory-overlay.ts announce()). -->
+      <div id="factory-toast" class="factory-toast hidden" role="status" aria-live="polite"></div>
 
       <div id="terminal-container" class="hidden">
         <!-- xterm.js will render here -->
@@ -253,6 +259,23 @@
       </div>
 
       <!-- Cross-project overview -->
+      <!-- The factory board (src/client/factory-board.ts): columns, drawers, Add work, the morning report. -->
+      <div id="factory-board-view" class="project-log-view factory-board-view hidden">
+        <div class="project-log-header">
+          <div class="project-log-titles">
+            <h2>Factory</h2>
+            <span id="factory-board-status" class="fb-status"></span>
+          </div>
+          <div class="project-log-actions">
+            <button type="button" class="btn-secondary" data-fb="refresh">Refresh</button>
+            <button type="button" class="btn-secondary" data-fb="add">Add work</button>
+            <button type="button" class="btn-primary" data-fb="back">Back</button>
+          </div>
+        </div>
+        <div id="factory-board-body" class="fb-body"></div>
+        <aside id="factory-drawer" class="fb-drawer hidden" aria-label="Factory item"></aside>
+      </div>
+
       <div id="rollup-view" class="project-log-view hidden">
         <div class="project-log-header">
           <div class="project-log-titles">
@@ -479,18 +502,18 @@
             </div>
           </div>
           <div class="settings-section">
-            <div class="settings-section-title">Job overlay</div>
+            <div class="settings-section-title">Factory overlay</div>
             <div class="setting-item">
-              <input type="checkbox" id="setting-job-overlay" checked>
-              <label for="setting-job-overlay">
-                Job overlay
-                <div class="setting-description">Live pipeline jobs across all projects, over the main area</div>
+              <input type="checkbox" id="setting-factory-overlay" checked>
+              <label for="setting-factory-overlay">
+                Factory overlay
+                <div class="setting-description">The code factory across all projects, over the main area: what runs, what waits for you</div>
               </label>
             </div>
-            <div class="setting-item setting-sub" id="setting-job-overlay-placement">
+            <div class="setting-item setting-sub" id="setting-factory-overlay-placement">
               <div class="setting-radios">
-                <label><input type="radio" name="job-overlay-placement" value="below" checked> Floating below the header</label>
-                <label><input type="radio" name="job-overlay-placement" value="header"> In the session header</label>
+                <label><input type="radio" name="factory-overlay-placement" value="below" checked> Floating below the header</label>
+                <label><input type="radio" name="factory-overlay-placement" value="header"> In the session header</label>
               </div>
             </div>
           </div>

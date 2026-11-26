@@ -149,6 +149,18 @@ class JobsApi(private val api: Api) {
 
     suspend fun cancel(id: String): Job = decode(obj(api.post("/api/jobs/$id/cancel"))["job"])
 
+    /**
+     * Hand a parked factory unit back (POST /api/factory/items/:featureId/release):
+     * `approved` passes its review, null releases a loop cap or runaway park for another round.
+     */
+    suspend fun releaseFactory(cwd: String, featureId: String, outcome: String?) {
+        val body = buildMap<String, JsonElement> {
+            put("cwd", JsonPrimitive(cwd))
+            if (outcome != null) put("outcome", JsonPrimitive(outcome))
+        }
+        api.post("/api/factory/items/$featureId/release", JsonObject(body))
+    }
+
     companion object {
         /**
          * The one string `/answer` takes, as the board builds it (job-board.ts submitAnswer):
