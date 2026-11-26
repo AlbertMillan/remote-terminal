@@ -419,6 +419,57 @@ function runMigrations(database: Database.Database): void {
         );
       `,
     },
+    {
+      // The code factory's execution state (project/code-factory.md). An item
+      // is a PROJECT.md feature, keyed by its existing id: PROJECT.md stays the
+      // source of truth for what the feature is, these rows hold only what the
+      // factory needs to run it (step, claim, lease). claim_kind is 'run' (a
+      // headless agent, kept alive by heartbeat) or 'session' (a terminal,
+      // whose liveness is the open terminal: no lease, never reclaimed).
+      //
+      // factory_deps: from_feature waits on to_feature. Dependencies live here
+      // only, never in PROJECT.md; inferred ones are intake's scheduling hints
+      // and are dropped once their blocker is done.
+      name: '023_factory_items',
+      sql: `
+        CREATE TABLE IF NOT EXISTS factory_items (
+          project_key TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          feature_id TEXT NOT NULL,
+          track_name TEXT NOT NULL,
+          workflow TEXT NOT NULL,
+          step TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          priority INTEGER NOT NULL DEFAULT 2,
+          model_tier TEXT,
+          claim_owner TEXT,
+          claim_kind TEXT,
+          lease_expires_at TEXT,
+          heartbeat_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_key, feature_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_items_status ON factory_items(project_key, status);
+        CREATE INDEX IF NOT EXISTS idx_factory_items_lease ON factory_items(lease_expires_at)
+          WHERE claim_owner IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS factory_deps (
+          project_key TEXT NOT NULL,
+          from_feature TEXT NOT NULL,
+          to_feature TEXT NOT NULL,
+          type TEXT NOT NULL,
+          inferred INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (project_key, from_feature, to_feature, type),
+          FOREIGN KEY (project_key, from_feature)
+            REFERENCES factory_items(project_key, feature_id) ON DELETE CASCADE,
+          FOREIGN KEY (project_key, to_feature)
+            REFERENCES factory_items(project_key, feature_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_factory_deps_to ON factory_deps(project_key, to_feature);
+      `,
+    },
   ];
 
   const appliedMigrations = database
