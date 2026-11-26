@@ -136,4 +136,4 @@ status: active
 - [x] `f-q2m7vx` P2 Attach and share any file — pinned Attach key (Photo / File menu), share target for any file(s), Paste takes any URI → project/file-uploads.md
 
 ## Track: Factory merge queue
-- [ ] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
+- [x] `f-f8x9yu` P1 Merge queue — one slot per project, resolver agent on conflict, holds on a dirty main checkout; session Land joins the queue → project/code-factory.md
