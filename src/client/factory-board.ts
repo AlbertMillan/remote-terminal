@@ -1,8 +1,8 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { requestJson, failureMessage } from './api.js';
+import { isClaimAction, renderClaimActions, runClaimAction } from './factory-claims.js';
 import { formatTokens, shortAge } from './format.js';
 import { cardKind, cardStatus, progressStrip } from './factory-overlay.js';
-import { isClaimAction, renderClaimActions, runClaimAction } from './factory-claims.js';
 import type {
   FactoryBoard,
   FactoryBoardUnit,

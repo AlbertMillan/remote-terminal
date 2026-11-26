@@ -11,7 +11,7 @@
  *   node "$CLAUDE_REMOTE_CLI" list
  *   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
  *   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
- *   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... <<'EOF'
+ *   node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... [--mockup] <<'EOF'
  *   <free-form work>
  *   EOF
  *   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
@@ -61,7 +61,7 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" list
   node "$CLAUDE_REMOTE_CLI" land [--track "<name>"]
   node "$CLAUDE_REMOTE_CLI" update [--track "<name>"]
-  node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]...  (the work, free-form, on stdin)
+  node "$CLAUDE_REMOTE_CLI" factory add [--track "<name>"] [--from <feature-id>]... [--mockup]  (the work, free-form, on stdin)
   node "$CLAUDE_REMOTE_CLI" factory send [--track "<name>"] [--review track|feature] [--model <feature-id>=<model>]...
   node "$CLAUDE_REMOTE_CLI" factory status
   node "$CLAUDE_REMOTE_CLI" factory take [<feature-id>|<track>]
@@ -69,21 +69,19 @@ const USAGE = `usage:
   node "$CLAUDE_REMOTE_CLI" factory done [<feature-id>|<track>]`;
 
 const REVIEWS = ['track', 'feature'];
-/** Subcommands that claim or release factory work for a terminal session. */
+/** Subcommands that claim or release factory work for a terminal session (claimRequest). */
 const CLAIM_SUBS = ['take', 'return', 'done'];
 
 /**
  * `factory <sub> [flags]`. `--from` and `--model` repeat; `--model` takes
- * `<feature-id>=<model>` and collects into a map.
+ * `<feature-id>=<model>` and collects into a map. `--mockup` takes no value.
  */
 export function parseFactoryArgs(argv) {
   const [sub, ...rest] = argv;
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
-    // take|return|done name their unit positionally: a feature id or a track name.
-    if (CLAIM_SUBS.includes(sub) && !rest[i].startsWith('--')) {
-      if (flags.target !== undefined) throw new UsageError(`factory ${sub} takes one feature id or track name`);
-      flags.target = rest[i];
+    if (rest[i] === '--mockup') {
+      flags.mockup = true;
       continue;
     }
     const m = /^--(track|from|review|model)(?:=(.*))?$/.exec(rest[i]);
@@ -106,15 +104,8 @@ export function parseFactoryArgs(argv) {
 /** The request for a `factory` subcommand, or a usage error. */
 async function factoryRequest(argv, stdin, headers) {
   const { sub, flags } = parseFactoryArgs(argv);
-  const allowed = {
-    add: ['track', 'from'],
-    send: ['track', 'review', 'models'],
-    status: [],
-    take: ['target', 'track'],
-    return: ['target'],
-    done: ['target'],
-  }[sub];
-  if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send, status, take, return or done');
+  const allowed = { add: ['track', 'from', 'mockup'], send: ['track', 'review', 'models'], status: [] }[sub];
+  if (!allowed) throw new UsageError(sub ? `unknown factory command: ${sub}` : 'factory needs add, send or status');
   const extra = Object.keys(flags).find((f) => !allowed.includes(f));
   if (extra) throw new UsageError(`factory ${sub} does not take --${extra === 'models' ? 'model' : extra}`);
   if (flags.track !== undefined && !flags.track.trim()) throw new UsageError('--track needs a track name');
@@ -124,11 +115,6 @@ async function factoryRequest(argv, stdin, headers) {
     body: JSON.stringify(body),
   });
   if (sub === 'status') return { path: '/api/agent/factory/status', request: { method: 'GET', headers } };
-  if (CLAIM_SUBS.includes(sub)) {
-    const target = flags.target ?? flags.track;
-    if (flags.target !== undefined && flags.track !== undefined) throw new UsageError(`factory ${sub} takes a target or --track, not both`);
-    return { path: `/api/agent/factory/${sub}`, request: post(target !== undefined ? { target } : {}) };
-  }
   if (sub === 'send') {
     if (flags.review !== undefined && !REVIEWS.includes(flags.review)) {
       throw new UsageError(`--review must be one of: ${REVIEWS.join(', ')}`);
@@ -146,7 +132,38 @@ async function factoryRequest(argv, stdin, headers) {
   const body = { text };
   if (flags.track !== undefined) body.track = flags.track;
   if (flags.from !== undefined) body.discoveredFrom = flags.from;
+  // Every feature filed gets a clickable mockup to approve before it is built.
+  if (flags.mockup) body.mockupFirst = true;
   return { path: '/api/agent/factory/add', request: post(body) };
+}
+
+/**
+ * `factory take|return|done [<feature-id>|<track>]`: the unit named positionally
+ * (`take` also accepts `--track`), or none, which means this worktree's track for
+ * `take` and what this session holds for `return` and `done`.
+ */
+function claimRequest(argv, headers) {
+  const [sub, ...rest] = argv;
+  let target;
+  const set = (value) => {
+    if (target !== undefined) throw new UsageError(`factory ${sub} takes one feature id or track name`);
+    if (!value || !value.trim()) throw new UsageError(`factory ${sub} needs a feature id or track name there`);
+    target = value;
+  };
+  for (let i = 0; i < rest.length; i++) {
+    const m = /^--track(?:=(.*))?$/.exec(rest[i]);
+    if (m && sub === 'take') set(m[1] !== undefined ? m[1] : rest[++i]);
+    else if (rest[i].startsWith('--')) throw new UsageError(`factory ${sub} does not take ${rest[i].split('=')[0]}`);
+    else set(rest[i]);
+  }
+  return {
+    path: `/api/agent/factory/${sub}`,
+    request: {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(target !== undefined ? { target } : {}),
+    },
+  };
 }
 
 // `auto` is the server's default. `default` is the old name for `manual`, still
@@ -222,7 +239,9 @@ export async function main({
   let path = '/api/agent/sessions';
   if (command === 'factory') {
     try {
-      ({ path, request } = await factoryRequest(argv.slice(1), stdin, headers));
+      ({ path, request } = CLAIM_SUBS.includes(argv[1])
+        ? claimRequest(argv.slice(1), headers)
+        : await factoryRequest(argv.slice(1), stdin, headers));
     } catch (error) {
       if (error instanceof UsageError) return fail(`${error.message}\n${USAGE}`, 2);
       throw error;
