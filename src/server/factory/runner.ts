@@ -7,6 +7,8 @@ import { unitJobId, type EngineDeps, type UnitRef, type UnitWorktree } from './d
 import { DEFAULT_FACTORY_LIMITS, type FactoryLimits } from './limits.js';
 import { ensureRunState, saveRunState } from './run-state.js';
 import { stepHandler, type AgentRequest, type StepContext } from './steps.js';
+// Registers the reviewer's step handlers (review, review-fix, per-feature track steps).
+import './review-step.js';
 import { nextStep, recordOutcome, templateFor, type Progress, type WorkflowTemplate } from './templates.js';
 
 const logger = createLogger('factory-runner');
@@ -43,7 +45,7 @@ export type RunEnd =
   | { kind: 'finished' };
 
 /** Handlers that continue the unit's working conversation; its session is theirs. */
-const WORK_HANDLERS = new Set(['implement', 'track-features', 'fix', 'summary']);
+const WORK_HANDLERS = new Set(['implement', 'track-features', 'track-features-reviewed', 'fix', 'review-fix', 'summary']);
 
 const WRITE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'];
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];

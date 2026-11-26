@@ -420,6 +420,7 @@
         <button type="button" class="settings-tab" role="tab" id="settings-tab-notifications" aria-controls="settings-panel-notifications" aria-selected="true">Notifications<span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
         <button type="button" class="settings-tab" role="tab" id="settings-tab-display" aria-controls="settings-panel-display" aria-selected="false" tabindex="-1">Display<span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
         <button type="button" class="settings-tab" role="tab" id="settings-tab-sessions" aria-controls="settings-panel-sessions" aria-selected="false" tabindex="-1">Sessions<span class="settings-tab-scope" title="Saved on the server: applies to every device, without a restart">server</span><span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
+        <button type="button" class="settings-tab" role="tab" id="settings-tab-factory" aria-controls="settings-panel-factory" aria-selected="false" tabindex="-1">Factory<span class="settings-tab-scope" title="Saved on the server: applies to every device, without a restart">server</span><span class="settings-tab-dirty hidden"></span><span class="sr-only settings-tab-dirty-label"></span></button>
         <button type="button" class="settings-tab" role="tab" id="settings-tab-server" aria-controls="settings-panel-server" aria-selected="false" tabindex="-1">Server<span id="settings-tab-server-dot" class="settings-tab-behind" hidden></span></button>
       </div>
 
@@ -522,6 +523,68 @@
             </div>
             <div id="setting-session-limits-status" class="setting-error" role="status" aria-live="polite"></div>
           </div>
+        </div>
+
+        <!-- Saved in the server's config, not this browser; see src/client/factory-setting.ts. -->
+        <div class="settings-panel" role="tabpanel" id="settings-panel-factory" aria-labelledby="settings-tab-factory" hidden>
+          <div class="settings-section">
+            <div class="settings-section-title">Review</div>
+            <div class="setting-item">
+              <div class="setting-radios">
+                <label><input type="radio" name="factory-review-mode" value="agent" disabled> Reviewer agent decides</label>
+                <label><input type="radio" name="factory-review-mode" value="agent-escalate" disabled> Agent, escalate to me when risky</label>
+                <label><input type="radio" name="factory-review-mode" value="me" disabled> Me: every item waits for me</label>
+              </div>
+            </div>
+          </div>
+          <div class="settings-section" id="setting-factory-rules">
+            <div class="settings-section-title">Escalate to me when</div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-factory-rule-sensitive" disabled>
+              <label for="setting-factory-rule-sensitive">It touches auth, the access gate, accounts or migrations</label>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-factory-rule-large-diff" disabled>
+              <label for="setting-factory-rule-large-diff">
+                The diff is large
+                <div class="setting-description">Tests, lockfiles and generated files excluded.</div>
+              </label>
+            </div>
+            <div class="setting-item setting-sub">
+              <label for="setting-factory-large-diff">Changed lines over</label>
+              <input type="number" id="setting-factory-large-diff" step="1" disabled>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-factory-rule-fix-loops" disabled>
+              <label for="setting-factory-rule-fix-loops">
+                It needed every fix loop
+                <div class="setting-description">Approved only after <span id="setting-factory-fix-loops">2</span> fix loops. Changes still asked for after them always wait for you.</div>
+              </label>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-factory-rule-assumptions" disabled>
+              <label for="setting-factory-rule-assumptions">It made assumptions instead of asking</label>
+            </div>
+            <div class="setting-item">
+              <input type="checkbox" id="setting-factory-rule-new-dependency" disabled>
+              <label for="setting-factory-rule-new-dependency">It adds a dependency</label>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Review granularity</div>
+            <div class="setting-item">
+              <div class="setting-radios">
+                <label><input type="radio" name="factory-review-granularity" value="track" disabled> Per track: once, after all its features</label>
+                <label><input type="radio" name="factory-review-granularity" value="feature" disabled> Per feature: after each feature's commit</label>
+              </div>
+            </div>
+            <div class="settings-panel-note">A track sent with its own granularity keeps it.</div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Engine limits</div>
+            <ul id="setting-factory-limits" class="setting-description"></ul>
+          </div>
+          <div id="setting-factory-status" class="setting-error" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Restart / build & restart, acting on their own (no Save/Cancel on this tab); see

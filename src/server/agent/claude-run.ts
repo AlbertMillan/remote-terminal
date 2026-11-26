@@ -215,7 +215,12 @@ export interface SpawnOptions {
    * shell (`shell: true`), so anything but a plain model name is ignored.
    */
   model?: string;
+  /** `--effort` for this run; unset keeps the CLI's default. */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
+
+/** The `--effort` levels the CLI takes; anything else is never passed to the shell. */
+const EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface RunOptions extends SpawnOptions {
   /**
@@ -331,6 +336,7 @@ export function spawnClaude(
         // transcript from the first line — before any envelope exists.
         ...(!options.resumeSessionId && options.sessionId ? ['--session-id', options.sessionId] : []),
         ...(options.model && SAFE_MODEL.test(options.model) ? ['--model', options.model] : []),
+        ...(options.effort && EFFORTS.includes(options.effort) ? ['--effort', options.effort] : []),
         '--output-format',
         'json',
       ],

@@ -497,6 +497,14 @@ function runMigrations(database: Database.Database): void {
         );
       `,
     },
+    {
+      // A track's (or item's) override of Settings → Factory's review
+      // granularity: 'track' or 'feature', NULL for the server setting
+      // (factory/review-settings.ts). Set when the work is sent, by the session
+      // that planned it. Numbered 026: main's merge queue holds 025.
+      name: '026_factory_review_granularity',
+      sql: `ALTER TABLE factory_items ADD COLUMN review_granularity TEXT;`,
+    },
   ];
 
   const appliedMigrations = database

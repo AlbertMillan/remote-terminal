@@ -44,6 +44,11 @@ export const LEASE_EXPIRY_MS = 5 * 60_000;
 /** P2: the priority of a feature line that names none. */
 export const DEFAULT_PRIORITY = 2;
 
+/** Review a track once as a whole, or after each of its features' commits. */
+export type ReviewGranularity = 'track' | 'feature';
+
+export const REVIEW_GRANULARITIES: readonly ReviewGranularity[] = ['track', 'feature'];
+
 export interface FactoryItem {
   projectCwd: string;
   featureId: string;
@@ -54,6 +59,8 @@ export interface FactoryItem {
   /** 1 (P1) is most urgent. */
   priority: number;
   modelTier: string | null;
+  /** Overrides Settings → Factory's review granularity for this item's unit; null follows the setting. */
+  reviewGranularity: ReviewGranularity | null;
   claimOwner: string | null;
   claimKind: ClaimKind | null;
   leaseExpiresAt: string | null;

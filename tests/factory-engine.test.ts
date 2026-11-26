@@ -12,7 +12,8 @@ import { makeTmpDataDir } from './helpers/tmp-data-dir.js';
 
 const dataDir = makeTmpDataDir('factory-engine');
 const configPath = join(dataDir, 'config.json');
-writeFileSync(configPath, JSON.stringify({ persistence: { dataDir } }));
+// Review by "me": these tests are about the engine; the reviewer agent is factory-review.test.ts.
+writeFileSync(configPath, JSON.stringify({ persistence: { dataDir }, factory: { review: { mode: 'me' } } }));
 process.env.CLAUDE_REMOTE_CONFIG = configPath;
 
 const { loadConfig } = await import('../src/server/config.js');

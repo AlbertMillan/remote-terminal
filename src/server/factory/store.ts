@@ -5,6 +5,7 @@ import {
   DEFAULT_PRIORITY,
   DEPENDENCY_TYPES,
   LEASE_EXPIRY_MS,
+  REVIEW_GRANULARITIES,
   type ClaimKind,
   type ClaimResult,
   type Claimant,
@@ -12,6 +13,7 @@ import {
   type FactoryDependency,
   type FactoryItem,
   type ItemStatus,
+  type ReviewGranularity,
   type SettableItemStatus,
 } from './types.js';
 
@@ -40,6 +42,7 @@ interface ItemRow {
   status: string;
   priority: number;
   model_tier: string | null;
+  review_granularity: string | null;
   claim_owner: string | null;
   claim_kind: string | null;
   lease_expires_at: string | null;
@@ -68,6 +71,7 @@ function toItem(row: ItemRow): FactoryItem {
     status: row.status as ItemStatus,
     priority: row.priority,
     modelTier: row.model_tier,
+    reviewGranularity: isGranularity(row.review_granularity) ? row.review_granularity : null,
     claimOwner: row.claim_owner,
     claimKind: (row.claim_kind as ClaimKind | null) ?? null,
     leaseExpiresAt: row.lease_expires_at,
@@ -161,12 +165,24 @@ export interface CreateItemInput {
   step?: string | null;
   priority?: number;
   modelTier?: string | null;
+  reviewGranularity?: ReviewGranularity | null;
+}
+
+function isGranularity(value: unknown): value is ReviewGranularity {
+  return (REVIEW_GRANULARITIES as readonly unknown[]).includes(value);
+}
+
+function checkGranularity(value: unknown): void {
+  if (value !== null && !isGranularity(value)) {
+    throw new FactoryStoreError(`Not a review granularity: ${JSON.stringify(value)}`);
+  }
 }
 
 /** Add a feature to the factory as an `open` item. Refuses one already there. */
 export function createItem(input: CreateItemInput, now = Date.now()): FactoryItem {
   checkFeatureId(input.featureId);
   if (input.priority !== undefined) checkPriority(input.priority);
+  if (input.reviewGranularity !== undefined) checkGranularity(input.reviewGranularity);
   const key = pathKey(input.projectCwd);
   if (getRow(key, input.featureId)) {
     throw new FactoryStoreError(`${input.featureId} is already a factory item`);
@@ -176,8 +192,8 @@ export function createItem(input: CreateItemInput, now = Date.now()): FactoryIte
     .prepare(
       `INSERT INTO factory_items
          (project_key, project_cwd, feature_id, track_name, workflow, step, status,
-          priority, model_tier, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
+          priority, model_tier, review_granularity, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`
     )
     .run(
       key,
@@ -188,6 +204,7 @@ export function createItem(input: CreateItemInput, now = Date.now()): FactoryIte
       input.step ?? null,
       input.priority ?? DEFAULT_PRIORITY,
       input.modelTier ?? null,
+      input.reviewGranularity ?? null,
       at,
       at
     );
@@ -234,6 +251,7 @@ export interface ItemPatch {
   status?: SettableItemStatus;
   priority?: number;
   modelTier?: string | null;
+  reviewGranularity?: ReviewGranularity | null;
 }
 
 const COLUMN_OF: Record<keyof ItemPatch, string> = {
@@ -243,6 +261,7 @@ const COLUMN_OF: Record<keyof ItemPatch, string> = {
   status: 'status',
   priority: 'priority',
   modelTier: 'model_tier',
+  reviewGranularity: 'review_granularity',
 };
 
 /**
@@ -270,6 +289,7 @@ export function updateItem(
     throw new FactoryStoreError(`Cannot set status ${JSON.stringify(patch.status)}; in_progress comes from a claim`);
   }
   if (patch.priority !== undefined) checkPriority(patch.priority);
+  if (patch.reviewGranularity !== undefined) checkGranularity(patch.reviewGranularity);
   const sets = entries.map((k) => `${COLUMN_OF[k]} = ?`);
   const values: (string | number | null)[] = entries.map((k) => patch[k] as string | number | null);
   if (patch.status !== undefined) {

@@ -151,6 +151,22 @@ const FIX_STEP: WorkflowStep = {
   loop: { back: 'verify', max: FIX_LOOP_MAX },
 };
 
+/**
+ * The reviewer asked for changes (review-step.ts): fix them, then check and
+ * review again, at most FIX_LOOP_MAX times. The review step escalates itself
+ * at the cap, with its verdict attached, before this step's own park is reached.
+ */
+const REVIEW_FIX_STEP: WorkflowStep = {
+  id: 'review-fix',
+  handler: 'review-fix',
+  needs: ['review'],
+  when: [{ step: 'review', outcome: 'changes' }],
+  loop: { back: 'verify', max: FIX_LOOP_MAX },
+};
+
+/** Features one track may hold when it is reviewed per feature (one `next-feature` loop each). */
+export const TRACK_FEATURES_MAX = 100;
+
 /** Loose work: shaped, implemented and checked as one item. */
 export const ITEM_TEMPLATE: WorkflowTemplate = {
   name: 'item',
@@ -162,7 +178,8 @@ export const ITEM_TEMPLATE: WorkflowTemplate = {
     FIX_STEP,
     { id: 'summary', handler: 'summary', needs: ['fix'] },
     { id: 'review', handler: 'review', needs: ['summary'] },
-    { id: 'merge', handler: 'merge', needs: ['review'] },
+    REVIEW_FIX_STEP,
+    { id: 'merge', handler: 'merge', needs: ['review-fix'] },
   ],
 };
 
@@ -170,17 +187,30 @@ export const ITEM_TEMPLATE: WorkflowTemplate = {
  * A planned track: one agent works its features in order in the track's
  * worktree, one commit per feature, then the whole track is checked, reviewed
  * and merged as one. No shaping: the session that planned it wrote the spec.
+ *
+ * Reviewed per feature (Settings → Factory, or the track's override), the
+ * `features` step builds only the next feature and reports `more` while others
+ * remain; `next-feature` then sends the walk back to it, so each feature is
+ * checked and reviewed after its own commit, and the track merges once.
  */
 export const TRACK_TEMPLATE: WorkflowTemplate = {
   name: 'track',
   steps: [
-    { id: 'features', handler: 'track-features', needs: [] },
+    { id: 'features', handler: 'track-features-reviewed', needs: [] },
     { id: 'verify', handler: 'verify', needs: ['features'] },
     { id: 'self-review', handler: 'self-review', needs: ['verify'] },
     FIX_STEP,
     { id: 'summary', handler: 'summary', needs: ['fix'] },
     { id: 'review', handler: 'review', needs: ['summary'] },
-    { id: 'merge', handler: 'merge', needs: ['review'] },
+    REVIEW_FIX_STEP,
+    {
+      id: 'next-feature',
+      handler: 'next-feature',
+      needs: ['review-fix'],
+      when: [{ step: 'features', outcome: 'more' }],
+      loop: { back: 'features', max: TRACK_FEATURES_MAX },
+    },
+    { id: 'merge', handler: 'merge', needs: ['next-feature'] },
   ],
 };
 
