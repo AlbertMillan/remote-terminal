@@ -25,8 +25,6 @@ const { jobEvents } = await import('../src/server/jobs/events.js');
 const { buildJobsSummary, RECENT_TERMINAL_MS } = await import('../src/server/jobs/summary.js');
 const { STAGE_ORDER } = await import('../src/server/jobs/types.js');
 const { invalidateUsageCache } = await import('../src/server/usage/store.js');
-// The client half of the pair: how long a finished card stays on the panel.
-const { FINISHED_LINGER_MS } = await import('../src/client/job-overlay.js');
 
 const ALPHA = 'C:\\projects\\alpha-service';
 const BETA = 'C:\\projects\\beta';
@@ -162,15 +160,6 @@ describe('buildJobsSummary', () => {
     invalidateUsageCache();
     // 40k output tokens on Opus 5 at $25/MTok.
     expect(buildJobsSummary().jobs[0].costUsd).toBeCloseTo(1.0, 10);
-  });
-});
-
-describe('the terminal-job window', () => {
-  it('outlasts the panel window, or a finished card would vanish before its minute', () => {
-    // The panel shows a finished job for FINISHED_LINGER_MS from when it first
-    // saw it. If the server stopped sending it sooner, the card would disappear
-    // early -- silently, and only for whoever happened to be watching.
-    expect(FINISHED_LINGER_MS).toBeLessThan(RECENT_TERMINAL_MS);
   });
 });
 

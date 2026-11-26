@@ -5,7 +5,8 @@ import { PipManager } from './pip-manager.js';
 import { ProjectWorkspace } from './project-workspace.js';
 import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
-import { JobOverlay, type JobSummary } from './job-overlay.js';
+import { FactoryOverlay } from './factory-overlay.js';
+import { FactoryBoardView } from './factory-board.js';
 import { PlanUsageChip } from './plan-usage-chip.js';
 import { AccountUsageModal } from './account-usage-modal.js';
 import { ShortcutsModal } from './shortcuts-modal.js';
@@ -176,18 +177,28 @@ class SessionManager {
   /** Cross-project overview; clicking a row opens that project. */
   private rollup = new RollupView((cwd) => this.projectLogView.showProjectLog(cwd));
   /**
-   * The live job panel over the main area. Fed by pushed `jobs.summary`
-   * messages, so it stays current while a terminal is in front of it.
+   * The Factory panel over the main area (the Jobs overlay, reworked). Fed by
+   * pushed `factory.summary` messages, so it stays current while a terminal is
+   * in front of it; its cards and "Open board" lead to the board below.
    */
-  private jobOverlay = new JobOverlay((job) => void this.openJobFromOverlay(job));
-  /** Notifications, display, the session limits and Restart; after jobOverlay and buildIndicator, which it is handed. */
+  private factoryOverlay = new FactoryOverlay({
+    openBoard: (unitKey) => void this.factoryBoard.show(unitKey),
+    addWork: () => void this.factoryBoard.show(undefined, true),
+  });
+  /** The factory board in the main area: columns, drawers, Add work, the morning report. */
+  private factoryBoard = new FactoryBoardView({
+    takeMainArea: () => this.giveMainAreaToBoard(),
+    returnToMain: () => this.returnFromBoard(),
+    syncOverlay: () => this.syncFactoryOverlay(),
+  });
+  /** Notifications, display, the session limits and Restart; after factoryOverlay and buildIndicator, which it is handed. */
   private settingsModal = new SettingsModal({
     buildBehind: () => this.buildIndicator.behind,
     notificationPreferences: () => this.notifications.preferences,
     setNotificationPreferences: (prefs) => this.notifications.setPreferences(prefs),
     notificationPermission: () => this.notifications.permission(),
-    jobOverlay: this.jobOverlay,
-    syncJobOverlay: () => this.syncJobOverlay(),
+    factoryOverlay: this.factoryOverlay,
+    syncFactoryOverlay: () => this.syncFactoryOverlay(),
     renderSessionList: () => this.renderSessionList(),
   });
   private planUsage = new PlanUsageChip();
@@ -199,7 +210,8 @@ class SessionManager {
     jobBoard: this.jobBoard,
     rollup: this.rollup,
     detachCurrentSession: () => this.detachCurrentSession(),
-    syncJobOverlay: () => this.syncJobOverlay(),
+    syncFactoryOverlay: () => this.syncFactoryOverlay(),
+    hideFactoryBoard: () => this.factoryBoard.hide(),
     showNewSessionModal: (cwd) => this.showNewSessionModal(cwd),
     openHistorySession: (claudeSessionId, cwd, mode, account) => this.openHistorySession(claudeSessionId, cwd, mode, account),
   });
@@ -210,7 +222,8 @@ class SessionManager {
     this.mobileNav.setupMobileNavigation();
     this.shortcutsModal.renderWelcomeShortcuts();
     this.setupPipButton();
-    this.jobOverlay.attach();
+    this.factoryOverlay.attach();
+    this.factoryBoard.attach();
     this.planUsage.openBreakdown = () => void this.accountUsage.open(this.planUsage.latest());
     this.planUsage.onRender = (data, now) => this.accountUsage.update(data, now);
     this.planUsage.logIn = (account) => this.startLogin(account, false, () => void this.planUsage.refreshLogin(account));
@@ -264,7 +277,8 @@ class SessionManager {
     document.getElementById('tab-projects')?.addEventListener('click', () => this.projectLogView.switchTab('projects'));
     document.getElementById('refresh-projects-btn')?.addEventListener('click', () => this.projectLogView.loadProjectBoard());
     document.getElementById('overview-btn')?.addEventListener('click', () => {
-      void this.rollup.show().then(() => this.syncJobOverlay());
+      this.factoryBoard.hide();
+      void this.rollup.show().then(() => this.syncFactoryOverlay());
     });
     document.getElementById('rollup-refresh-btn')?.addEventListener('click', () => void this.rollup.load());
     const rollupBody = document.getElementById('rollup-body');
@@ -434,9 +448,9 @@ class SessionManager {
     this.stopRequests.clear();
     // Nor for an account move (account-moves.ts).
     this.accountMoves.clear();
-    // Job states from before the drop go stale silently -- no further push is
+    // Factory states from before the drop go stale silently -- no further push is
     // coming -- so show nothing until the server re-seeds us after auth.
-    this.jobOverlay.clear();
+    this.factoryOverlay.clear();
   }
 
   private send(type: string, payload?: any): string {
@@ -522,7 +536,12 @@ class SessionManager {
         this.handleTerminalResized(message.payload);
         break;
       case 'jobs.summary':
-        this.jobOverlay.update(message.payload);
+        // The old pipeline's feed: the Projects board polls its own jobs, and the
+        // Android app reads this; the web overlay is the factory's now.
+        break;
+      case 'factory.summary':
+        this.factoryOverlay.update(message.payload);
+        this.factoryBoard.onSummary();
         break;
       case 'projects.changed':
         this.workspace.onProjectsChanged();
@@ -848,26 +867,37 @@ class SessionManager {
   /**
    * Keep the overlay where it belongs: docked into the terminal header when
    * that is the chosen placement and a header is on screen, and off entirely
-   * while the Projects or Overview view is up -- both put their own actions in
-   * that corner and both already list these jobs in full.
+   * while the Projects, Overview or factory board view is up -- each puts its
+   * own actions in that corner, and the board shows these cards in full.
    */
-  private syncJobOverlay(): void {
+  private syncFactoryOverlay(): void {
     const isVisible = (id: string): boolean =>
       !document.getElementById(id)?.classList.contains('hidden');
-    this.jobOverlay.setSuppressed(isVisible('project-log-view') || isVisible('rollup-view'));
-    this.jobOverlay.applyPlacement();
+    this.factoryOverlay.setSuppressed(
+      isVisible('project-log-view') || isVisible('rollup-view') || isVisible('factory-board-view')
+    );
+    this.factoryOverlay.applyPlacement();
   }
 
-  /** Hand a job from the overlay to the board that can actually act on it. */
-  private async openJobFromOverlay(job: JobSummary): Promise<void> {
+  /** The board takes the main area, as the Overview does; the session stays attached behind it. */
+  private giveMainAreaToBoard(): void {
     this.rollup.hide();
-    // switchTab starts a board load of its own; join it rather than race a
-    // second one, and re-check afterwards -- getProject() before that load
-    // resolves says nothing about whether the project exists.
-    if (!this.projectLogView.isProjectsTabActive()) this.projectLogView.switchTab('projects');
-    if (!this.workspace.getProject(job.projectCwd)) await this.projectLogView.joinProjectBoardLoad();
-    this.projectLogView.showProjectLog(job.projectCwd);
-    this.jobBoard.focusJob(job.id);
+    this.projectLogView.clearSelection();
+    this.jobBoard.stopPolling();
+    for (const id of ['terminal-container', 'terminal-header', 'welcome-screen', 'project-log-view']) {
+      document.getElementById(id)?.classList.add('hidden');
+    }
+  }
+
+  /** Back from the board: the attached session's terminal, else the welcome screen. */
+  private returnFromBoard(): void {
+    const session = this.currentSessionId ? this.sessions.get(this.currentSessionId) : undefined;
+    if (session) {
+      this.showTerminal(session);
+      this.terminalMgr?.fit();
+    } else {
+      this.showWelcomeScreen();
+    }
   }
 
   private updateConnectionStatus(status: ConnectionStatus): void {
@@ -910,6 +940,7 @@ class SessionManager {
   }
 
   private showTerminal(session: SessionInfo): void {
+    this.factoryBoard.hide();
     this.projectLogView.clearSelection();
     this.jobBoard.stopPolling();
     document.getElementById('project-log-view')?.classList.add('hidden');
@@ -922,7 +953,7 @@ class SessionManager {
 
     this.updateForkControls(session);
     this.accountMenu?.update();
-    this.syncJobOverlay();
+    this.syncFactoryOverlay();
   }
 
   private updateForkControls(session?: SessionInfo): void {
@@ -944,12 +975,12 @@ class SessionManager {
 
     document.getElementById('terminal-container')?.classList.add('hidden');
     document.getElementById('terminal-header')?.classList.add('hidden');
-    // Only reveal the welcome screen if the project-log view isn't taking over.
-    if (!this.projectLogView.hasSelection()) {
+    // Only reveal the welcome screen if the project-log view or the board isn't taking over.
+    if (!this.projectLogView.hasSelection() && !this.factoryBoard.isVisible()) {
       document.getElementById('welcome-screen')?.classList.remove('hidden');
     }
 
-    this.syncJobOverlay();
+    this.syncFactoryOverlay();
     this.renderSessionList();
   }
 

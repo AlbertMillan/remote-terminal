@@ -90,6 +90,7 @@ export const SERVER_MESSAGE_TYPES = [
   'notification.preferences.updated',
   'notification',
   'jobs.summary',
+  'factory.summary',
   'projects.changed',
   'error',
   'pong',

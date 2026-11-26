@@ -22,6 +22,9 @@ const { CLIENT_MESSAGE_TYPES, SERVER_MESSAGE_TYPES } = await import('../src/serv
 const { sessionToInfo, categoryToInfo } = await import('../src/server/websocket/connections.js');
 const store = await import('../src/server/jobs/store.js');
 const { buildJobsSummary } = await import('../src/server/jobs/summary.js');
+const factory = await import('../src/server/factory/store.js');
+const mergeStore = await import('../src/server/factory/merge-queue-store.js');
+const { buildFactorySummary } = await import('../src/server/factory/board.js');
 
 interface FixtureMessage {
   type: string;
@@ -30,7 +33,7 @@ interface FixtureMessage {
 }
 
 interface Fixture {
-  shapes: Record<'session' | 'category' | 'job', Record<string, unknown>>;
+  shapes: Record<'session' | 'category' | 'job' | 'unit' | 'merge', Record<string, unknown>>;
   client: FixtureMessage[];
   server: FixtureMessage[];
 }
@@ -87,6 +90,21 @@ describe('protocol fixture', () => {
     expect(sorted(Object.keys(fixture.shapes.job))).toEqual(sorted(Object.keys(job)));
     const stageKeys = Object.keys((fixture.shapes.job.stages as Record<string, unknown>[])[0]);
     expect(sorted(stageKeys)).toEqual(sorted(Object.keys(job.stages[0])));
+  });
+
+  it('describes a factory unit, its features and a merge entry with exactly the fields the server sends', () => {
+    factory.createItem({ projectCwd: dataDir, featureId: 'f-t1', trackName: 'T', workflow: 'track' });
+    mergeStore.insertMerge({ projectCwd: dataDir, kind: 'track', branch: 'track/t', worktreePath: dataDir, baseBranch: 'main', featureIds: ['f-t1'], trackName: 'T' });
+    const summary = buildFactorySummary();
+    const [unit] = summary.units;
+    expect(sorted(Object.keys(fixture.shapes.unit))).toEqual(sorted(Object.keys(unit)));
+    const featureKeys = Object.keys((fixture.shapes.unit.features as Record<string, unknown>[])[0]);
+    expect(sorted(featureKeys)).toEqual(sorted(Object.keys(unit.features[0])));
+    expect(sorted(Object.keys(fixture.shapes.merge))).toEqual(sorted(Object.keys(summary.merges[0])));
+    const message = fixture.server.find((m) => m.type === 'factory.summary')?.payload as Record<string, unknown>;
+    expect(sorted(Object.keys(message))).toEqual(sorted(Object.keys(summary)));
+    expect(sorted(Object.keys(message.counts as object))).toEqual(sorted(Object.keys(summary.counts)));
+    expect(sorted(Object.keys(message.dispatch as object))).toEqual(sorted(Object.keys(summary.dispatch)));
   });
 
   it('refers only to shapes it defines', () => {

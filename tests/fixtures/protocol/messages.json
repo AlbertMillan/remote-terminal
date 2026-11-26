@@ -49,6 +49,50 @@
       "costUsd": 0.42,
       "createdAt": "2026-11-06T10:00:00.000Z",
       "updatedAt": "2026-11-06T10:10:00.000Z"
+    },
+    "unit": {
+      "key": "c:\\projects\\alpha|track:History search",
+      "projectCwd": "C:\\projects\\alpha",
+      "projectName": "alpha",
+      "unitId": "track:History search",
+      "isTrack": true,
+      "trackName": "History search",
+      "title": "History search",
+      "featureIds": ["f-h1aaaa", "f-h2bbbb"],
+      "column": "review",
+      "status": "parked",
+      "step": "review",
+      "needsYou": true,
+      "reviewer": "you",
+      "escalated": true,
+      "triage": false,
+      "reason": "review: escalated: touches auth/access-gate.ts",
+      "features": [
+        { "id": "f-h1aaaa", "title": "Index transcripts", "state": "done" },
+        { "id": "f-h2bbbb", "title": "Search API", "state": "now" }
+      ],
+      "waitsFor": [],
+      "mergeId": null,
+      "mergeStatus": null,
+      "tokens": 640000,
+      "modelTier": "sonnet",
+      "stalled": null,
+      "heartbeatAt": "2026-11-06T10:09:00.000Z",
+      "updatedAt": "2026-11-06T10:10:00.000Z"
+    },
+    "merge": {
+      "id": "mq-1",
+      "projectCwd": "C:\\projects\\alpha",
+      "projectName": "alpha",
+      "kind": "item",
+      "title": "Tab leaves the folder field",
+      "branch": "factory/tab-f-z9le4c",
+      "featureIds": ["f-z9le4c"],
+      "status": "parked",
+      "detail": "The resolver could not settle the conflict",
+      "conflictPaths": ["src/client/session-manager.ts"],
+      "mergeSha": null,
+      "updatedAt": "2026-11-06T10:10:00.000Z"
     }
   },
   "client": [
@@ -120,6 +164,7 @@
     { "type": "notification", "payload": { "kind": "prompt-missing", "sessionId": "s-1", "name": "builder", "detail": "The prompt never arrived.", "timestamp": "2026-11-06T10:00:00.000Z" } },
     { "type": "notification", "payload": { "kind": "account-changed", "sessionId": "s-1", "name": "builder", "detail": "Now logged in as someone else.", "timestamp": "2026-11-06T10:00:00.000Z" } },
     { "type": "jobs.summary", "payload": { "jobs": ["$job"] } },
+    { "type": "factory.summary", "payload": { "units": ["$unit"], "merges": ["$merge"], "counts": { "running": 2, "reviewing": 1, "needsYou": 1, "merging": 1, "done": 3 }, "dispatch": { "started": true, "paused": null, "capped": { "C:\\projects\\beta": "5-hour usage at 82% (cap 80%)" }, "seats": 3, "running": 2 }, "tokensToday": 1900000, "since": "2026-11-06T00:00:00.000Z" } },
     { "type": "projects.changed", "payload": { "projectCwd": "C:\\projects\\alpha" } },
     { "type": "error", "payload": { "message": "Rate limit exceeded" } },
     { "type": "pong", "id": "23" }

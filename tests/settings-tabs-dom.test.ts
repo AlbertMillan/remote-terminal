@@ -35,8 +35,8 @@ function host(): SettingsModalHost {
     notificationPreferences: () => ({ browserEnabled: true, visualEnabled: true, notifyOnInput: true, notifyOnCompleted: true }),
     setNotificationPreferences: vi.fn(),
     notificationPermission: async () => permission,
-    jobOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
-    syncJobOverlay: vi.fn(),
+    factoryOverlay: { isEnabled: () => true, getPlacement: () => 'below', setPreferences: vi.fn() },
+    syncFactoryOverlay: vi.fn(),
     renderSessionList: vi.fn(),
     buildBehind: () => behind,
   };
