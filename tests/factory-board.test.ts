@@ -105,6 +105,18 @@ describe('board columns', () => {
     expect(unitOf(build(), 'f-aaaaaa')).toMatchObject({ column: 'intake', triage: true, needsYou: true });
   });
 
+  it('shows triage-status items in intake as needing you, counted once and never as running or stalled', () => {
+    // As triage.ts files them: status 'triage'; one also without the step, the status alone must do.
+    store.createItem({ projectCwd: PROJECT, featureId: 'f-aaaaaa', trackName: 'Inbox', workflow: 'item', status: 'triage', step: 'triage' }, T0);
+    store.createItem({ projectCwd: PROJECT, featureId: 'f-h1aaaa', trackName: 'Inbox', workflow: 'item', status: 'triage' }, T0);
+    const b = build({ now: T0 + 120 * MIN });
+    for (const id of ['f-aaaaaa', 'f-h1aaaa']) {
+      expect(unitOf(b, id), id).toMatchObject({ column: 'intake', triage: true, needsYou: true, status: 'open', reason: expect.stringMatching(/accept, backlog or dismiss/) });
+      expect(unitOf(b, id)?.stalled ?? null, id).toBeNull();
+    }
+    expect(b.counts).toEqual({ running: 0, reviewing: 0, needsYou: 2, merging: 0, done: 0 });
+  });
+
   it('puts a shaping question in intake, with its options and default for the drawer', () => {
     item('f-aaaaaa');
     store.updateItem(PROJECT, 'f-aaaaaa', { status: 'parked', step: 'shape' }, T0);

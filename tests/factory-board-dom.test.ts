@@ -161,7 +161,13 @@ function respond(url: string): unknown {
   if (path === '/api/factory/summary') return { markdown: '# Summary\n- New setting auth.allowedTags\n\n## Assumptions\n- Tags match exactly' };
   if (path === '/api/factory/diff') return { range: 'main...HEAD', stat: ' a.ts | 2 +-', patch: 'diff --git a/a.ts b/a.ts', truncated: false };
   if (path === '/api/projects/registry') return { registry: { projects: [{ cwd: CWD, name: 'alpha' }, { cwd: 'C:\\p\\beta' }] } };
-  if (path === '/api/factory/add') return { features: [{ id: 'f-r7qq2e', title: 'Android push retries on 503', requirements: ['back off, no spam'] }] };
+  // The add route's real answer (server factory/intake.ts).
+  if (path === '/api/factory/add') {
+    return {
+      features: [{ featureId: 'f-r7qq2e', title: 'Android push retries on 503', requirements: ['back off, no spam'], mockupFirst: false }],
+      order: [],
+    };
+  }
   return { ok: true };
 }
 
@@ -404,8 +410,15 @@ describe('helpers', () => {
     expect(joinAnswers(qs, ['yes', ' '])).toBeNull();
   });
 
-  it('reads an intake answer leniently', () => {
-    expect(readAddResult({ items: [{ featureId: 'f-1', title: 'T' }] }).features[0]).toMatchObject({ id: 'f-1', title: 'T' });
-    expect(readAddResult({ message: 'queued for intake' })).toEqual({ features: [], message: 'queued for intake' });
+  it("reads the add route's answer: featureId, title, requirements, mockupFirst", () => {
+    const data = {
+      features: [
+        { featureId: 'f-1', title: 'T', requirements: ['r1', 7], mockupFirst: true },
+        { title: 'no id' },
+      ],
+      order: [],
+    };
+    expect(readAddResult(data)).toEqual({ features: [{ id: 'f-1', title: 'T', requirements: ['r1'], mockupFirst: true }] });
+    expect(readAddResult({})).toEqual({ features: [] });
   });
 });

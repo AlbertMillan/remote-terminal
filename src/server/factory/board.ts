@@ -430,7 +430,8 @@ function buildUnit(group: UnitGroup, ctx: BuildContext): FactoryBoardUnit {
   const lead = items[0];
   const progress = state?.progress;
   const step = progress?.current ?? progress?.parked ?? lead.step ?? null;
-  const triage = items.some((i) => i.step === 'triage');
+  // The status is the store's truth; the step is what triage.ts also sets for the board.
+  const triage = items.some((i) => i.status === 'triage' || i.step === 'triage');
   const merge = mergeFor(ctx.merges.get(pathKey(projectCwd)) ?? [], state, ids);
   const column = columnOf(group, status, step, state, merge, triage);
   const blockers = ctx.blockers.get(pathKey(projectCwd)) ?? new Map<string, string[]>();
@@ -526,7 +527,8 @@ function build(opts: BoardOptions, withDetail: boolean): FactoryBoard {
   const limits = opts.limits ?? DEFAULT_FACTORY_LIMITS;
   const filter = opts.projectCwd !== undefined ? { projectCwd: opts.projectCwd } : {};
 
-  const live = listItems({ ...filter, status: ['open', 'in_progress', 'parked'] });
+  // `triage`: discovered work waiting to be accepted (triage.ts), shown in intake.
+  const live = listItems({ ...filter, status: ['open', 'in_progress', 'parked', 'triage'] });
   const doneToday = doneSince(since, opts.projectCwd);
   const items = [...live, ...doneToday];
   const allLive = opts.projectCwd !== undefined ? listItems({ status: ['in_progress'] }) : live;
