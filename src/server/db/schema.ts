@@ -471,6 +471,33 @@ function runMigrations(database: Database.Database): void {
       `,
     },
     {
+      // The factory engine's progress per unit of work (factory/run-state.ts): a
+      // loose item (unit_id = its feature id) or a whole track run as one agent
+      // (unit_id = 'track:' + name). What a reclaimed or restarted run resumes
+      // from: its worktree, the Claude session it continues, the step outcomes
+      // and loop counts (progress, JSON), and the last commit. handed_off_at is
+      // set once the unit is in the merge sink, so dispatch leaves it alone.
+      name: '024_factory_runs',
+      sql: `
+        CREATE TABLE IF NOT EXISTS factory_runs (
+          project_key TEXT NOT NULL,
+          project_cwd TEXT NOT NULL,
+          unit_id TEXT NOT NULL,
+          worktree_path TEXT,
+          branch TEXT,
+          base_branch TEXT,
+          session_id TEXT,
+          last_commit TEXT,
+          progress TEXT NOT NULL DEFAULT '{}',
+          park_reason TEXT,
+          handed_off_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_key, unit_id)
+        );
+      `,
+    },
+    {
       // The factory's merge queue (src/server/factory/merge-queue.ts): one row
       // per entry, processed one at a time per project. merge_sha is the
       // merge commit, kept so Delete track can revert exactly it; a parked

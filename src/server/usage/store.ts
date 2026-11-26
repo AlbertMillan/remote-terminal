@@ -12,7 +12,7 @@ const logger = createLogger('usage-store');
  * What a headless run is for. Every `runClaude` caller tags its run so the
  * transcript it writes can be attributed without guessing.
  */
-export type RunKind = 'stage' | 'session-log' | 'migrate' | 'qa-generate' | 'merge-resolve';
+export type RunKind = 'stage' | 'session-log' | 'migrate' | 'qa-generate' | 'factory' | 'merge-resolve';
 
 export interface RunTag {
   projectCwd: string;
