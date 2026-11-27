@@ -6,7 +6,7 @@ each came from, alternatives, measurements) is in the `docs/` file linked from e
 
 Claude Remote: a self-hosted remote terminal (xterm.js over Tailscale) with session
 persistence (tmux on Linux/macOS, a SQLite-persisted scrollback on Windows/ConPTY), a
-project workspace over `PROJECT.md`, and a code factory running planned features in git worktrees.
+project workspace over `PROJECT.md`, and a job pipeline running features in git worktrees.
 
 ## Commands and environment
 
@@ -14,7 +14,7 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 
 - No formatter. **Never run prettier**: with no `.prettierrc` it rewrites the tree to double
   quotes. Match the surrounding style by hand.
-- Port **4220** is the user's live server. In a track or factory worktree, **never ask for a
+- Port **4220** is the user's live server. In a track or job worktree, **never ask for a
   restart to test your code**: 4220 runs main's `dist/`, so it loads none of it and closes
   every terminal. Use the isolated boot (`project/QA.md`, Flow 3).
 - ESM, `@server/*`/`@client/*` aliases, Node 22.12+ (runs on 26 LTS), esbuild for
@@ -27,14 +27,16 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 - Server: `index.ts` · `app.ts` · `sessions/` (`manager.ts`, `session-open.ts`,
   `boot-sweep.ts`, `pty-handler.ts`, `session-env.ts`) · `websocket/` (`handler.ts`,
   `connections.ts`, `handlers/`, `protocol.ts`, `validation.ts`, `origin.ts`) · `db/` ·
-  `auth/tailscale.ts` · `projects/` (registry, `PROJECT.md`, board, tracks,
-  `merge-trailers.ts`, `job-history.ts`) · `factory/` (`store.ts`, `dispatcher.ts`,
-  `runner.ts`, `templates.ts`, `merge-queue.ts`, `takeover.ts`, `cancel.ts`, `board.ts`) ·
-  `worktrees/` (`worktree.ts`, `resolve.ts`) · `qa/` (QA.md, `run-command.ts`) ·
+  `auth/tailscale.ts` · `projects/` (registry, `PROJECT.md`, board, tracks) · `jobs/`
+  (`pipeline.ts`, `lifecycle.ts`, `store.ts`, `stages/`, `worktree.ts`; `runner.ts` only
+  re-exports) · `factory/` (code factory, spec `project/code-factory.md`: `store.ts`,
+  `intake.ts`/`send.ts`/`triage.ts` in, `dispatcher.ts` + `steps.ts` run, `merge-queue.ts`
+  out, `takeover.ts`/`session-claims.ts` for sessions holding units, `factory-boot.ts`) ·
   `agent/claude-run.ts` (every headless `claude -p`) · `agent/sessions-api.ts` (agent
   routes; CLI `scripts/cr-session.mjs`, skill `skills/claude-remote-sessions/`).
 - Client: `terminal.ts` · `session-manager.ts` (+ its `*-view.ts`/`*-modal.ts`) ·
-  `project-workspace.ts` · `factory-board.ts` · `factory-overlay.ts` · `factory-claims.ts`.
+  `project-workspace.ts` · `job-board*.ts` · `factory-*.ts` (overlay, board, mockup drawer,
+  claims, settings) · `decision-format.ts`.
 
 ## WebSocket (`/ws`; message types in `protocol.ts`)
 
@@ -56,9 +58,8 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 
 ## Two authors of change → `docs/change-provenance.md`
 
-- Anything that reads, moves, reverts or attributes changes handles **both** factory-built
-  edits (recorded; old job merges too) and session-built edits (inferred), or it breaks
-  for one way of working.
+- Anything that reads, moves, reverts or attributes changes handles **both** job-built
+  edits (recorded) and session-built edits (inferred), or it breaks for one way of working.
 - Act on records by default; show inferences as **unticked** guesses, or unrelated work
   is reverted or moved.
 
@@ -116,20 +117,24 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 - The server installs `skills/` into `~/.claude/skills` at boot (`installSkillsAtBoot`),
   never on an isolated boot, which would install an unlanded skill.
 
-## Code factory → `docs/code-factory.md` (spec: `project/code-factory.md`)
+## Job pipeline → `docs/job-pipeline.md`
 
-- **Cancel** (`factory/cancel.ts`): every refusal first (a session holds it → 409 naming
-  it; its merge running) → mark items `cancelled` → abort and **await** the run → drop a
-  parked merge → tear down a loose item's worktree (a track's stays). Marking first is
-  what keeps the unwinding run from reopening the items; awaiting first is what keeps
-  `git worktree remove` off a dying process's open files.
-- Factory steps use `jobs.stageTimeoutMs`, not `projectLog.timeoutMs`.
+design → implement → integrate → review → fix → qa → merge → rebuild, each in the job's
+worktree. Gates after **design**, after **review**, before **merge**.
+
+- The merge gate is checked **before** its stage: a parked job keeps `stage` on the last
+  completed one and approval in `approved_gate`.
+- **Cancel** takes `queued`/`running`/`parked`; **Discard** takes `failed`/`done`/`cancelled`.
+  Never one verb for both.
+- Cancel: mark `cancelled` → abort → **await the stage unwinding** → tear down. Keep the
+  `stillLive()` guard in `runNextStage`'s `catch`, or an abort is recorded as `failed`.
+- Discard restores the project only for a job that **never merged** (`mergeLanded`).
+- Stages use `jobs.stageTimeoutMs`, not `projectLog.timeoutMs`.
+- QA precedence: failed > skipped > passed; a pass never masks a driver that never ran.
 - Usage comes only from the transcript ledger (`src/server/usage/`), keyed by `message.id`,
   never the `claude -p` envelope. Every `runClaude` passes a `tag`, recorded in
-  `agent_runs` **before** the spawn. Nothing deletes ledger or `agent_runs` rows; writes
-  outside `usage/` call `invalidateUsageCache()`. → `docs/token-usage-feature.md`
-- The retired pipeline's `jobs`/`job_stages` tables stay, never dropped and never written:
-  `projects/job-history.ts` reads them so Delete track still finds old job merges.
+  `agent_runs` **before** the spawn. Discard never deletes ledger rows; writes outside
+  `usage/` call `invalidateUsageCache()`. → `docs/token-usage-feature.md`
 - Non-git projects are `git init`ed and never pushed; Plastic workspaces are refused.
 - `removeWorktree`'s steps are **independent** (a busy folder must not skip `branch -D`);
   a failed `createWorktree` deletes only the branch it created; track folders use 8 id
@@ -137,7 +142,7 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 - **Never link `node_modules` (or anything) into a worktree**: `git worktree remove`
   deletes through a junction. Install with the lockfile (`project-deps.ts`).
   `removeWorktree` unlinks every link before git runs and skips git while one remains.
-- `resolveInWorktree()` resolves symlinks before its containment check.
+- A job's diff base is its recorded `baseBranch`, never the project's current branch.
 
 ### Agent runs — `agent/claude-run.ts`
 
@@ -146,10 +151,11 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 - Every run passes `--tools` (from `builtinToolsFor()`), `--strict-mcp-config` and
   `--disable-slash-commands`. Enabling MCP for a stage: scope `--mcp-config` to one server
   or keep `ToolSearch` in `--tools`, or every MCP tool loads eagerly.
-- A step **resumes the unit's session**; a failed resume re-runs fresh, but
+- An answer **resumes the session that asked**; a failed resume re-runs the pass, but
   `RunAbortedError` is re-thrown so a cancel never re-runs.
 - Prompt scoping is advisory; the post-run revert outside the allowed globs enforces it.
   Keep both.
+- Design questions must be self-contained (quote what you cite) and within its length budget.
 
 ### Project docs
 
@@ -164,7 +170,7 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 
 - Main's `PROJECT.md` owns backlog and landed tracks; a branched track's **worktree** owns
   its section and specs. Read via `readProjectPlan()`, write via `planFileFor()`, or the
-  board and the factory miss branched tracks. Never write `## Track:` on main for one.
+  board and dispatch miss branched tracks. Never write `## Track:` on main for one.
   Worktree-file writes take the project lock.
 - A move deletes a spec from main only if the worktree holds main's exact content.
 - Land copies the section back to main **before** merging and resets the branch's copy to
@@ -172,9 +178,9 @@ project workspace over `PROJECT.md`, and a code factory running planned features
   specs (`updateTrackFromMain`): main holds the commit that deleted them.
 - Plan commits on main use a **temporary index** (`commitOnHead`), never `git add`, or the
   user's staged work rides along. Land refuses staged files and uncommitted code, naming them.
-- A merge into a track branch happens **in the track worktree**, never pushes.
-- Every factory merge and Land records `merge_sha`; factory merges carry `Job-Id`/`Feature`
-  trailers (`projects/merge-trailers.ts`), as old job merges did.
+- A job based on a track branch merges **in the track worktree** (`mergeCwd`), never pushes.
+- Every job merge and Land records `merge_sha`; job merges carry `Job-Id`/`Feature`
+  trailers (`jobs/merge-trailers.ts`).
 - Both Lands and factory merges go through the per-project merge queue
   (`factory/merge-queue.ts`), one entry at a time; a new merge path that bypasses it
   interleaves with a queued one. It takes the lock only around shared-checkout git (never
@@ -187,16 +193,30 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 - Land closes the worktree's running sessions **after** every refusal, awaiting each.
   Land, Delete and the board read `getRunningSessions()` (an exited shell holds nothing).
 - Delete track reverts only merges tied by sha, trailer, or a **unique** `Merge job:
-  <title>` subject, reading `--first-parent` merges only. Its order: preflight → cancel
-  the track's factory units (all refusals checked first) → revert `--no-commit` (conflict: abort + `reset --hard`) → teardown → edits → one commit.
+  <title>` subject, reading `--first-parent` merges only. Its order: preflight → cancel →
+  revert `--no-commit` (conflict: abort + `reset --hard`) → teardown → edits → one commit.
 - Land, Delete, Branch now and merges into a track share a **try** lock
   (`project-lock.ts`); never make it wait, or Delete deadlocks against a merge.
 - `track-attribution.ts` is a guess (unticked in Delete); match files with
   `gitStatusEntries(cwd, { allUntracked: true })`.
 
+## Job board → `docs/job-decisions.md`, `docs/job-documents.md`
+
+- `decision-format.ts` parses prose: every rule degrades to **no match**, never a wrong
+  one, and drops nothing. It leaves `_` alone (identifiers).
+- One answer box per question, all required.
+- `render()` replaces the board wholesale; toggles go through it, `captureDrafts()` keeps
+  drafts. Never hand-patch the DOM.
+- Documents are **read-only** (the next `commitAll` would sweep an edit in). The pane
+  lists `git diff --numstat` plus `git ls-files --cached --others --exclude-standard`.
+- Reference linking only **wraps**, through one escape-and-link helper.
+- `resolveInWorktree()` resolves symlinks before its containment check.
+- Hiding the pane is the `docsCollapsed` class, never dropping `this.docs`; opening a
+  document always unfolds it (`openReference()`'s early return included).
+
 ## Android app (`android/`) → `docs/android-app.md`
 
-- A `/ws` type or session/category/factory field added to `protocol.ts` or `shared/protocol.ts`
+- A `/ws` type or session/category/job field added to `protocol.ts` or `shared/protocol.ts`
   goes into `tests/fixtures/protocol/messages.json` and the app's `protocol/Protocol.kt` too,
   or `npm test` and `npm run android:test` fail.
 - Build only through `scripts/android.mjs` (`npm run android:*`): the PATH `java` is 1.8.
