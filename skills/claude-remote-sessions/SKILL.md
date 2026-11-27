@@ -260,8 +260,8 @@ exactly as the board's Land button does, and **closes this session** to do it.
 node "$CLAUDE_REMOTE_CLI" land
 ```
 
-- A refusal (uncommitted code, a live job, a merge that would conflict, the
-  project on another branch) prints the server's reason and exits non-zero.
+- A refusal (uncommitted code, factory work still running on the track, a merge
+  that would conflict, the project on another branch) prints the server's reason and exits non-zero.
   Fix it, or tell the user, while you still can.
 - On success it prints `Land accepted; this session will close.` Say that to
   the user as your last message: the server closes this session within

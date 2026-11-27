@@ -18,6 +18,7 @@ import {
 
 const logger = createLogger('track-branches');
 import { TrackBranchError, reattachIfMissing } from './track-branches.js';
+import { trackFactoryWork, trackFactoryWorkMessage } from '../factory/track-work.js';
 
 /**
  * Land's git half (docs/track-branches.md): copy the section back to main, merge, reset the
@@ -47,6 +48,8 @@ export interface LandDeps {
    * removed, and drop them from the sidebar (`removeWorktreeSessions`).
    */
   removeSessions: (worktreePath: string) => Promise<unknown>;
+  /** The merge-queue entry this Land runs for: its own entry never blocks it (trackFactoryWork). */
+  ownMerge?: string;
 }
 
 /**
@@ -78,7 +81,7 @@ export async function landTrack(
   trackName: string,
   deps: LandDeps
 ): Promise<LandResult> {
-  const { track, mainEntries } = await landPreflight(project, trackName);
+  const { track, mainEntries } = await landPreflight(project, trackName, { ownMerge: deps.ownMerge });
   const docRel = docRelOf(project);
 
   // Every refusal is behind us, so closing now never kills a session for a
@@ -178,7 +181,8 @@ export async function landTrack(
 }
 
 /**
- * Land's checks that need no session, in Land's order: no running install,
+ * Land's checks that need no session, in Land's order: no factory work on
+ * the track (an agent's claim, a merge queued or running), no running install,
  * the project on the base branch, no code (and nothing staged) on main, no
  * code in the worktree. Uncommitted planning in the worktree is committed on
  * the track branch, as Land does. A session that
@@ -190,11 +194,17 @@ export async function landTrack(
  */
 export async function landPreflight(
   project: RegistryProject,
-  trackName: string
+  trackName: string,
+  opts: { ownMerge?: string } = {}
 ): Promise<{ track: TrackBranch; mainEntries: GitStatusEntry[] }> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to land', 404);
   const docRel = docRelOf(project);
+
+  // An agent still writing in the worktree, or a factory merge into the track
+  // still to run: landing now merges half-done work and removes the folder under it.
+  const working = trackFactoryWork(project.cwd, trackName, opts.ownMerge);
+  if (working.length > 0) throw new TrackBranchError(trackFactoryWorkMessage('land', working), 409);
 
   // No session exists yet while Open session waits on the install, so the
   // sessions Land closes can't include it; the teardown would delete under a

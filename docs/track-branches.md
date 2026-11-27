@@ -162,6 +162,14 @@ answers `202`; the Land itself, which closes that session, runs after the reply.
 
 Land is refused (409) unless:
 
+- the factory is not working on the track (`factory/track-work.ts`): no item of it is
+  running under an agent's claim, and no factory merge of it (the track, or a loose item
+  of it) is queued, holding or running. Landing under either merges half-done work and
+  removes the worktree an agent is still writing in; the refusal names each unit and
+  what it is doing. A unit a terminal session holds doesn't block (Land closes the
+  worktree's sessions after every refusal), nor does a parked or closed one. The
+  queue's own entry, the one whose Land or update is asking, is passed as `ownMerge`
+  and never blocks itself;
 - no dependency install is running in the worktree;
 - the project is on the track's base branch;
 - the worktree holds no uncommitted code. Uncommitted planning files there
@@ -281,7 +289,8 @@ not just the cwd: a project's `doc` override decides which files are its plan.
 
 **Update from main**, in the worktree, under the project try lock (as Land):
 
-1. Refuse on a running install, or uncommitted code in the worktree; uncommitted planning is
+1. Refuse on factory work running on the track (as Land, `ownMerge` excepted), a running
+   install, or uncommitted code in the worktree; uncommitted planning is
    committed first (`commitWorktreePlanning`).
 2. Remember the track's section, and the specs it links to that the base lacks, as of
    HEAD.
