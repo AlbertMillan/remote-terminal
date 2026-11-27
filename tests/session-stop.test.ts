@@ -325,8 +325,10 @@ describe('Build & restart parking (project/revive-after-build-restart.md)', () =
     running(PARENT);
     running(OTHER);
     await settle();
-    persistScrollback.mockImplementationOnce(() => {
-      throw new Error('database is locked');
+    // By id, not mockImplementationOnce: the sessions park concurrently, so which one
+    // reaches persistScrollback first depends on timing (it was OTHER on CI).
+    persistScrollback.mockImplementation((id: string) => {
+      if (id === PARENT) throw new Error('database is locked');
     });
 
     expect(await manager.parkForRestart([PARENT, OTHER])).toEqual([OTHER]);
