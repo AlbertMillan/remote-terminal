@@ -1,19 +1,12 @@
 import { defineConfig } from 'vitest/config';
+import { ALL_TESTS, INTEGRATION_TESTS, baseTest } from './vitest.shared';
 
+// The fast set: everything except the integration suites (see vitest.shared.ts).
+// Those run only through `npm run test:integration` (vitest.integration.config.ts).
 export default defineConfig({
   test: {
-    globals: true,
-    environment: 'node',
-    include: ['tests/**/*.test.ts'],
-    // Node 25+ defines its own global `localStorage`, undefined without
-    // --localstorage-file, and it shadows happy-dom's: DOM tests then fail on
-    // `localStorage.clear()`. Turning Node's off lets happy-dom install its own.
-    execArgv: ['--no-experimental-webstorage'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      include: ['src/**/*.ts'],
-      exclude: ['src/client/**/*.ts'],
-    },
+    ...baseTest,
+    include: ALL_TESTS,
+    exclude: [...baseTest.exclude, ...INTEGRATION_TESTS],
   },
 });

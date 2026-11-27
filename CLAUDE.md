@@ -12,6 +12,10 @@ project workspace over `PROJECT.md`, and a code factory running planned features
 
 `npm run dev` (tsx watch) · `npm run build` · `npm start` · `npm test` (vitest) · `npm run lint`
 
+- `npm test` is the **fast** set; the git- and process-heavy suites listed in
+  `vitest.shared.ts` run only via `npm run test:integration`. **Never run that (or the
+  full suite) unless the user asks**: locally it takes 10+ minutes and times out under load.
+  A new test that builds real repos or spawns processes per test goes in that list.
 - No formatter. **Never run prettier**: with no `.prettierrc` it rewrites the tree to double
   quotes. Match the surrounding style by hand.
 - Port **4220** is the user's live server. In a track or factory worktree, **never ask for a
