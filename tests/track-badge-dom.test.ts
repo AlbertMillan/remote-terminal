@@ -62,7 +62,7 @@ describe('track badge', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('badges only the track with uncommitted files', async () => {
-    const ws = new ProjectWorkspace(() => {}, () => {}, () => {}, () => {});
+    const ws = new ProjectWorkspace(() => {}, () => {}, () => {});
     await ws.loadBoard();
     ws.setSelected(CWD);
     const container = document.getElementById('project-features')!;
@@ -98,7 +98,7 @@ describe('track badge', () => {
       String(url).startsWith('/api/projects/track/delete-plan') ? planReply : base(url, init)
     );
 
-    const ws = new ProjectWorkspace(() => {}, () => {}, () => {}, () => {});
+    const ws = new ProjectWorkspace(() => {}, () => {}, () => {});
     await ws.loadBoard();
     ws.setSelected(CWD);
     const container = document.getElementById('project-features')!;

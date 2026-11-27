@@ -4,14 +4,12 @@ import { dirname, join, isAbsolute } from 'path';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { currentBranch, git } from '../utils/git.js';
-import { resolveInWorktree } from '../jobs/docs.js';
+import { resolveInWorktree } from '../worktrees/resolve.js';
 import { pathKey, posixKey } from '../utils/paths.js';
-import { createWorktree, ensureGitRepo, removeWorktree, worktreeRoot } from '../jobs/worktree.js';
-import { listJobsForProject } from '../jobs/store.js';
-import { isLive } from '../jobs/types.js';
+import { createWorktree, ensureGitRepo, removeWorktree, worktreeRoot } from '../worktrees/worktree.js';
 import { loadRegistry, type RegistryProject } from './registry.js';
 import { readProjectDoc } from './project-store.js';
-import { featuresOf, findFeature } from './project-doc-format.js';
+import { findFeature } from './project-doc-format.js';
 import {
   getActiveTrackBranch,
   listUnmigratedTrackBranches,
@@ -317,24 +315,6 @@ export function readSpecForTrack(
   } catch {
     return null;
   }
-}
-
-/**
- * Queued, running or parked jobs for a track: one of its features (either
- * copy of its section), or anything merging into its branch.
- */
-export function liveJobsOf(project: RegistryProject, track: TrackBranch) {
-  const plan = readProjectPlan(project);
-  const sections = [
-    plan.main.doc.tracks.find((t) => t.name === track.trackName),
-    plan.copies.find((c) => c.branch.id === track.id)?.track ?? undefined,
-  ];
-  const featureIds = new Set(sections.flatMap((t) => (t ? featuresOf(t) : [])).map((f) => f.id));
-  return listJobsForProject(project.cwd).filter(
-    (j) =>
-      isLive(j.status) &&
-      ((j.featureId !== null && featureIds.has(j.featureId)) || j.baseBranch === track.branch)
-  );
 }
 
 // --- Branch now ----------------------------------------------------------

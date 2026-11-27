@@ -37,7 +37,6 @@ const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSe
 const { getRegistryPath } = await import('../src/server/projects/registry.js');
 const { getWorkspaceBoard } = await import('../src/server/projects/workspace.js');
 const { registerProjectRoutes } = await import('../src/server/projects/routes.js');
-const { runRebuildStage } = await import('../src/server/jobs/stages/rebuild.js');
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
 const { pathKey } = await import('../src/server/utils/paths.js');
 const { withProjectLock } = await import('../src/server/projects/project-lock.js');
@@ -375,31 +374,13 @@ describe('land', () => {
   });
 });
 
-describe('rebuild', () => {
-  it('ticks the worktree copy for a job merged into a track branch, and commits it there', async () => {
-    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    const mainHead = git(repo, 'rev-parse', 'HEAD');
-
-    const result = await runRebuildStage({
-      project: project(),
-      featureId: 'f-aaaaaa',
-      specPath: null,
-      title: 'First step',
-      baseBranch: t.branch,
-    });
-    expect(result).toMatchObject({ updated: true, committed: true, pushed: false });
-    expect(git(t.worktreePath, 'show', 'HEAD:PROJECT.md')).toContain('- [x] `f-aaaaaa`');
-    expect(git(repo, 'rev-parse', 'HEAD')).toBe(mainHead);
-  });
-});
-
 describe('delete', () => {
   const deps = () => ({
     liveSessions: () => [] as { id: string; cwd: string }[],
     terminateSession: vi.fn(async () => true),
     removeSessions: vi.fn(async () => undefined),
-    cancelJob: vi.fn(async () => undefined),
-    discardJob: vi.fn(async () => undefined),
+    factoryCancelRefusal: vi.fn(() => null),
+    cancelFactoryUnit: vi.fn(async () => undefined),
   });
 
   it('leaves main untouched for an in-progress track', async () => {

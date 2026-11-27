@@ -167,3 +167,20 @@ describe('factory take|return|done', () => {
     }
   });
 });
+
+describe('factory cancel', () => {
+  it('posts its one target to the cancel route', async () => {
+    const res = await run(['factory', 'cancel', 'Split view']);
+    expect(res.code).toBe(0);
+    expect(res.fetchImpl.mock.calls[0][0]).toBe('http://127.0.0.1:4399/api/agent/factory/cancel');
+    expect(bodyOf(res.fetchImpl)).toEqual({ target: 'Split view' });
+  });
+
+  it('needs exactly one target and takes no flags, refused before any request', async () => {
+    for (const argv of [['factory', 'cancel'], ['factory', 'cancel', 'f-a', 'f-b'], ['factory', 'cancel', '--track', 'X']]) {
+      const res = await run(argv);
+      expect(res.code).toBe(2);
+      expect(res.fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+});

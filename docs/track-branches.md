@@ -3,14 +3,14 @@
 A track can own a git branch and worktree while it is being implemented, so that
 everything the track did can later be landed, or deleted, as one unit. The spec is
 `project/track-branches-and-delete.md`; this doc records how it works and why.
-Code: `src/server/projects/track-branches.ts`, the merge stage
-(`src/server/jobs/stages/merge.ts`), the runner's `trackBaseFor()`, and the board and
-new-session picker on the client.
+Code: `src/server/projects/track-branches.ts`, the factory's merge queue
+(`src/server/factory/merge-queue.ts`), the factory's track send (`factory/send.ts`), and
+the board and new-session picker on the client.
 
 ## Why
 
-Job-built work was always attributable: a job lives in its own worktree and branch until
-a `--no-ff` merge. Session-built work wasn't. A session edits whatever the project has
+Factory-built work (and, before it, job-built work) was always attributable: a unit lives
+in its own worktree and branch until a `--no-ff` merge. Session-built work wasn't. A session edits whatever the project has
 checked out, and nothing ties a commit or an uncommitted edit to a track. The Usage
 visibility track (2026-09-19) had to be undone by rewinding a Claude Code checkpoint,
 restoring PROJECT.md and removing a folder by hand.
@@ -40,9 +40,9 @@ The general version of this split, and the rules for new features that touch it,
     only uses a list for the directory it was loaded for, and hides the old one as soon as
     the field changes: loading takes up to a second, and Create in that window once opened a
     session in the previous project's track;
-  - **dispatching a job** for one of the track's features (`trackBaseFor()` in
-    `runner.ts`). Ad-hoc jobs, and features no longer in PROJECT.md, still branch from
-    the current branch.
+  - **sending the track to the factory** (`factory/send.ts`, `cr factory send` or ▶ on
+    the track). A loose factory item (Inbox) still branches from the current branch;
+    an item of a branched track branches from the track's branch.
 
 **Why the plan moves.** Until 2026-10 main's PROJECT.md was the only authoritative copy
 and the worktree held only ticks, meeting at Land. That split caused two of four Land
@@ -52,8 +52,8 @@ on main and never committed made claude-remote block its own Land with a bare
 for the tick sync to read. The spec is `project/track-plan-in-branch.md`.
 
 **Moving a section off main** (`moveSectionOffMain` in `src/server/projects/track-plan.ts`)
-happens when `ensureTrackBranch` creates the branch — Open session, the picker, dispatch
-and Branch now all go through it. Two steps, in this order:
+happens when `ensureTrackBranch` creates the branch — Open session, the picker, the
+factory's send and Branch now all go through it. Two steps, in this order:
 
 1. **Into the worktree.** Main's *working* copy of the section (so uncommitted lines come
    along) is written into the worktree's PROJECT.md, with the track's specs that are
@@ -77,13 +77,13 @@ with nowhere to recover it from.
 
 **Reading and writing.** `readProjectPlan()` (`project-plan.ts`) is main's doc with
 each in-progress track's section taken from its worktree. The board, `trackOfFeature`
-(dispatch), attribution and Delete read through it. A branched track whose worktree has
+(the factory's send), attribution and Delete read through it. A branched track whose worktree has
 no section shows empty with a warning, never main's stale copy.
 
 - **Board writes** go to the file that holds the feature or track (`planFileFor`). The
   `revision` is per file: each branched track carries its own on the board, and the
   routes check it against the file they write. Moving a feature between files is
-  refused. Worktree writes stay uncommitted; Land and the next job merge into the track
+  refused. Worktree writes stay uncommitted; Land and the next factory merge into the track
   commit them (`commitWorktreePlanning`), since that worktree belongs to the track and
   never pushes.
 - **Worktree writes take the project lock** (try-only, so a busy project answers 409
@@ -117,27 +117,26 @@ authoritative for it, so the migration leaves it to Move into branch and Land, w
 merge with the worktree winning. Without the flag, every restart moved such a track with
 main winning and reverted the worktree's own edits.
 
-## Jobs inside a track
+## Factory work inside a track
 
-A job's recorded `baseBranch` is the track branch. Diff, review and integrate already
-work against `baseBranch`, so they needed no change. The merge stage changed:
+A factory item of a branched track starts from, and merges into, the track branch (its
+recorded base). The merge queue (below) does the merging:
 
 - **Where it merges.** A worktree can't check out a branch another worktree holds, so
   the merge runs where the base is checked out: the project for main, the track's
-  worktree for a track (`mergeCwd`).
-- **Clean tree.** The clean-tree rule applies there too, except that uncommitted
-  planning files (board ticks, a session's spec edits) are committed in the worktree
-  first. Uncommitted code still blocks the job's merge, with the worktree named in the
-  error.
+  worktree for a track.
+- **Clean tree.** Uncommitted planning files (board ticks, a session's spec edits) do not
+  hold it; uncommitted code does, with the worktree named.
 - **No push.** Track branches are local. Merges into them are never pushed; only Land
   pushes.
-- **Rebuild ticks the worktree.** For a job whose base is a track branch, the feature
-  is ticked in the worktree's PROJECT.md and committed there.
+- **The tick lands in the worktree.** For an item whose base is a track branch, the
+  feature is ticked in the worktree's PROJECT.md and committed there.
 
-**Every merge records its sha**: `jobs.merge_sha` from the merge stage, and
-`track_branches.merge_sha` from Land. The message `Merge job: <title>` is shared by any
-two jobs with the same title, so it can't identify the commit Delete track has to
-revert.
+**Every merge records its sha**: the queue's row (`factory_merges.merge_sha`) and
+`track_branches.merge_sha` from Land. Old job merges recorded `jobs.merge_sha`, still
+readable (`projects/job-history.ts`). The message `Merge job: <title>` is shared by any
+two merges with the same title, so it can't identify the commit Delete track has to
+revert; the trailers can (below).
 
 ## Storage
 
@@ -163,7 +162,14 @@ answers `202`; the Land itself, which closes that session, runs after the reply.
 
 Land is refused (409) unless:
 
-- no job for the track is queued, running or parked;
+- the factory is not working on the track (`factory/track-work.ts`): no item of it is
+  running under an agent's claim, and no factory merge of it (the track, or a loose item
+  of it) is queued, holding or running. Landing under either merges half-done work and
+  removes the worktree an agent is still writing in; the refusal names each unit and
+  what it is doing. A unit a terminal session holds doesn't block (Land closes the
+  worktree's sessions after every refusal), nor does a parked or closed one. The
+  queue's own entry, the one whose Land or update is asking, is passed as `ownMerge`
+  and never blocks itself;
 - no dependency install is running in the worktree;
 - the project is on the track's base branch;
 - the worktree holds no uncommitted code. Uncommitted planning files there
@@ -283,8 +289,8 @@ not just the cwd: a project's `doc` override decides which files are its plan.
 
 **Update from main**, in the worktree, under the project try lock (as Land):
 
-1. Refuse on a live job for the track (a job merging into the branch would race it),
-   a running install, or uncommitted code in the worktree; uncommitted planning is
+1. Refuse on factory work running on the track (as Land, `ownMerge` excepted), a running
+   install, or uncommitted code in the worktree; uncommitted planning is
    committed first (`commitWorktreePlanning`).
 2. Remember the track's section, and the specs it links to that the base lacks, as of
    HEAD.
@@ -312,7 +318,7 @@ nothing left to merge. So running Update again retries a failed or interrupted i
 - The install is **started** inside the lock, which sets `isInstalling` before the lock is
   free, so a Land or Delete that takes it next refuses. It is **awaited** outside the lock,
   like Land's build: holding the try lock for minutes would refuse every Land, Delete and
-  job merge meanwhile.
+  merge meanwhile.
 - A merge broadcasts `projects.changed` as soon as it is committed, not after the install,
   and open boards refetch. A board whose own track request is still out skips it, since
   that request reloads when it answers.
@@ -329,7 +335,7 @@ merge-base (main's file at the Update), and the specs main gets back from
 ## Dependencies
 
 The spec is `project/worktree-dependencies.md`. Code: `src/server/projects/project-deps.ts`,
-`removeWorktree` and `sweepLeftoverWorktrees` in `src/server/jobs/worktree.ts`.
+`removeWorktree` and `sweepLeftoverWorktrees` in `src/server/worktrees/worktree.ts`.
 
 **Each worktree installs its own, from its lockfile** (`npm ci`, `pnpm install
 --frozen-lockfile` or `yarn install --frozen-lockfile`, all `--prefer-offline`; nothing
@@ -361,8 +367,8 @@ Discard emptied main's `node_modules`.
   "Installing dependencies…" before creating the session, so no agent in it can start a
   second install into the same folder. The install route takes the worktree from the
   track's row, never from the browser, and concurrent calls for one folder share one
-  install. Not at branch creation: dispatch creates track branches too, and its job never
-  uses them. A failed install still opens the session, with the failure written at the
+  install. Not at branch creation: the factory creates track branches too, and installs its own
+  (below). A failed install still opens the session, with the failure written at the
   top of its terminal (client-side, never sent to the PTY). A failed install removes its
   partial `node_modules`, so the next session opened there tries again. That removal can
   itself fail partway when files are held open, so every install also writes
@@ -370,12 +376,11 @@ Discard emptied main's `node_modules`.
   `.git/worktrees/<name>`: never in `git status`, and outside `node_modules`, which
   `npm ci` deletes first), and removes it only on success. `needsInstall()` is true while
   it exists, even if a `node_modules` folder is there.
-- **Job worktrees:** in the design stage, right after the worktree exists, and on every
-  design pass that finds `node_modules` missing (a retried job's worktree is already
-  recorded). It counts against `jobs.stageTimeoutMs`. A failure fails the stage with
-  the tail of the installer's output, and nothing retries it automatically. A cancel kills
-  the installer's process tree and waits for it before the stage unwinds, so teardown
-  never races npm writing into the folder.
+- **Factory worktrees** (`ensureWorktree` in `factory/deps.ts`): right after the worktree
+  exists, and on every run that finds `needsInstall()` true (a resumed unit's worktree is
+  already recorded). A failure fails the step with the tail of the installer's output.
+  A cancel (`factory/cancel.ts`) aborts the run and awaits it before teardown, so the
+  teardown never races npm writing into the folder.
 
 **Teardown never follows a link.** `removeWorktree`, before git:
 
@@ -395,9 +400,8 @@ The boot sweep stays synchronous, since it runs before the server listens.
 `linksLeft`. When it is non-empty the worktree is still registered and on disk, so every
 caller keeps what would let the teardown run again:
 
-- Cancel keeps the job's `worktreePath` and says why in its detail, and so does the
-  merge stage's teardown;
-- Discard refuses with a 409 naming the links, and keeps the row;
+- Cancel of a loose factory item keeps its run-state row (parked `cancelled`) and says
+  why (`describeLinksLeft`), and so does the merge queue's teardown;
 - Delete track keeps its unlanded row and names the leftover path (as for a busy folder);
 - Land stands (the merge is done), and its message names the worktree and the link and
   says to remove them, since nothing else records them.
@@ -417,14 +421,14 @@ It removes `node_modules` with `rmSync` first.
 Delete track, Branch now, and the merge stage when it merges into a track branch. Each
 checks the repository's state, then acts on it over many git calls. Two at once pass
 their checks and then undo each other's work: a double-clicked Delete reverts twice, or
-a job approved at its merge gate merges into a worktree its track's Land is removing.
+a queued merge into a track branch lands in a worktree its track's Land is removing.
 
 The lock is **try-acquire, never wait.** A second caller is refused with what holds the
-lock: a 409 from a route, or a failed stage that can be retried from the merge. A waiting
-lock would deadlock: Delete holds it while `cancelJob` waits for a running stage to stop,
-and a merge stage waiting on the same lock would never stop. Inside the lock, the merge
+lock: a 409 from a route, or a held or parked merge entry that can be retried. A waiting
+lock would deadlock: Delete holds it while `cancelUnit` waits for a running step to stop,
+and a merge waiting on the same lock would never stop. Inside the lock, the merge
 also checks again that its track branch still exists, so a track landed or deleted while
-the job waited fails with that reason instead of merging into a removed folder.
+the entry waited fails with that reason instead of merging into a removed folder.
 
 The factory's merge queue is the one caller that retries instead (below): nothing waits
 on the queue while holding the lock, so its retry cannot deadlock.
@@ -459,12 +463,12 @@ An entry, at its turn:
    parks: a red result never merges.
 4. **Merges** under the lock, after checking the hold again and that the base has not
    moved since verification (if it has, back to 2, at most 3 times): `--no-ff` with
-   `Job-Id: <entry id>` and one `Feature:` trailer per feature (`parseMergeLog` reads them
+   subject `Merge job: <title>` (kept from the old pipeline), `Job-Id: <entry id>` and one
+   `Feature:` trailer per feature (`projects/merge-trailers.ts`; `parseMergeLog` reads them
    all into `featureIds`; Delete track matches any). `merge_sha` goes on the row. The
    features are ticked in the plan file at the merge's checkout through `commitOnHead`
    (never `git add`), the working copy keeping the user's own edits; then main is pushed
-   where there is a remote (merge and tick together; track branches never push, as with
-   the job merge stage) and rebuilt outside the lock. A tick or push failing after the
+   where there is a remote (merge and tick together; track branches never push) and rebuilt outside the lock. A tick or push failing after the
    merge is reported in the detail, never a park: the merge stands. A factory track's
    features are ticked on main after Land, and that tick is pushed when Land pushed.
 
@@ -505,8 +509,8 @@ never deduplicated this way, since a refused Land is landed again once fixed.
 in two calls:
 
 - `GET /api/projects/track/delete-plan` returns everything the delete would do, plus a
-  token. The token hashes the PROJECT.md revision, HEAD, the track's jobs (id, status,
-  updated) and its branch rows.
+  token. The token hashes the PROJECT.md revision, HEAD, the track's live factory
+  units (unit id, status) and its branch rows.
 - `DELETE /api/projects/track` sends the token back, with the reverts and specs the user
   left ticked. It re-plans and returns 409 if the token no longer matches.
 
@@ -515,20 +519,22 @@ to the track exactly. Code a session wrote on main without a branch is only repo
 (`unattributed`). Guessing at that code is `f-4blxce`'s job, and a guess is never
 ticked by default.
 
-- **Which merges.** A landed track's `merge_sha`, and a job's `merge_sha` when it merged
-  straight into main. Jobs that merged into one of the track's own branches are covered
+- **Which merges.** A landed track's `merge_sha`, and an old job's `merge_sha` (read
+  from the kept `jobs` table, `projects/job-history.ts`) when it merged straight into
+  main. Merges into one of the track's own branches (old jobs, factory items) are covered
   by the track's merge, or disappear with an unlanded branch.
-- **Finding a merge by its trailers.** Discarding a done job deletes its row and its
-  `merge_sha` with it, and that is the normal end of a job's life. So every job merge
-  also carries `Job-Id: <id>` and, for a feature's job, `Feature: <f-id>` in its commit
-  message (`src/server/jobs/merge-trailers.ts`). A job row without a sha is found by its
-  `Job-Id`. Every merge carrying one of the track's feature ids is the track's: that
-  includes discarded jobs, and earlier runs of a feature that has a job now. A feature id
-  is unique, so this needs no uniqueness check.
+- **Finding a merge by its trailers.** An old job's row, and its `merge_sha` with it, was
+  deleted when the job was discarded, which was the normal end of a job's life. So every
+  job merge carries `Job-Id: <id>` and `Feature: <f-id>` in its commit message
+  (`src/server/projects/merge-trailers.ts`), and so does every factory merge (`Job-Id` is
+  the queue entry's id, one `Feature:` per feature). A job row without a sha is found by
+  its `Job-Id`. Every merge carrying one of the track's feature ids is the track's, old
+  or factory, discarded or not. A feature id is unique, so this needs no uniqueness check.
 - **Finding a merge by its message.** A merge from before trailers existed falls back to
-  its exact subject, `Merge job: <title>`, used only when exactly one merge on the
-  branch carries it **and has no trailer**. A merge with a trailer is recorded as some
-  job's, so a same-titled feature in another track never matches it by title.
+  its exact subject, `Merge job: <title>` (the factory keeps the subject), used only when
+  exactly one merge on the branch carries it **and has no trailer**. A merge with a
+  trailer is recorded as someone's, so a same-titled feature in another track never
+  matches it by title. A feature with an old job row skips this fallback.
 - **First-parent only.** The trailer and subject lookups read
   `git log --first-parent --merges`. A job merged into a track branch is reachable from
   main once the track lands, and reverting it on top of the land would revert it twice.
@@ -540,13 +546,16 @@ ticked by default.
 
 1. Re-plan and compare tokens.
 2. Preflight: reverting needs a clean main checkout.
-3. Cancel live jobs. This is the only step before a revert can fail, and a cancelled job
-   can still be discarded.
+3. Cancel the track's live factory units (`factory/cancel.ts`: the run aborted and awaited).
+   Every unit's refusal (a terminal session holds it, its merge is under way) is checked
+   before any cancel, so a refusal cancels nothing. This is the only step before a revert
+   that can refuse, and a cancelled unit stays cancelled if a later step fails: its
+   commits stay on its branch.
 4. `git revert --no-commit`, `-m 1` for merges, newest first by `rev-list --topo-order`.
    On a conflict: `revert --abort`, then `reset --hard` to the preflight HEAD, which is
    safe because step 2 guaranteed there was nothing uncommitted. Return 409 with the
    conflicting files.
-5. Close sessions in the track worktree, discard the jobs, remove the worktree and
+5. Close sessions in the track worktree, remove the worktree and
    branch, and delete the track's `track_branches` rows. If the worktree or branch can't
    be removed (on Windows a held file handle is enough), the unlanded row is **kept**.
    Dropping it would leave a worktree on disk that nothing records. Kept, it shows under
@@ -562,7 +571,7 @@ ticked by default.
 **In-progress tracks.** Their plan is on the branch, so tearing down the worktree and
 branch removes it; main is untouched. Only a "both copies" section on main is removed,
 as a backlog track's would be (`inDoc`, `mainLines`). The plan's features, used to find
-jobs and merges, come from both copies.
+units and merges, come from both copies.
 
 **The spec rule** applies only to specs on main; a spec on the track branch goes with the
 branch.
@@ -575,8 +584,7 @@ branch.
 | committed, with local edits | keep, offered unticked |
 
 A spec is never offered while something outside the track references it: another
-feature's line, a tracked file (`git grep -F`), another SESSION-LOG group's `source`, or
-another job's design spec.
+feature's line, a tracked file (`git grep -F`), or another SESSION-LOG group's `source`.
 
 **Branches with no matching track.** An unlanded row whose heading is gone (renamed or
 removed by hand) is listed under "Branches with no matching track" on the board, with
@@ -615,8 +623,8 @@ because it is capped at 5.
   or untracked on main count, so anything since restored (a rewound checkpoint, say)
   drops out.
 - **Commits:** first-parent, non-merge commits made in a session's time window that
-  touch one of those paths. First-parent means a job's branch commits are never
-  guessed; the job's merge covers them.
+  touch one of those paths. First-parent means a factory unit's (or old job's) branch
+  commits are never guessed; its merge covers them.
 
 **Blind spot.** Files changed through a shell (`sed -i`, `cat >`, a script) are
 invisible.

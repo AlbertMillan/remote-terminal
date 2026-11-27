@@ -61,7 +61,7 @@ Verified against real transcripts on this machine (2026-09-24):
   transcript died before its first response and spent nothing worth recording. Removing the
   envelope path deletes: migration `012`'s six columns (new migration drops them), `addStageUsage`,
   `onUsage`/`UsageSink` through the five stages, `parseUsage`, `SpentOnFailure`/`withSpent`,
-  and the `onUsage` rules in `CLAUDE.md` and `docs/job-pipeline.md`. `parseClaudeResult` keeps
+  and the `onUsage` rules in `CLAUDE.md` and `docs/job-pipeline.md` (since folded into `docs/code-factory.md`). `parseClaudeResult` keeps
   `isError`, `result`, `permissionDenials`, `sessionId`.
 
 - **Every `runClaude` spawn names its session.** `runClaude` generates a UUID, passes

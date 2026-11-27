@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, runGit } from '../utils/git.js';
-import { resolveInWorktree } from '../jobs/docs.js';
+import { resolveInWorktree } from '../worktrees/resolve.js';
 import { pathKey } from '../utils/paths.js';
 import { loadRegistry, type RegistryProject } from './registry.js';
 import { parseProjectDoc, renderProjectDoc, replaceTrack, type Track } from './project-doc-format.js';
@@ -20,7 +20,8 @@ import {
 } from './track-plan.js';
 
 const logger = createLogger('track-branches');
-import { TrackBranchError, liveJobsOf, reattachIfMissing } from './track-branches.js';
+import { TrackBranchError, reattachIfMissing } from './track-branches.js';
+import { trackFactoryWork, trackFactoryWorkMessage } from '../factory/track-work.js';
 
 /**
  * A track branch against main (docs/track-branches.md): how far behind it is and whether
@@ -238,8 +239,8 @@ export interface UpdateResult {
  * refuses naming the paths. The fix goes on either side, then Update again;
  * a plain `git merge` in a session would walk into the trap above.
  *
- * Refuses, like Land, on a live job for the track, a running install, and
- * uncommitted code in the worktree (uncommitted planning is committed
+ * Refuses, like Land, on factory work running on the track, a running install
+ * and uncommitted code in the worktree (uncommitted planning is committed
  * first). The caller holds the project lock. Never pushes, never runs tests.
  *
  * Says whether the merge changed a lockfile (`lockfileChanged`), and leaves
@@ -266,27 +267,25 @@ export async function updateTrackFromMain(project: RegistryProject, trackName: s
 }
 
 /**
- * Step 1 of Update from main, in the track's worktree: refuse on a live job,
- * a running install or uncommitted code; commit uncommitted planning. The
+ * Step 1 of Update from main, in the track's worktree: refuse on factory work
+ * running on the track (trackFactoryWork; the queue's own entry excepted), a
+ * running install or uncommitted code; commit uncommitted planning. The
  * caller holds the project lock.
  */
 async function updatePreflight(
   project: RegistryProject,
-  trackName: string
+  trackName: string,
+  ownMerge?: string
 ): Promise<{ track: TrackBranch; docRel: string }> {
   const track = getActiveTrackBranch(project.cwd, trackName);
   if (!track) throw new TrackBranchError('This track has no branch to update', 404);
   const docRel = docRelOf(project);
   const base = track.baseBranch;
 
-  // A job merging into the track branch meanwhile would race this merge.
-  const liveJobs = liveJobsOf(project, track);
-  if (liveJobs.length > 0) {
-    throw new TrackBranchError(
-      `${liveJobs.length} job(s) for this track are still active — let them finish or cancel them first`,
-      409
-    );
-  }
+  // An agent writing in the worktree, or a factory merge into the track, would race this merge.
+  const working = trackFactoryWork(project.cwd, trackName, ownMerge);
+  if (working.length > 0) throw new TrackBranchError(trackFactoryWorkMessage('update', working), 409);
+
   if (isInstalling(track.worktreePath)) {
     throw new TrackBranchError('Dependencies are still installing in this track’s worktree — try again shortly', 409);
   }
@@ -498,16 +497,18 @@ export async function prepareTrackUpdate(
 
 /**
  * Fast-forward the track's worktree onto a PreparedUpdate, after Update's own
- * refusals (live job, install, uncommitted code; planning is committed). The
+ * refusals (factory work, install, uncommitted code; planning is committed).
+ * `ownMerge` is the queue entry applying it, which never blocks itself. The
  * caller holds the project lock. `moved` when the branch's head is no longer
  * the one the merge was built on: build it again.
  */
 export async function applyPreparedUpdate(
   project: RegistryProject,
   trackName: string,
-  prepared: PreparedUpdate
+  prepared: PreparedUpdate,
+  ownMerge?: string
 ): Promise<UpdateResult | 'moved'> {
-  const { track, docRel } = await updatePreflight(project, trackName);
+  const { track, docRel } = await updatePreflight(project, trackName, ownMerge);
   const wt = track.worktreePath;
   const head = (await git(wt, ['rev-parse', 'HEAD']))?.trim();
   if (head !== prepared.from) return 'moved';

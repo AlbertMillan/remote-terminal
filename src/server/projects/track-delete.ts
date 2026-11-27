@@ -5,10 +5,9 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { COMMIT_IDENTITY, git, gitStatusEntries, isGitRepo } from '../utils/git.js';
 import { sessionsInWorktree } from '../utils/paths.js';
-import { listJobsForProject } from '../jobs/store.js';
-import { isLive, type JobWithStages } from '../jobs/types.js';
-import { removeWorktree } from '../jobs/worktree.js';
-import { MERGE_LOG_FORMAT, parseMergeLog, type MergeCommit } from '../jobs/merge-trailers.js';
+import { removeWorktree } from '../worktrees/worktree.js';
+import { MERGE_LOG_FORMAT, parseMergeLog, type MergeCommit } from './merge-trailers.js';
+import { listJobHistory, type JobHistoryRow } from './job-history.js';
 import { parsePhasesBlock, removePhaseGroup } from '../sessions/session-log-format.js';
 import type { RegistryProject } from './registry.js';
 import { mutateProjectDoc, resolveSpecPath } from './project-store.js';
@@ -25,6 +24,10 @@ import { readProjectPlan } from './project-plan.js';
 import { isInstalling } from './project-deps.js';
 import { guessTrackWork, type GuessedCommit, type GuessedFile, type RecordedClaim } from './track-attribution.js';
 import { deletePeerNotes } from '../sessions/prompt-file.js';
+import { listItems } from '../factory/store.js';
+import { isTrackWorkflow } from '../factory/templates.js';
+import { unitIdFor } from '../factory/run-state.js';
+import { CLOSED_STATUSES } from '../factory/types.js';
 
 const logger = createLogger('track-delete');
 
@@ -55,8 +58,10 @@ export class TrackDeleteError extends Error {
   }
 }
 
-export interface PlannedJob {
-  id: string;
+export interface PlannedUnit {
+  /** The unit's first live feature: what factory/cancel.ts is called with. */
+  featureId: string;
+  unitId: string;
   title: string;
   status: string;
 }
@@ -105,10 +110,8 @@ export interface TrackDeletePlan {
   /** Feature lines in main's section; an in-progress track's own lines go with its branch. */
   mainLines: number;
   features: { id: string; title: string; status: FeatureStatus }[];
-  /** Live jobs, cancelled first. */
-  cancel: PlannedJob[];
-  /** Every job for the track, discarded after the cancel. */
-  discard: PlannedJob[];
+  /** The track's live factory units, cancelled before the revert (one per unit: its first feature). */
+  cancel: PlannedUnit[];
   /** The track's unlanded branch, removed with its worktree and uncommitted edits. */
   branch: {
     /** The track branch row's id: its peers' notes folder is keyed by it. */
@@ -161,15 +164,16 @@ export interface TrackDeleteDeps {
   terminateSession: (id: string) => Promise<unknown>;
   /** Delete the worktree's session rows once it is removed (`removeWorktreeSessions`). */
   removeSessions: (worktreePath: string) => Promise<unknown>;
-  cancelJob: (id: string) => Promise<unknown>;
-  discardJob: (id: string) => Promise<unknown>;
+  /** Why the factory would refuse to cancel the unit (factory/cancel.ts), or null. */
+  factoryCancelRefusal: (cwd: string, featureId: string) => string | null;
+  cancelFactoryUnit: (cwd: string, featureId: string) => Promise<unknown>;
 }
 
 export interface TrackDeleteResult {
   committed: string | null;
   reverted: string[];
+  /** Factory units cancelled. */
   cancelled: number;
-  discarded: number;
   branchRemoved: boolean;
   /** A track worktree that could not be removed; its row is kept so Delete can retry. */
   leftover: string | null;
@@ -209,14 +213,14 @@ export async function planTrackDelete(
   const active = rows.find((r) => r.landedAt === null) ?? null;
   const trackBranches = new Set(rows.map((r) => r.branch));
 
-  const allJobs = listJobsForProject(cwd);
-  const jobs = allJobs.filter(
+  // The retired pipeline's rows, read-only: only to find the merges old jobs made.
+  const jobs = listJobHistory(cwd).filter(
     (j) =>
       (j.featureId !== null && featureIds.has(j.featureId)) ||
       (j.baseBranch !== null && trackBranches.has(j.baseBranch))
   );
-  const jobIds = new Set(jobs.map((j) => j.id));
-  const summary = (j: JobWithStages): PlannedJob => ({ id: j.id, title: j.title, status: j.status });
+
+  const units = liveFactoryUnits(cwd, trackName, new Map(features.map((f) => [f.id, f.title])));
 
   const repo = await isGitRepo(cwd);
   const headSha = repo ? ((await git(cwd, ['rev-parse', 'HEAD']))?.trim() ?? null) : null;
@@ -240,7 +244,6 @@ export async function planTrackDelete(
         featureIds,
         trackName,
         others: plan.doc,
-        otherJobs: allJobs.filter((j) => !jobIds.has(j.id)),
       })
     : [];
 
@@ -278,8 +281,8 @@ export async function planTrackDelete(
         revision: state.revision,
         copies: plan.copies.map((c) => c.state.revision),
         headSha,
-        jobs: jobs.map((j) => [j.id, j.status, j.updatedAt]),
         rows: rows.map((r) => [r.id, r.landedAt]),
+        units: units.map((u) => [u.unitId, u.status]),
         guessedFiles: guessedFiles.map((g) => [g.path, g.status]),
         guessedCommits: guessedCommits.map((c) => c.sha),
         recordedClaims: guess.recorded.map((c) => [c.sessionId, c.unitId, c.endCommit]),
@@ -293,8 +296,7 @@ export async function planTrackDelete(
     inDoc: mainTrack !== null,
     mainLines: mainFeatures.length,
     features: features.map((f) => ({ id: f.id, title: f.title, status: f.status })),
-    cancel: jobs.filter((j) => isLive(j.status)).map(summary),
-    discard: jobs.map(summary),
+    cancel: units,
     branch,
     currentBranch,
     merges,
@@ -328,7 +330,7 @@ export async function planTrackDelete(
 async function findMerges(opts: {
   cwd: string;
   rows: TrackBranch[];
-  jobs: JobWithStages[];
+  jobs: JobHistoryRow[];
   features: { id: string; title: string }[];
   trackBranches: Set<string>;
   currentBranch: string;
@@ -388,8 +390,7 @@ async function findMerges(opts: {
   };
 
   for (const job of jobs) {
-    const merged = job.stages.some((s) => s.name === 'merge' && s.status === 'passed');
-    if (!merged || !job.baseBranch || trackBranches.has(job.baseBranch)) continue;
+    if (!job.merged || !job.baseBranch || trackBranches.has(job.baseBranch)) continue;
     if (job.mergeSha) {
       await consider(job.mergeSha, 'job', job.baseBranch, job.title);
       continue;
@@ -400,10 +401,11 @@ async function findMerges(opts: {
     else await byMessage(job.title, job.baseBranch, true);
   }
 
-  // Every merge recorded for one of the track's features: jobs discarded
-  // since (the normal end of a job), and earlier runs of a feature that has a
-  // job now. A feature id is unique, so every hit is the track's. A feature
-  // with no job row and no trailer falls back to the exact message.
+  // Every merge recorded for one of the track's features: factory merges,
+  // old jobs discarded since (the normal end of a job), and earlier runs of a
+  // feature that has a job row. A feature id is unique, so every hit is the
+  // track's. A feature with no job row and no trailer falls back to the exact
+  // message an old job merge used.
   const withJobs = new Set(jobs.map((j) => j.featureId));
   for (const f of features) {
     const shas = await withFeature(f.id);
@@ -428,9 +430,8 @@ async function planSpecs(opts: {
   trackName: string;
   /** Every section to check for other references: main's and each in-progress worktree's. */
   others: ProjectDoc;
-  otherJobs: JobWithStages[];
 }): Promise<PlannedSpec[]> {
-  const { project, docRel, features, featureIds, trackName, others, otherJobs } = opts;
+  const { project, docRel, features, featureIds, trackName, others } = opts;
   const cwd = project.cwd;
   const paths = [...new Set(features.map((f) => f.spec).filter((s): s is string => !!s))];
   if (paths.length === 0) return [];
@@ -473,11 +474,6 @@ async function planSpecs(opts: {
     }
     for (const g of phaseSources) {
       if (g.source === path) referencedBy.push(`SESSION-LOG group "${g.group}"`);
-    }
-    for (const j of otherJobs) {
-      if (j.stages.some((s) => s.name === 'design' && s.detail === path)) {
-        referencedBy.push(`job "${j.title}"`);
-      }
     }
 
     let state: SpecState;
@@ -527,6 +523,19 @@ function hasSessionLogGroup(cwd: string, trackName: string, docRel: string): boo
   return sessionLogGroups(cwd).some((g) => g.group === trackName && g.source === docRel);
 }
 
+/** The track's live factory units (the track unit and any loose items filed under it), one entry each. */
+function liveFactoryUnits(cwd: string, trackName: string, titles: Map<string, string>): PlannedUnit[] {
+  const units = new Map<string, PlannedUnit>();
+  for (const item of listItems({ projectCwd: cwd })) {
+    if (item.trackName !== trackName || CLOSED_STATUSES.includes(item.status) || item.status === 'triage') continue;
+    const isTrack = isTrackWorkflow(item.workflow);
+    const unitId = unitIdFor(item, isTrack);
+    if (units.has(unitId)) continue;
+    units.set(unitId, { featureId: item.featureId, unitId, title: isTrack ? trackName : (titles.get(item.featureId) ?? item.featureId), status: item.status });
+  }
+  return [...units.values()];
+}
+
 // --- Execute -----------------------------------------------------------
 
 /**
@@ -537,13 +546,16 @@ function hasSessionLogGroup(cwd: string, trackName: string, docRel: string): boo
  *  1. re-plan and compare tokens — anything moved since the dialog opened is a 409;
  *  2. preflight: reverting needs a clean main checkout — apart from the guessed
  *     files the user ticked, which are snapshotted — checked before anything is touched;
- *  3. cancel live jobs — the only step before the revert can fail, and a cancelled
- *     job is still discardable, so a failed delete loses nothing;
+ *  3. cancel the track's live factory units (factory/cancel.ts: the run aborted
+ *     and awaited, so no agent writes into the worktree being removed). Every
+ *     unit is checked first (a session holding one, a merge under way) so a
+ *     refusal cancels nothing; a cancelled unit stays cancelled if a later
+ *     step fails, which loses no work (its commits stay on its branch);
  *  4. restore the ticked guessed files, then revert with --no-commit, newest
  *     first; on a conflict abort, `reset --hard` to the preflight HEAD and
  *     write the snapshots back (safe: step 2 left no other uncommitted work);
- *  5. tear down: close sessions in the track worktree, discard jobs, remove the
- *     worktree and branch, forget the rows;
+ *  5. tear down: close sessions in the track worktree, remove the worktree and
+ *     branch, forget the rows;
  *  6. edit PROJECT.md, specs, the SESSION-LOG group;
  *  7. commit, only if something was reverted — one commit, never pushed.
  * Tearing down before the revert would make a conflict unrecoverable.
@@ -570,7 +582,7 @@ export async function executeTrackDelete(
   }
   const chosen = await choose(project.cwd, plan, choices);
   const pre = await preflight(project.cwd, plan, chosen); // 2.
-  const cancelled = await cancelLiveJobs(plan, deps); // 3.
+  const cancelled = await cancelFactoryUnits(project.cwd, plan, deps); // 3.
   await restoreAndRevert(project.cwd, chosen, pre); // 4.
   const torn = await tearDown(project.cwd, trackName, plan, sessions, deps); // 5.
   const specsDeleted = applyEdits(project, trackName, plan, chosen.specs); // 6.
@@ -582,7 +594,6 @@ export async function executeTrackDelete(
       track: trackName,
       reverted: chosen.reverts.length,
       cancelled,
-      discarded: torn.discarded,
       branchRemoved: torn.branchRemoved,
       leftover: torn.leftover,
       specsDeleted,
@@ -599,7 +610,6 @@ export async function executeTrackDelete(
     committed,
     reverted: chosen.reverts.map((m) => m.sha),
     cancelled,
-    discarded: torn.discarded,
     branchRemoved: torn.branchRemoved,
     leftover: torn.leftover,
     specsDeleted,
@@ -662,18 +672,15 @@ async function preflight(cwd: string, plan: TrackDeletePlan, chosen: Chosen): Pr
   return { head, snapshots };
 }
 
-async function cancelLiveJobs(plan: TrackDeletePlan, deps: TrackDeleteDeps): Promise<number> {
-  let cancelled = 0;
-  for (const job of plan.cancel) {
-    try {
-      await deps.cancelJob(job.id);
-      cancelled++;
-    } catch (error) {
-      // It may have finished on its own since the plan; Discard takes it next.
-      logger.warn({ jobId: job.id, error: (error as Error).message }, 'track-delete: cancel failed');
-    }
+/** Step 3. Every unit's refusal before any cancel, so a refused delete changes nothing. */
+async function cancelFactoryUnits(cwd: string, plan: TrackDeletePlan, deps: TrackDeleteDeps): Promise<number> {
+  if (plan.cancel.length === 0) return 0;
+  for (const unit of plan.cancel) {
+    const refusal = deps.factoryCancelRefusal(cwd, unit.featureId);
+    if (refusal) throw new TrackDeleteError(`Cannot delete the track: ${refusal}`, 409);
   }
-  return cancelled;
+  for (const unit of plan.cancel) await deps.cancelFactoryUnit(cwd, unit.featureId);
+  return plan.cancel.length;
 }
 
 /** Step 4. On a conflict, puts HEAD, index, tree and the ticked files back, then throws. */
@@ -723,18 +730,9 @@ async function tearDown(
   plan: TrackDeletePlan,
   sessions: { id: string; cwd: string }[],
   deps: TrackDeleteDeps
-): Promise<{ discarded: number; branchRemoved: boolean; leftover: string | null }> {
+): Promise<{ branchRemoved: boolean; leftover: string | null }> {
   if (plan.branch) {
     for (const s of sessionsInWorktree(sessions, plan.branch.worktreePath)) await deps.terminateSession(s.id);
-  }
-  let discarded = 0;
-  for (const job of plan.discard) {
-    try {
-      await deps.discardJob(job.id);
-      discarded++;
-    } catch (error) {
-      logger.warn({ jobId: job.id, error: (error as Error).message }, 'track-delete: discard failed');
-    }
   }
 
   let branchRemoved = true;
@@ -756,7 +754,6 @@ async function tearDown(
   }
   deleteTrackBranchRows(cwd, trackName, { keepUnlanded: !branchRemoved });
   return {
-    discarded,
     branchRemoved: Boolean(plan.branch) && branchRemoved,
     leftover: branchRemoved ? null : (plan.branch?.worktreePath ?? null),
   };

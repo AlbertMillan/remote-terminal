@@ -245,10 +245,10 @@ describe('enqueueMerge is idempotent per (project, branch)', () => {
     await ensureTrackBranch({ cwd: repo }, 'Alpha');
     let refuse = true;
     queue.configureMergeQueue({
-      land: async (project, name) => {
+      land: async (project, name, ownMerge) => {
         if (refuse) throw new (await import('../src/server/projects/track-branches.js')).TrackBranchError('not yet', 409);
         return {
-          ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+          ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
           build: { ran: false, ok: true, detail: 'no build script' },
         };
       },
@@ -381,8 +381,8 @@ describe('conflicts', () => {
     commitFile(repo, 'shared.ts', 'one\nTWO from main\nthree\n', 'main moves on');
     resolve = async (c) => writeFileSync(join(c.cwd, 'shared.ts'), 'one\nTWO from both\nthree\n');
     queue.configureMergeQueue({
-      land: async (project, name) => ({
-        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+      land: async (project, name, ownMerge) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
         build: { ran: false, ok: true, detail: 'no build script' },
       }),
     });
@@ -423,8 +423,8 @@ describe('after the merge', () => {
     git(repo, 'push', '-q');
     commitFile(track.worktreePath, 'alpha.ts', 'alpha\n', 'track work');
     queue.configureMergeQueue({
-      land: async (project, name) => ({
-        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+      land: async (project, name, ownMerge) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
         build: { ran: false, ok: true, detail: 'no build script' },
       }),
     });
@@ -469,8 +469,8 @@ describe('a second Land of a queued track', () => {
       return { ok: true, detail: 'ok' };
     };
     queue.configureMergeQueue({
-      land: async (project, name) => ({
-        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+      land: async (project, name, ownMerge) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
         build: { ran: false, ok: true, detail: 'no build script' },
       }),
     });
@@ -500,8 +500,8 @@ describe('the resolver never holds the project lock', () => {
       writeFileSync(join(c.cwd, 'shared.ts'), 'one\nTWO from both\nthree\n');
     };
     queue.configureMergeQueue({
-      land: async (project, name) => ({
-        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+      land: async (project, name, ownMerge) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
         build: { ran: false, ok: true, detail: 'no build script' },
       }),
     });
@@ -552,8 +552,8 @@ describe('resume at boot', () => {
     const notifiedLands: LandNotificationPayload[] = [];
     queue.configureMergeQueue({
       notifyLand: (p) => notifiedLands.push(p),
-      land: async (project, name) => ({
-        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {} })),
+      land: async (project, name, ownMerge) => ({
+        ...(await landTrack(project, name, { sessions: [], terminateSession: async () => {}, removeSessions: async () => {}, ownMerge })),
         build: { ran: false, ok: true, detail: 'no build script' },
       }),
     });
@@ -648,10 +648,11 @@ describe('a session’s Land joins the queue', () => {
     events = [];
     sessions = new Map();
     queue.configureMergeQueue({
-      land: async (project, name) => {
+      land: async (project, name, ownMerge) => {
         events.push('land');
         return {
           ...(await landTrack(project, name, {
+            ownMerge,
             sessions: [...sessions.values()].map((s) => ({ id: s.id, cwd: s.cwd })),
             terminateSession: async (id) => {
               sessions.delete(id);

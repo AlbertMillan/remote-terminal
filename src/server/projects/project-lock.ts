@@ -2,17 +2,17 @@ import { pathKey } from '../utils/paths.js';
 
 /**
  * One track operation at a time per project: Land, Delete track, Branch now,
- * and the merge stage when it merges into a track branch.
+ * and the factory's merges and plan writes into a track.
  *
  * Each of these checks the repository's state and then acts on it over many
- * git calls. Two at once — a double-clicked Delete, a job approved at its merge
- * gate while its track lands — both pass their checks and then undo each
- * other's work, or merge into a worktree the other is removing.
+ * git calls. Two at once — a double-clicked Delete, a factory merge while its
+ * track lands — both pass their checks and then undo each other's work, or
+ * merge into a worktree the other is removing.
  *
- * TRY-acquire, never wait: Delete holds the lock while cancelJob() awaits a
- * running stage, and a merge stage waiting on the same lock would never unwind
- * — a deadlock. A second caller is refused with a message instead (409 from a
- * route; a failed, retryable stage from the merge).
+ * TRY-acquire, never wait: Delete holds the lock while it cancels the track's
+ * factory units and awaits their runs, and a run waiting on the same lock
+ * would never unwind — a deadlock. A second caller is refused with a message
+ * instead (409 from a route; the factory steps aside and retries).
  */
 
 export class ProjectBusyError extends Error {

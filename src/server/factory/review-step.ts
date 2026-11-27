@@ -3,7 +3,7 @@ import { join, posix } from 'path';
 import { commandsDir, projectAccount } from '../accounts.js';
 import { git } from '../utils/git.js';
 import { createLogger } from '../utils/logger.js';
-import { loadReviewCriteria } from '../jobs/stages/review.js';
+import { loadReviewCriteria } from './review-criteria.js';
 import { unitJobId, type UnitFeature } from './deps.js';
 import { factoryReviewSettings, type FactoryReviewSettings } from './review-settings.js';
 import { registerStepHandler, stepHandler, type StepContext, type StepResult } from './steps.js';

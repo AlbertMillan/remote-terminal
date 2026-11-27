@@ -9,7 +9,7 @@ import { FcmSender, parseServiceAccount, type PushMessage, type Transport } from
  * Push to the Android app (docs/android-app.md). Optional by design: with no service
  * account in `<dataDir>` the server logs once that push is off and every call here is
  * a no-op. A send never throws into its caller — a notification failing is no reason
- * for a session, a job or a Land to.
+ * for a session, a factory unit or a Land to.
  *
  * Like the Claude app, a device that is in the foreground (live on the WebSocket and
  * said so with `app.state`) gets no push: it already shows the event.
@@ -120,16 +120,17 @@ export function sessionMessage(
   };
 }
 
-export function jobGateMessage(job: { id: string; title: string; projectName: string; gate: string | null; parkReason: string | null }): PushMessage {
-  const gate = job.gate ?? 'a';
+/** A factory unit newly waiting for you (a review, a mockup, a question, a park). The app opens its unit screen. */
+export function factoryWaitMessage(unit: { key: string; projectCwd: string; projectName: string; title: string; reason: string | null; step: string | null }): PushMessage {
   return {
-    collapseKey: `job-${job.id}`,
+    collapseKey: `factory-${unit.key}`,
     data: {
-      kind: 'job',
+      kind: 'factory',
       event: 'parked',
-      jobId: job.id,
-      title: `${job.projectName}: ${job.title}`,
-      body: job.parkReason === 'question' ? 'A question is waiting for your answer.' : `Waiting at the ${gate} gate.`,
+      projectCwd: unit.projectCwd,
+      unitKey: unit.key,
+      title: `${unit.projectName}: ${unit.title}`,
+      body: (unit.reason ?? `Waiting for you at ${unit.step ?? 'its first step'}.`).slice(0, 300),
     },
   };
 }

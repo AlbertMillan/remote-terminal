@@ -1,12 +1,11 @@
 import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
-import { failureMessage, requestJson } from './api.js';
+import { failureMessage, jsonPost, requestJson } from './api.js';
 import { timeAgo } from './format.js';
-import { jsonPost } from './job-board-types.js';
 import { openTrackDeleteDialog } from './track-delete-dialog.js';
 import { openBranchNowDialog } from './track-branch-now-dialog.js';
 import { installTrackDependencies } from './track-picker.js';
 import { BUILD_CHANGED_EVENT } from './server-restart.js';
-import { formatUsageCost, hasSpend, projectUsageTooltip, type ProjectUsage } from './job-board.js';
+import { formatUsageCost, hasSpend, projectUsageTooltip, type ProjectUsage } from './usage-format.js';
 import {
   renderAddRow,
   renderCollapseAll,
@@ -237,8 +236,6 @@ export class ProjectWorkspace {
   constructor(
     private readonly onSelect: (cwd: string) => void,
     private readonly onOpenSession: (cwd: string) => void,
-    /** Send a feature to the job pipeline. */
-    private readonly onDispatch: (cwd: string, featureId: string, title: string) => void,
     /** Open a terminal in a track's worktree; `notice` is shown at its top. */
     private readonly onOpenTrackSession: (worktreePath: string, trackName: string, notice?: string) => void
   ) {
@@ -896,7 +893,7 @@ export class ProjectWorkspace {
       ...names.map((n) => html`<option value="${n}"${n === own ? ' selected' : ''}>${n}</option>`),
     ];
     const title =
-      "Claude account this project's new sessions default to and its jobs run under. " +
+      "Claude account this project's new sessions default to and its factory runs use. " +
       'A new session can still pick another.';
     return html`<label class="pw-badge account" title="${title}">Account
       <select class="pw-account-select" data-project-account data-cwd="${project.cwd}"${
@@ -1032,16 +1029,6 @@ export class ProjectWorkspace {
         return;
       }
 
-      const dispatch = target.closest('.pw-dispatch') as HTMLElement | null;
-      if (dispatch && dispatch.tagName === 'BUTTON') {
-        this.onDispatch(
-          dispatch.dataset.cwd || '',
-          dispatch.dataset.id || '',
-          dispatch.dataset.title || ''
-        );
-        return;
-      }
-
       const qaGen = target.closest('.pw-qa-gen') as HTMLElement | null;
       if (qaGen) {
         void this.generateQa(qaGen.dataset.cwd || '');
@@ -1114,7 +1101,7 @@ export class ProjectWorkspace {
     }
     if (project.usage && hasSpend(project.usage.total)) {
       badges.push(
-        html`<span class="jb-usage project" title="${projectUsageTooltip(project.usage)}">${formatUsageCost(project.usage.total)}</span>`
+        html`<span class="pw-usage project" title="${projectUsageTooltip(project.usage)}">${formatUsageCost(project.usage.total)}</span>`
       );
     }
     return joinHtml(badges);

@@ -1,17 +1,17 @@
 /**
- * Who a job's merge commit belongs to, written into the commit itself.
+ * Who a merge commit belongs to, written into the commit itself: the factory's
+ * merge queue writes these, and the retired job pipeline wrote the same shape.
  *
- * The subject `Merge job: <title>` is shared by any two jobs with the same
- * title, and a job's `merge_sha` is deleted with its row when the job is
- * discarded, which is the normal end of a job's life. Trailers survive both,
- * and a lost database or a re-clone too, so Delete track can tie a merge to
- * its feature exactly instead of by title.
+ * The subject `Merge job: <title>` is shared by any two merges with the same
+ * title, and an old job's `merge_sha` went with its row when it was discarded.
+ * Trailers survive both, and a lost database or a re-clone too, so Delete track
+ * can tie a merge to its feature exactly instead of by title.
  */
 
 export const JOB_ID_TRAILER = 'Job-Id';
 export const FEATURE_TRAILER = 'Feature';
 
-/** The `-m` arguments for a job's merge: the subject, then a trailer paragraph. */
+/** The `-m` arguments an old job's merge used: the subject, then a trailer paragraph (tests reproduce old merges with it). */
 export function jobMergeMessageArgs(title: string, ids: { jobId: string; featureId: string | null }): string[] {
   const trailers = [`${JOB_ID_TRAILER}: ${ids.jobId}`];
   if (ids.featureId) trailers.push(`${FEATURE_TRAILER}: ${ids.featureId}`);

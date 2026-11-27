@@ -13,7 +13,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clauderemote.app.ui.history.HistoryScreen
 import com.clauderemote.app.ui.projects.FactoryUnitScreen
-import com.clauderemote.app.ui.projects.JobScreen
 import com.clauderemote.app.ui.projects.ProjectScreen
 import com.clauderemote.app.ui.projects.ProjectsScreen
 import com.clauderemote.app.ui.sessions.ExtraScreens
@@ -36,7 +35,6 @@ import com.clauderemote.app.ui.theme.Palette
 sealed interface Screen {
     data object Projects : Screen
     data class Project(val cwd: String) : Screen
-    data class Job(val jobId: String) : Screen
     data class FactoryUnit(val key: String) : Screen
     data object History : Screen
 }
@@ -75,7 +73,7 @@ class MainActivity : ComponentActivity() {
                         val link by app.pendingLink.collectAsStateWithLifecycle()
                         LaunchedEffect(link) {
                             when (val target = link) {
-                                is Link.Job -> { app.pendingLink.value = null; push(Screen.Job(target.jobId)) }
+                                is Link.Unit -> { app.pendingLink.value = null; push(Screen.FactoryUnit(target.unitKey)) }
                                 is Link.Project -> { app.pendingLink.value = null; push(Screen.Project(target.cwd)) }
                                 is Link.Session -> stack = emptyList()
                                 null -> Unit
@@ -101,12 +99,10 @@ class MainActivity : ComponentActivity() {
                                 Screen.Projects -> ProjectsScreen(
                                     app, ::pop,
                                     openProject = { push(Screen.Project(it)) },
-                                    openJob = { push(Screen.Job(it)) },
                                     openUnit = { push(Screen.FactoryUnit(it)) },
                                 )
                                 is Screen.FactoryUnit -> FactoryUnitScreen(app, top.key, ::pop)
-                                is Screen.Project -> ProjectScreen(app, top.cwd, ::pop, openJob = { push(Screen.Job(it)) })
-                                is Screen.Job -> JobScreen(app, top.jobId, ::pop, openProject = { push(Screen.Project(it)) })
+                                is Screen.Project -> ProjectScreen(app, top.cwd, ::pop, openUnit = { push(Screen.FactoryUnit(it)) })
                                 Screen.History -> HistoryScreen(app, ::pop) { stack = emptyList() }
                                 null -> Unit
                             }

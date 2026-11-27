@@ -81,12 +81,12 @@ describe('cards', () => {
     expect(html.match(/class="au-card"/g)).toHaveLength(2);
     const t = text(html);
     expect(t).toContain('personal Max 5x verified attached');
-    expect(t).toContain('work Team login not verified jobs run here');
+    expect(t).toContain('work Team login not verified factory runs here');
     // The week column says "since login" for a login younger than the week.
     expect(t).toContain('This 5h window Since login');
     expect(t).toContain('This 5h window This week');
     expect(t).toContain('Cache read 3.0M 3.0M');
-    expect(t).toContain('Job runs 2 2');
+    expect(t).toContain('Factory runs 2 2');
     expect(t).toContain('Est. cost $4.50 $4.50');
     // Moved transcripts are named, and a window with no verified reading is a ?.
     expect(t).toContain("812 of 819 messages this week sit in another account's folder");

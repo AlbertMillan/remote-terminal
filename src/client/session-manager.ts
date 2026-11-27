@@ -3,7 +3,6 @@ import { pastedFilesText, uploadFailureMessage, uploadPastedFiles } from './past
 import { terminalManager, TerminalManager } from './terminal.js';
 import { PipManager } from './pip-manager.js';
 import { ProjectWorkspace } from './project-workspace.js';
-import { JobBoard } from './job-board.js';
 import { RollupView } from './rollup-view.js';
 import { FactoryOverlay } from './factory-overlay.js';
 import { FactoryBoardView } from './factory-board.js';
@@ -164,17 +163,7 @@ class SessionManager {
   private workspace = new ProjectWorkspace(
     (cwd) => this.projectLogView.showProjectLog(cwd),
     (cwd) => this.showNewSessionModal(cwd),
-    (cwd, featureId, title) => void this.jobBoard.dispatch(cwd, featureId, title),
     (worktreePath, trackName, notice) => this.createSession(trackName, worktreePath, notice)
-  );
-  /**
-   * The pipeline board. "Take over" resumes a background run's own conversation
-   * in a real terminal, inside its worktree — reusing the same resume path the
-   * session-history buttons use.
-   */
-  private jobBoard = new JobBoard(
-    (claudeSessionId, cwd) => this.openHistorySession(claudeSessionId, cwd, 'resume'),
-    (cwd) => this.workspace.getProject(cwd)?.account?.effective ?? null
   );
   /** Cross-project overview; clicking a row opens that project. */
   private rollup = new RollupView((cwd) => this.projectLogView.showProjectLog(cwd));
@@ -217,7 +206,6 @@ class SessionManager {
   /** The Projects tab: the PROJECT.md board plus the SESSION-LOG.md history/plan-progress view. */
   private projectLogView = new ProjectLogView({
     workspace: this.workspace,
-    jobBoard: this.jobBoard,
     rollup: this.rollup,
     detachCurrentSession: () => this.detachCurrentSession(),
     syncFactoryOverlay: () => this.syncFactoryOverlay(),
@@ -298,8 +286,6 @@ class SessionManager {
     // Feature board interactions (delegated inside the workspace client).
     const featuresContainer = document.getElementById('project-features');
     if (featuresContainer) this.workspace.attach(featuresContainer);
-    const jobsContainer = document.getElementById('project-jobs');
-    if (jobsContainer) this.jobBoard.attach(jobsContainer);
 
     // History entries: open, delete, copy ids, fold phase groups (delegated).
     const phasesContainer = document.getElementById('project-log-entries');
@@ -545,10 +531,6 @@ class SessionManager {
         break;
       case 'terminal.resized':
         this.handleTerminalResized(message.payload);
-        break;
-      case 'jobs.summary':
-        // The old pipeline's feed: the Projects board polls its own jobs, and the
-        // Android app reads this; the web overlay is the factory's now.
         break;
       case 'factory.summary':
         this.factoryOverlay.update(message.payload);
@@ -895,7 +877,6 @@ class SessionManager {
   private giveMainAreaToBoard(): void {
     this.rollup.hide();
     this.projectLogView.clearSelection();
-    this.jobBoard.stopPolling();
     for (const id of ['terminal-container', 'terminal-header', 'welcome-screen', 'project-log-view']) {
       document.getElementById(id)?.classList.add('hidden');
     }
@@ -954,7 +935,6 @@ class SessionManager {
   private showTerminal(session: SessionInfo): void {
     this.factoryBoard.hide();
     this.projectLogView.clearSelection();
-    this.jobBoard.stopPolling();
     document.getElementById('project-log-view')?.classList.add('hidden');
     document.getElementById('welcome-screen')?.classList.add('hidden');
     document.getElementById('terminal-container')?.classList.remove('hidden');

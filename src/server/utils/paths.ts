@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from 'path';
 /**
  * True when `p` is `root` or somewhere below it. Lexical only — callers that
  * read or write through the result must also resolve symlinks (see
- * `resolveInWorktree()` in jobs/docs.ts), or a link inside can point outside.
+ * `resolveInWorktree()` in worktrees/resolve.ts), or a link inside can point outside.
  */
 export function isInside(root: string, p: string): boolean {
   return relativeInside(root, p) !== null;

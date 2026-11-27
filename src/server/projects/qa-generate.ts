@@ -4,7 +4,7 @@ import { createLogger } from '../utils/logger.js';
 import { getConfig } from '../config.js';
 import { runClaude } from '../agent/claude-run.js';
 import { COMPANION_DIR } from './project-store.js';
-import { qaDocPathIn, qaDocRelPath, parseQaDoc, type QaDoc } from '../jobs/qa-doc.js';
+import { qaDocPathIn, qaDocRelPath, parseQaDoc, type QaDoc } from '../qa/qa-doc.js';
 import type { RegistryProject } from './registry.js';
 
 const logger = createLogger('qa-generate');

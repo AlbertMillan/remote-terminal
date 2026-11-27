@@ -21,11 +21,7 @@ const plan = (over: Partial<TrackDeletePlan> = {}): TrackDeletePlan => ({
   track: 'Alpha',
   inDoc: true,
   features: [{ id: 'f-aaaaaa', title: 'First', status: 'done' }],
-  cancel: [{ id: 'j-live', title: 'Second <b>', status: 'parked' }],
-  discard: [
-    { id: 'j-live', title: 'Second <b>', status: 'parked' },
-    { id: 'j-done', title: 'First', status: 'done' },
-  ],
+  cancel: [{ featureId: 'f-bbbbbb', unitId: 'track:Second <b>', title: 'Second <b>', status: 'parked' }],
   branch: { name: 'track/alpha-1234', worktreePath: 'C:/wt', uncommittedFiles: 2, sessionsToClose: 1 },
   currentBranch: 'main',
   merges: [
@@ -49,7 +45,7 @@ describe('renderTrackDeletePlan', () => {
   it('lists what goes, escapes titles, and ticks merges and default specs', () => {
     document.body.innerHTML = `<div>${renderTrackDeletePlan(plan())}</div>`;
     const text = document.body.textContent ?? '';
-    expect(text).toContain('Cancel 1 active job: Second <b>');
+    expect(text).toContain('Cancel 1 factory unit: Second <b>');
     expect(text).toContain('2 uncommitted files lost');
     expect(text).toContain('closes 1 open session');
     expect(text).toContain('2 merges share the message');

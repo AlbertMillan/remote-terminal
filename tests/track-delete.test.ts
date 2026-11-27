@@ -33,9 +33,9 @@ const tracks = {
 /** Land with no running sessions anywhere. */
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { planTrackDelete, executeTrackDelete } = await import('../src/server/projects/track-delete.js');
-const store = await import('../src/server/jobs/store.js');
+const factory = await import('../src/server/factory/store.js');
 const { peerNotesDirFor } = await import('../src/server/sessions/prompt-file.js');
-const { jobMergeMessageArgs } = await import('../src/server/jobs/merge-trailers.js');
+const { jobMergeMessageArgs, multiFeatureMergeMessageArgs } = await import('../src/server/projects/merge-trailers.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -60,8 +60,8 @@ function commitFile(cwd: string, rel: string, content: string, message: string):
 }
 
 /**
- * A job-style merge straight into main: a branch, one commit, `merge --no-ff`.
- * With `ids`, the message is the merge stage's own, trailers included; without,
+ * An old job-style merge straight into main: a branch, one commit, `merge --no-ff`.
+ * With `ids`, the message is the old merge stage's own, trailers included; without,
  * it is a merge from before trailers existed.
  */
 function mergeLikeAJob(
@@ -81,12 +81,32 @@ function mergeLikeAJob(
   return git(cwd, 'rev-parse', 'HEAD');
 }
 
-const deps = () => ({
+/**
+ * A row the retired job pipeline left behind (projects/job-history.ts reads them,
+ * read-only): written straight into the kept `jobs` / `job_stages` tables.
+ */
+function oldJob(row: { id: string; featureId: string | null; title: string; mergeSha?: string | null }): void {
+  const at = new Date().toISOString();
+  getDatabase()
+    .prepare(
+      `INSERT INTO jobs (id, project_cwd, feature_id, title, status, base_branch, merge_sha, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'done', 'main', ?, ?, ?)`
+    )
+    .run(row.id, repo, row.featureId, row.title, row.mergeSha ?? null, at, at);
+  getDatabase().prepare(`INSERT INTO job_stages (job_id, name, status) VALUES (?, 'merge', 'passed')`).run(row.id);
+}
+
+const deps = (refusal: string | null = null) => ({
   liveSessions: () => [] as { id: string; cwd: string }[],
   terminateSession: vi.fn(async () => true),
   removeSessions: vi.fn(async () => undefined),
-  cancelJob: vi.fn(async (id: string) => store.updateJob(id, { status: 'cancelled' })),
-  discardJob: vi.fn(async (id: string) => store.deleteJob(id)),
+  factoryCancelRefusal: vi.fn((_cwd: string, _featureId: string) => refusal),
+  cancelFactoryUnit: vi.fn(async (cwd: string, featureId: string) => {
+    const track = factory.getItem(cwd, featureId)?.trackName;
+    for (const i of factory.listItems({ projectCwd: cwd }).filter((x) => x.trackName === track)) {
+      factory.updateItem(cwd, i.featureId, { status: 'cancelled' });
+    }
+  }),
 });
 
 async function planAndRun(choices: { revert?: string[]; deleteSpecs?: string[] } = {}, d = deps()) {
@@ -115,7 +135,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  getDatabase().exec('DELETE FROM track_branches; DELETE FROM jobs;');
+  getDatabase().exec('DELETE FROM track_branches; DELETE FROM job_stages; DELETE FROM jobs; DELETE FROM factory_items;');
   repo = mkdtempSync(join(tmpdir(), 'cr-tdel-repo-'));
   git(repo, 'init', '-q', '-b', 'main');
   git(repo, 'config', 'user.email', 'test@example.com');
@@ -211,27 +231,64 @@ describe('a landed track', () => {
     expect(git(repo, 'status', '--porcelain')).toBe('');
     expect(readFileSync(join(repo, 'PROJECT.md'), 'utf-8')).toBe(docBefore);
     expect(tracks.listTrackBranches(repo)).toHaveLength(1);
-    expect(d.discardJob).not.toHaveBeenCalled();
   });
 });
 
-describe('jobs merged straight into main', () => {
-  it('reverts a job by its recorded merge sha, and cancels then discards the track’s jobs', async () => {
-    const sha = mergeLikeAJob('First step', 'src/first.ts');
-    const done = store.createJob({ projectCwd: repo, featureId: 'f-aaaaaa', title: 'First step' });
-    store.updateJob(done.id, { status: 'done', baseBranch: 'main', mergeSha: sha });
-    store.finishStage(done.id, 'merge', 'passed', 'merged');
-    const live = store.createJob({ projectCwd: repo, featureId: 'f-bbbbbb', title: 'Second step' });
-    store.updateJob(live.id, { status: 'parked' });
-    const other = store.createJob({ projectCwd: repo, featureId: 'f-cccccc', title: 'Unrelated' });
+describe('factory units of the track', () => {
+  it('cancels the track unit before the revert, and leaves other tracks alone', async () => {
+    factory.createItem({ projectCwd: repo, featureId: 'f-aaaaaa', trackName: 'Alpha', workflow: 'track' });
+    factory.createItem({ projectCwd: repo, featureId: 'f-bbbbbb', trackName: 'Alpha', workflow: 'track' });
+    factory.createItem({ projectCwd: repo, featureId: 'f-cccccc', trackName: 'Beta', workflow: 'track' });
 
     const { plan, result, deps: d } = await planAndRun();
 
+    expect(plan.cancel.map((u) => u.unitId)).toEqual(['track:Alpha']);
+    expect(d.cancelFactoryUnit).toHaveBeenCalledTimes(1);
+    expect(result.cancelled).toBe(1);
+    expect(factory.getItem(repo, 'f-bbbbbb')?.status).toBe('cancelled');
+    expect(factory.getItem(repo, 'f-cccccc')?.status).toBe('open');
+  });
+
+  it('refuses before cancelling or reverting anything when a unit cannot be cancelled', async () => {
+    const sha = mergeLikeAJob('First step', 'src/first.ts', { jobId: 'job-1', featureId: 'f-aaaaaa' });
+    factory.createItem({ projectCwd: repo, featureId: 'f-bbbbbb', trackName: 'Alpha', workflow: 'track' });
+    const d = deps('the terminal session "x" (s-1) holds "Alpha"');
+
+    await expect(planAndRun({}, d)).rejects.toMatchObject({ status: 409 });
+    expect(d.cancelFactoryUnit).not.toHaveBeenCalled();
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(sha);
+  });
+
+  it('reverts a factory merge, found by its Feature trailers', async () => {
+    git(repo, 'checkout', '-q', '-b', 'factory/alpha');
+    commitFile(repo, 'src/alpha.ts', 'export const a = 1;\n', 'feature work');
+    git(repo, 'checkout', '-q', 'main');
+    git(
+      repo,
+      'merge',
+      '-q',
+      '--no-ff',
+      'factory/alpha',
+      ...multiFeatureMergeMessageArgs('Alpha', { jobId: 'mq-1', featureIds: ['f-aaaaaa', 'f-bbbbbb'] })
+    );
+    const sha = git(repo, 'rev-parse', 'HEAD');
+
+    const { plan, result } = await planAndRun();
+
+    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[sha, 'trailer']]);
+    expect(result.reverted).toEqual([sha]);
+    expect(existsSync(join(repo, 'src', 'alpha.ts'))).toBe(false);
+  });
+});
+
+describe('old jobs merged straight into main', () => {
+  it('reverts an old job by its recorded merge sha', async () => {
+    const sha = mergeLikeAJob('First step', 'src/first.ts');
+    oldJob({ id: 'job-done', featureId: 'f-aaaaaa', title: 'First step', mergeSha: sha });
+
+    const { plan, result } = await planAndRun();
+
     expect(plan.merges).toMatchObject([{ sha, via: 'job' }]);
-    expect(plan.cancel.map((j) => j.id)).toEqual([live.id]);
-    expect(d.cancelJob).toHaveBeenCalledTimes(1);
-    expect(d.discardJob).toHaveBeenCalledTimes(2);
-    expect(store.getJob(other.id)).not.toBeNull();
     expect(existsSync(join(repo, 'src', 'first.ts'))).toBe(false);
     expect(result.reverted).toEqual([sha]);
   });
@@ -268,21 +325,9 @@ describe('jobs merged straight into main', () => {
     expect(plan.unresolved).toEqual([]);
   });
 
-  it('finds every earlier run of a feature that has a job now', async () => {
-    const earlier = mergeLikeAJob('Second step', 'src/v1.ts', { jobId: 'job-v1', featureId: 'f-bbbbbb' });
-    const live = store.createJob({ projectCwd: repo, featureId: 'f-bbbbbb', title: 'Second step' });
-    store.updateJob(live.id, { status: 'parked' });
-
-    const plan = await planTrackDelete(project(), 'Alpha', []);
-
-    expect(plan.merges.map((m) => [m.sha, m.via])).toEqual([[earlier, 'trailer']]);
-  });
-
-  it('finds a job whose row has no sha by its job id trailer', async () => {
-    const done = store.createJob({ projectCwd: repo, featureId: 'f-aaaaaa', title: 'First step' });
-    const sha = mergeLikeAJob('First step', 'src/first.ts', { jobId: done.id, featureId: 'f-aaaaaa' });
-    store.updateJob(done.id, { status: 'done', baseBranch: 'main' });
-    store.finishStage(done.id, 'merge', 'passed', 'merged');
+  it('finds an old job whose row has no sha by its job id trailer', async () => {
+    oldJob({ id: 'job-nosha', featureId: 'f-aaaaaa', title: 'First step' });
+    const sha = mergeLikeAJob('First step', 'src/first.ts', { jobId: 'job-nosha', featureId: 'f-aaaaaa' });
 
     const plan = await planTrackDelete(project(), 'Alpha', []);
 
@@ -301,13 +346,12 @@ describe('jobs merged straight into main', () => {
 
   it('refuses before touching anything when a revert meets a dirty checkout', async () => {
     mergeLikeAJob('First step', 'src/first.ts');
-    const live = store.createJob({ projectCwd: repo, featureId: 'f-bbbbbb', title: 'Second step' });
-    store.updateJob(live.id, { status: 'parked' });
+    factory.createItem({ projectCwd: repo, featureId: 'f-bbbbbb', trackName: 'Alpha', workflow: 'track' });
     writeFileSync(join(repo, 'dirty.ts'), 'wip\n');
     const d = deps();
 
     await expect(planAndRun({}, d)).rejects.toMatchObject({ status: 409 });
-    expect(d.cancelJob).not.toHaveBeenCalled();
+    expect(d.cancelFactoryUnit).not.toHaveBeenCalled();
     expect(existsSync(join(repo, 'src', 'first.ts'))).toBe(true);
   });
 });

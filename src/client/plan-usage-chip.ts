@@ -217,7 +217,7 @@ function loginRow(data: AccountPlanUsage, now: number): SafeHtml | '' {
     return html`
         <div class="pu-row pu-login">
           <div class="pu-row-head"><span>Login</span><span class="pu-pct danger">not logged in</span></div>
-          <p class="pu-detail">Its sessions and jobs can't reach Claude. ${link('Log in →')}</p>
+          <p class="pu-detail">Its sessions and factory runs can't reach Claude. ${link('Log in →')}</p>
         </div>`;
   }
   const ends = login.endsAt ? Date.parse(login.endsAt) : NaN;
@@ -303,7 +303,7 @@ function section(v: AccountView, now: number): SafeHtml {
         ? html`<span class="pu-tag ok">verified</span>`
         : '',
     v.attached ? html`<span class="pu-tag">attached</span>` : '',
-    d.jobs ? html`<span class="pu-tag" title="This project's jobs run under this account">jobs run here</span>` : '',
+    d.jobs ? html`<span class="pu-tag" title="This project's factory runs use this account">factory runs here</span>` : '',
   ];
   const head = html`<div class="pu-section-head"><span class="pu-acct ${v.colour}">${d.account}</span>${tags}</div>`;
 
@@ -335,7 +335,7 @@ export function renderPlanUsage(data: PlanUsage, now: number): Rendered {
 
   const summary =
     views.length > 0 ? joinHtml(views.map((v) => summaryLine(v, now))) : html`<span class="pu-label">Plan usage</span> <span class="pu-muted">no accounts</span>`;
-  const body = html`${views.map((v) => section(v, now))}<p class="pu-foot">Readings arrive while a Claude Code session is open; job runs do not send them.</p><button type="button" class="pu-breakdown" data-action="account-usage">Per-account breakdown →</button>`;
+  const body = html`${views.map((v) => section(v, now))}<p class="pu-foot">Readings arrive while a Claude Code session is open; factory runs do not send them.</p><button type="button" class="pu-breakdown" data-action="account-usage">Per-account breakdown →</button>`;
   return { summary, body, level, stale };
 }
 

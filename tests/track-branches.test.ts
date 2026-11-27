@@ -13,8 +13,7 @@ vi.setConfig({ testTimeout: 30_000 });
  *
  * Everything that matters here is a property of git: that a track's worktree
  * is a separate checkout of its own branch, that a land merge leaves
- * PROJECT.md alone however both sides edited it, that a job merged into a
- * track never reaches main. A stub would prove none of it.
+ * PROJECT.md alone however both sides edited it. A stub would prove none of it.
  */
 
 const dataDir = mkdtempSync(join(tmpdir(), 'cr-tracks-data-'));
@@ -32,7 +31,6 @@ const tracks = {
 };
 /** Land with no running sessions anywhere. */
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
-const { runMergeStage } = await import('../src/server/jobs/stages/merge.js');
 
 const DOC = `## Track: Alpha
 - [ ] \`f-aaaaaa\` First step → project/alpha.md
@@ -132,7 +130,7 @@ describe('worktree creation', () => {
   it.skipIf(process.platform !== 'win32')(
     'leaves no branch and no folder behind when git refuses the worktree, and says why',
     async () => {
-      const { createWorktree } = await import('../src/server/jobs/worktree.js');
+      const { createWorktree } = await import('../src/server/worktrees/worktree.js');
       const parent = mkdtempSync(join(tmpdir(), 'cr-deep-'));
       const deep = join(parent, 'd'.repeat(230 - parent.length - 38));
       const path = join(deep, '0123456789abcdef-0123-4567-89ab-0123456789ab');
@@ -150,7 +148,7 @@ describe('worktree creation', () => {
   );
 
   it('keeps an existing branch when attaching to it fails', async () => {
-    const { createWorktree } = await import('../src/server/jobs/worktree.js');
+    const { createWorktree } = await import('../src/server/worktrees/worktree.js');
     git(repo, 'branch', 'job/kept');
     // The branch is checked out here already, so a second worktree of it fails.
     git(repo, 'checkout', '-q', 'job/kept');
@@ -164,7 +162,7 @@ describe('worktree creation', () => {
     'still deletes the branch when a process holds the folder, and the sweep takes the leftover',
     async () => {
       const { createWorktree, removeWorktree, sweepLeftoverWorktrees } = await import(
-        '../src/server/jobs/worktree.js'
+        '../src/server/worktrees/worktree.js'
       );
       const path = join(dataDir, 'worktrees', 'held');
       await createWorktree(repo, 'job-held', 'Held', { path, branch: 'job/held' });
@@ -432,53 +430,6 @@ describe('deleteTrackBranchRows', () => {
 
     tracks.deleteTrackBranchRows(repo, 'Alpha');
     expect(tracks.listTrackBranches(repo)).toEqual([]);
-  });
-});
-
-describe('merge stage into a track', () => {
-  it('merges a job branch into the track worktree, records the sha, and leaves main alone', async () => {
-    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    const mainBefore = git(repo, 'rev-parse', 'main');
-
-    const jobWt = join(dataDir, 'worktrees', 'job-1');
-    git(repo, 'worktree', 'add', '-q', '-b', 'job/first-step', jobWt, t.branch);
-    commitFile(jobWt, 'src/b.ts', 'export const b = 2;\n', 'job work');
-
-    const result = await runMergeStage({
-      projectCwd: repo,
-      branch: 'job/first-step',
-      baseBranch: t.branch,
-      title: 'First step',
-      jobId: 'job-1',
-      featureId: 'f-aaaaaa',
-      mergeCwd: t.worktreePath,
-    });
-
-    expect(result.merged).toBe(true);
-    expect(result.pushed).toBe(false);
-    expect(result.pushSkippedReason).toBe('track-branch');
-    expect(result.mergeSha).toBe(git(t.worktreePath, 'rev-parse', 'HEAD'));
-    expect(existsSync(join(t.worktreePath, 'src', 'b.ts'))).toBe(true);
-    expect(git(repo, 'rev-parse', 'main')).toBe(mainBefore);
-    expect(git(t.worktreePath, 'log', '-1', '--format=%B')).toBe(
-      'Merge job: First step\n\nJob-Id: job-1\nFeature: f-aaaaaa'
-    );
-  });
-
-  it('refuses when the track worktree is dirty, naming the worktree', async () => {
-    const t = await tracks.ensureTrackBranch(project(), 'Alpha');
-    writeFileSync(join(t.worktreePath, 'scratch.ts'), 'wip\n');
-    await expect(
-      runMergeStage({
-        projectCwd: repo,
-        branch: t.branch,
-        baseBranch: t.branch,
-        title: 'x',
-        jobId: 'job-x',
-        featureId: null,
-        mergeCwd: t.worktreePath,
-      })
-    ).rejects.toThrow(t.worktreePath);
   });
 });
 

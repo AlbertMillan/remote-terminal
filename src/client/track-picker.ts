@@ -1,6 +1,5 @@
 import { html, joinHtml, setHtml } from './html-utils.js';
-import { failureMessage, requestJson } from './api.js';
-import { jsonPost } from './job-board-types.js';
+import { failureMessage, jsonPost, requestJson } from './api.js';
 
 /**
  * The Track picker in the New Session dialog.

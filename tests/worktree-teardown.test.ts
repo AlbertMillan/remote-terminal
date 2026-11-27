@@ -47,7 +47,7 @@ process.env.CLAUDE_REMOTE_CONFIG = configPath;
 
 const { loadConfig } = await import('../src/server/config.js');
 const { createWorktree, removeWorktree, sweepLeftoverWorktrees, worktreeRoot } = await import(
-  '../src/server/jobs/worktree.js'
+  '../src/server/worktrees/worktree.js'
 );
 
 let repo: string;

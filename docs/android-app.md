@@ -17,7 +17,7 @@ decisions are in `project/android-app.md`.
 
 Inside the app: `protocol/` mirrors `protocol.ts` and `src/shared/protocol.ts`; `net/` is the socket (`Connection`), the
 REST client (`Api`) and address parsing; `sessions/` the session list and the open
-terminal; `jobs/` the job and project routes and the live job feed; `push/` Firebase and
+terminal; `jobs/` the project/factory routes and the live factory feed (`factory.summary`); `push/` Firebase and
 notifications; `links/` the `claude-remote://` scheme; `ui/` the screens.
 
 ## Building
@@ -43,8 +43,8 @@ endings.
 The server stays the source of truth, and the app speaks the existing protocol.
 `protocol.ts` now exports `CLIENT_MESSAGE_TYPES` and `SERVER_MESSAGE_TYPES` as values, so a
 test can read them. `tests/protocol-fixture.test.ts` fails when the fixture lacks a type,
-or lacks a field the server really sends on a session, category or job summary. It compares
-against `sessionToInfo()`, `categoryToInfo()` and `buildJobsSummary()` output, not against a
+or lacks a field the server really sends on a session, category, factory unit or merge entry. It
+compares against `sessionToInfo()`, `categoryToInfo()` and `buildFactorySummary()` output, not against a
 hand-kept list. The app's `ProtocolFixtureTest` then decodes every fixture message with
 **strict** JSON (unknown keys fail) through `Protocol.clientPayloads`/`serverPayloads`. A new
 type or field therefore fails `npm test` until the fixture has it, and `android:test` until
@@ -55,8 +55,9 @@ The app adds one message of its own, `app.state {foreground}`, and names itself 
 socket with `/ws?device=<install id>` (`deviceIdFromUrl`, `websocket/validation.ts`). Both
 exist for push.
 
-The REST side (`JobsApi`, history) is decoded tolerantly and is not under the fixture.
-`JobsApiTest` pins the shapes that once broke: a feature's `priority` is a number.
+The REST side (`JobsApi`: rollup, project detail, release; history) is decoded tolerantly
+and is not under the fixture. `JobsApiTest` pins the shapes that once broke: a feature's
+`priority` is a number.
 
 ## Connection and recovery
 
@@ -120,7 +121,7 @@ The drawer is a `LazyColumn` with stable keys, which gives native fling, and a c
 row recomposes only that row. It is composed once and only translated (`Modifier.offset`
 plus a `graphicsLayer` scrim, both read in the layout and draw phases). Opening it is a
 160 ms slide that composes nothing. That cost is exactly what made the web sidebar slow.
-Pages (Projects, a job, History) stack *over* the main screen, which stays composed, so the
+Pages (Projects, a factory unit, History) stack *over* the main screen, which stays composed, so the
 terminal and the drawer are untouched on the way back.
 
 ## Push
@@ -131,13 +132,14 @@ said `app.state {foreground: true}`, and the server sends that device no push
 or OkHttp's 20 s ping frame): the server never pings, so a phone that dropped off the
 tailnet while on screen would otherwise look foreground until TCP gives up, and get no push.
 Otherwise the server pushes a session that needs input or finished,
-a job newly parked at a gate, and a Land's result. Gate pushes go out once per wait: the
-parked set is diffed on job writes and seeded at boot, so a restart does not re-announce old
-waits.
+a factory unit newly needing you, and a Land's result. The unit push
+(`{kind: 'factory', event: 'parked', projectCwd, unitKey, title, body}`, `push/wire.ts`
+`newlyWaiting`) goes out once per wait: the waiting set is diffed on factory writes and
+seeded at boot, so a restart does not re-announce old waits.
 
 Messages are **data-only** FCM. The app builds the notification itself, on one channel per
-kind (needs input, finished, job gates, land results), so each can be muted in Android
-settings. It uses one notification per session, job or track, so "finished" replaces "needs
+kind (needs input, finished, factory waiting, land results), so each can be muted in Android
+settings. It uses one notification per session, factory unit or track, so "finished" replaces "needs
 input" instead of stacking. A tap opens the notification's `claude-remote://` link.
 
 `src/server/push/fcm.ts` signs the service-account JWT with `node:crypto` (RS256), trades it
@@ -149,7 +151,7 @@ and errors with no network. No `firebase-admin` dependency.
 **Optional on both ends.** Without `<dataDir>/firebase-service-account.json` the server logs
 `push: off` once, and every send is a no-op. Without `android/app/google-services.json` the
 Google Services plugin is not applied (`app/build.gradle.kts`), Firebase never initialises,
-and the app runs without push. A send never throws into the session, job or Land that
+and the app runs without push. A send never throws into the session, factory run or Land that
 caused it. Both files are the user's own: `google-services.json` is gitignored, and the key
 lives in the data dir, never the repo.
 
@@ -164,23 +166,23 @@ lives in the data dir, never the repo.
    this has landed. The log then says `push: on`.
 5. Open the app and allow notifications. `GET /api/push` lists the registered device.
 
-## Projects and job gates
+## Projects and factory units
 
-The live job list comes from `jobs.summary`, the same feed the web overlay uses. A job
-screen reloads on every job write. A parked question is shown as the web board shows it:
-`GET /api/jobs/:id/decision` serves `src/client/decision-format.ts`'s parse, which is pure,
-so there is one parser and no Kotlin copy to drift. There is one answer box per question,
-all required, joined exactly as `job-board.ts` joins them (`JobsApi.joinAnswers`). The review
-gate ticks findings through `/findings/select`; design and merge approval show the spec,
-documents and diff first.
+The Projects screen lists factory units only (the job pipeline and its screens are gone,
+and so is `jobs.summary`). The live list comes from `factory.summary`, the same feed the
+web overlay uses (`JobsFeed`): pushed on every factory write and once after auth, with no
+reload tick, since heartbeats push it every minute. A unit screen (`FactoryUnitScreen`) shows where the unit is, why it waits, a track's features,
+its merge entry and tokens, and lets a parked unit be approved (a review it stopped at) or
+released for another round (`POST /api/factory/items/:featureId/release`,
+`JobsApi.releaseFactory`). Everything else (answers, Cancel, Take over) is the web board's.
 
 ## History, share and links
 
 History reads `/api/project-logs`: every SESSION-LOG entry that names a conversation, with
 Resume and Fork through `session.open`. Share-to (Android's share sheet, `text/plain`) asks
 which running session to use, the open one first, and pastes into its prompt. It never
-presses Enter. Links are `claude-remote://session/<id>`, `job/<id>` and
-`project?cwd=<encoded>` (`links/Link.kt`). Anything else parses to nothing, and the app
+presses Enter. Links are `claude-remote://session/<id>`, `unit?key=<url-encoded unit key>` (the factory
+push opens it) and `project?cwd=<encoded>` (`links/Link.kt`). Anything else parses to nothing, and the app
 just opens.
 
 ## Testing on the emulator

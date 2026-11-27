@@ -7,7 +7,7 @@ import { join } from 'path';
  * The Android app speaks /ws with Kotlin types that mirror protocol.ts (docs/android-app.md).
  * Both test suites read tests/fixtures/protocol/messages.json: this half fails when the
  * server's protocol moves away from the fixture (a new message type, a new field on a
- * session, category or job), and the app's ProtocolFixtureTest fails when its Kotlin types
+ * session, category, factory unit or merge entry), and the app's ProtocolFixtureTest fails when its Kotlin types
  * no longer decode the fixture. Together a protocol change cannot land with the app behind.
  */
 
@@ -20,8 +20,6 @@ const { loadConfig } = await import('../src/server/config.js');
 const { initDatabase, closeDatabase } = await import('../src/server/db/schema.js');
 const { CLIENT_MESSAGE_TYPES, SERVER_MESSAGE_TYPES } = await import('../src/server/websocket/protocol.js');
 const { sessionToInfo, categoryToInfo } = await import('../src/server/websocket/connections.js');
-const store = await import('../src/server/jobs/store.js');
-const { buildJobsSummary } = await import('../src/server/jobs/summary.js');
 const factory = await import('../src/server/factory/store.js');
 const mergeStore = await import('../src/server/factory/merge-queue-store.js');
 const { buildFactorySummary } = await import('../src/server/factory/board.js');
@@ -33,7 +31,7 @@ interface FixtureMessage {
 }
 
 interface Fixture {
-  shapes: Record<'session' | 'category' | 'job' | 'unit' | 'merge', Record<string, unknown>>;
+  shapes: Record<'session' | 'category' | 'unit' | 'merge', Record<string, unknown>>;
   client: FixtureMessage[];
   server: FixtureMessage[];
 }
@@ -81,15 +79,6 @@ describe('protocol fixture', () => {
   it('describes a category with exactly the fields the server sends', () => {
     const info = categoryToInfo({ id: 'c-1', name: 'Games', sortOrder: 0, collapsed: false });
     expect(sorted(Object.keys(fixture.shapes.category))).toEqual(sorted(Object.keys(info)));
-  });
-
-  it('describes a job summary with exactly the fields the server sends', () => {
-    store.createJob({ projectCwd: dataDir, featureId: 'f-1', title: 'A feature' });
-    const [job] = buildJobsSummary().jobs;
-    expect(job).toBeDefined();
-    expect(sorted(Object.keys(fixture.shapes.job))).toEqual(sorted(Object.keys(job)));
-    const stageKeys = Object.keys((fixture.shapes.job.stages as Record<string, unknown>[])[0]);
-    expect(sorted(stageKeys)).toEqual(sorted(Object.keys(job.stages[0])));
   });
 
   it('describes a factory unit, its features and a merge entry with exactly the fields the server sends', () => {

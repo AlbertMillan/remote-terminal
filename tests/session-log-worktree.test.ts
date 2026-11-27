@@ -66,7 +66,6 @@ const { peerNotesDirFor } = await import('../src/server/sessions/prompt-file.js'
 const NO_SESSIONS = { sessions: [], terminateSession: async () => true, removeSessions: async () => undefined };
 const { generateSessionLogForced } = await import('../src/server/sessions/project-log.js');
 const { worktreeOwner } = await import('../src/server/projects/worktree-owner.js');
-const { createJob, updateJob } = await import('../src/server/jobs/store.js');
 
 let repo: string;
 
@@ -117,13 +116,6 @@ describe('worktreeOwner', () => {
     const t = await tracks.ensureTrackBranch({ cwd: repo }, 'Alpha');
     expect(worktreeOwner(t.worktreePath)).toMatchObject({ projectCwd: repo, kind: 'track', branch: t.branch });
     expect(worktreeOwner(join(t.worktreePath, 'src'))?.projectCwd).toBe(repo);
-  });
-
-  it('resolves a job worktree from the job row', () => {
-    const job = createJob({ projectCwd: repo, featureId: null, title: 'J' });
-    const wt = join(dataDir, 'worktrees', 'job-x');
-    updateJob(job.id, { worktreePath: wt, branch: 'job/j' });
-    expect(worktreeOwner(wt)).toMatchObject({ projectCwd: repo, kind: 'job', branch: 'job/j' });
   });
 
   it('is null for the main checkout and for an unrecorded folder', () => {

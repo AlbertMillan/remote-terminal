@@ -5,8 +5,8 @@ import type Database from 'better-sqlite3';
 import { getDatabase } from '../db/schema.js';
 import { createLogger } from '../utils/logger.js';
 import { pathKey } from '../utils/paths.js';
-import { worktreeRoot } from '../jobs/worktree.js';
-import { jobEvents } from '../jobs/events.js';
+import { worktreeRoot } from '../worktrees/worktree.js';
+import { factoryEvents } from '../factory/events.js';
 import { onRunSettled } from '../agent/run-events.js';
 import { invalidateUsageCache } from './store.js';
 import { accountForConfigDir, accountNames, allProjectsDirs, expectedLoginCreatedAt, projectsDir as accountProjectsDir } from '../accounts.js';
@@ -626,8 +626,8 @@ async function ingestOnce(opts: IngestOptions): Promise<IngestStats> {
   }
   stats.pruned = pruneMissingFiles(db, known, new Set(candidates.map((c) => c.path)));
   if (stats.inserted > 0) invalidateUsageCache();
-  // The job board and overlay read usage off job payloads; nudge them.
-  if (jobRows) jobEvents.emitChange();
+  // The factory board and overlay show each unit's ledger tokens; nudge them.
+  if (jobRows) factoryEvents.emitChange();
   return stats;
 }
 

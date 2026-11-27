@@ -34,10 +34,10 @@ import {
 import { findFeature, parseProjectDoc, renderProjectDoc, updateFeature } from '../projects/project-doc-format.js';
 import { readProjectPlan } from '../projects/project-plan.js';
 import { invalidateProjectCache } from '../projects/project-discovery.js';
-import { multiFeatureMergeMessageArgs } from '../jobs/merge-trailers.js';
-import { readQaDoc } from '../jobs/qa-doc.js';
+import { multiFeatureMergeMessageArgs } from '../projects/merge-trailers.js';
+import { readQaDoc } from '../qa/qa-doc.js';
 import { readProjectDoc } from '../projects/project-store.js';
-import { runCommand } from '../jobs/stages/qa.js';
+import { runCommand } from '../qa/run-command.js';
 import { getItem, updateItem } from './store.js';
 import {
   getMerge,
@@ -142,7 +142,8 @@ export interface MergeQueueDeps {
   /** Build the main checkout after a merge into main. */
   build(cwd: string): Promise<BuildResult>;
   /** Land as the board runs it: closes the worktree's sessions, lands under the lock, builds. */
-  land(project: RegistryProject, trackName: string): Promise<LandResult & { build: BuildResult }>;
+  /** `ownMerge`: the entry landing, which the track's factory-work refusal leaves out. */
+  land(project: RegistryProject, trackName: string, ownMerge?: string): Promise<LandResult & { build: BuildResult }>;
   /** The registry entry for a project folder (its plan doc may be overridden). */
   project(cwd: string): RegistryProject;
   /** Report a resumed Land's result (resumeMergeQueues): its requester is gone. Never throws. */
@@ -159,11 +160,12 @@ const defaultDeps: MergeQueueDeps = {
   verify: verifyDeclaredChecks,
   resolve: resolveWithAgent,
   build: buildProject,
-  land: (project, trackName) =>
+  land: (project, trackName, ownMerge) =>
     landAndBuild(project, trackName, {
       sessions: sessionManager.getRunningSessions().map((s) => ({ id: s.id, cwd: s.cwd })),
       terminateSession: (id) => sessionManager.terminateSession(id),
       removeSessions: removeWorktreeSessions,
+      ownMerge,
     }),
   project: (cwd) => {
     try {
@@ -761,7 +763,7 @@ async function mergeTrack(lane: Lane, record: MergeRecord): Promise<Done> {
       // again, and closes the worktree's sessions only after all of them.
       try {
         await withLockRetry(lane, record, `checking "${track.trackName}" before it lands`, () =>
-          landPreflight(project, track.trackName)
+          landPreflight(project, track.trackName, { ownMerge: record.id })
         );
       } catch (error) {
         throw new ParkError((error as Error).message, null, error as Error);
@@ -838,7 +840,7 @@ async function updateWithResolver(
     let applied: Awaited<ReturnType<typeof applyPreparedUpdate>>;
     try {
       applied = await withLockRetry(lane, record, `updating "${track.trackName}" before it lands`, () =>
-        applyPreparedUpdate(project, track.trackName, ready)
+        applyPreparedUpdate(project, track.trackName, ready, record.id)
       );
     } catch (error) {
       throw new ParkError((error as Error).message, null, error as Error);
@@ -859,7 +861,7 @@ async function withLandRetry(
 ): Promise<LandResult & { build: BuildResult }> {
   for (;;) {
     try {
-      return await deps.land(project, trackName);
+      return await deps.land(project, trackName, record.id);
     } catch (error) {
       if (!(error instanceof ProjectBusyError)) throw error;
       setHolding(record, `Waiting: ${error.message}`);

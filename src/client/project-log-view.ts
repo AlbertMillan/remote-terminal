@@ -1,20 +1,18 @@
 import { escapeHtml, html, joinHtml, raw, setHtml, type SafeHtml } from './html-utils.js';
 import { failureMessage, requestJson } from './api.js';
 import type { ProjectWorkspace } from './project-workspace.js';
-import type { JobBoard } from './job-board.js';
 import type { RollupView } from './rollup-view.js';
 import type { ParsedLogEntry, PhaseGroup, ProjectBoardItem } from './session-types.js';
 import { isPhaseGroupActivation, togglePhaseGroup } from './phase-group.js';
 
 /**
- * The narrow surface ProjectLogView needs from SessionManager. `workspace`,
- * `jobBoard` and `rollup` remain SessionManager's fields — this just holds
+ * The narrow surface ProjectLogView needs from SessionManager. `workspace`
+ * and `rollup` remain SessionManager's fields — this just holds
  * references to them — while the callbacks keep "current session"/overlay
  * state single-owned by SessionManager rather than duplicated here.
  */
 export interface ProjectLogViewHost {
   workspace: ProjectWorkspace;
-  jobBoard: JobBoard;
   rollup: RollupView;
   /** Detach the live terminal session (if any) so the project view can take over the main area. */
   detachCurrentSession(): void;
@@ -229,7 +227,6 @@ export class ProjectLogView {
     const featuresEl = document.getElementById('project-features');
     if (featuresEl) this.host.workspace.renderFeatures(featuresEl, cwd);
     void this.host.workspace.loadQa(cwd);
-    void this.host.jobBoard.load(cwd);
 
     const entriesEl = document.getElementById('project-log-entries');
     if (entriesEl) {

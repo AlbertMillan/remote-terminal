@@ -23,7 +23,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clauderemote.app.App
 import com.clauderemote.app.jobs.JobsFeed
 import com.clauderemote.app.protocol.FactoryUnitSummary
-import com.clauderemote.app.protocol.JobSummary
 import com.clauderemote.app.ui.common.Chip
 import com.clauderemote.app.ui.common.LoadingOrError
 import com.clauderemote.app.ui.common.Page
@@ -32,20 +31,18 @@ import com.clauderemote.app.ui.common.statusColor
 import com.clauderemote.app.ui.theme.Palette
 
 /**
- * Everything waiting on you first: the factory's units (live from `factory.summary`), the
- * old pipeline's jobs (`jobs.summary`), then every project.
+ * Everything waiting on you first: the factory's units (live from `factory.summary`), then
+ * every project.
  */
 @Composable
 fun ProjectsScreen(
     app: App,
     onBack: () -> Unit,
     openProject: (String) -> Unit,
-    openJob: (String) -> Unit,
     openUnit: (String) -> Unit,
 ) {
-    val jobs by app.jobsFeed.jobs.collectAsStateWithLifecycle()
     val factory by app.jobsFeed.factory.collectAsStateWithLifecycle()
-    // The roll-up parses every PROJECT.md: loaded on open and on Refresh, not on every job write.
+    // The roll-up parses every PROJECT.md: loaded on open and on Refresh, not on every factory update.
     val rollup = rememberLoaded(Unit) { app.jobsApi.rollup() }
     Page("Projects", onBack = onBack, actions = { TextButton(onClick = rollup.reload) { Text("Refresh") } }) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
@@ -54,12 +51,7 @@ fun ProjectsScreen(
                 item { SectionHeader("Factory") }
                 items(units, key = { "u:" + it.key }) { unit -> UnitRow(unit) { openUnit(unit.key) } }
             }
-            val live = jobs.filter { it.status in setOf("parked", "running", "queued", "failed") }
-            if (live.isNotEmpty()) {
-                item { SectionHeader("Jobs") }
-                items(live, key = { "j:" + it.id }) { job -> JobRow(job) { openJob(job.id) } }
-            }
-            val attention = rollup.value?.attention.orEmpty().filter { it.jobId == null }
+            val attention = rollup.value?.attention.orEmpty()
             if (attention.isNotEmpty()) {
                 item { SectionHeader("Needs attention") }
                 items(attention, key = { "a:" + it.projectCwd + it.title }) { a ->
@@ -79,8 +71,6 @@ fun ProjectsScreen(
                 Column(Modifier.fillMaxWidth().clickable { openProject(p.cwd) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(p.name, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (p.waitingJobs > 0) Chip("${p.waitingJobs} waiting", Palette.warn)
-                        if (p.runningJobs > 0) Chip("${p.runningJobs} running", Palette.accent)
                     }
                     val c = p.counts
                     Text(
@@ -105,17 +95,6 @@ fun SectionHeader(text: String) {
 }
 
 @Composable
-fun JobRow(job: JobSummary, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip(jobLabel(job.status, job.gate, job.parkReason, job.stage), statusColor(job.status))
-            Text(job.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Text(job.projectName, style = MaterialTheme.typography.bodySmall, color = Palette.muted)
-    }
-}
-
-@Composable
 fun UnitRow(unit: FactoryUnitSummary, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -136,34 +115,17 @@ fun unitColor(unit: FactoryUnitSummary) = when {
     else -> Palette.accent
 }
 
-/** "design gate", "question", "running: implement", "failed: review". */
-fun jobLabel(status: String, gate: String?, parkReason: String?, stage: String?): String = when {
-    status == "parked" && parkReason == "question" -> "question"
-    status == "parked" -> "${gate ?: stage ?: ""} gate".trim()
-    status == "running" && stage != null -> stage
-    status == "failed" && stage != null -> "failed: $stage"
-    else -> status
-}
-
-/** One project: its jobs (live) and its plan's tracks and features. */
+/** One project: its live factory units and its plan's tracks and features. */
 @Composable
-fun ProjectScreen(app: App, cwd: String, onBack: () -> Unit, openJob: (String) -> Unit) {
-    val revision by app.jobsFeed.revision.collectAsStateWithLifecycle()
+fun ProjectScreen(app: App, cwd: String, onBack: () -> Unit, openUnit: (String) -> Unit) {
+    val factory by app.jobsFeed.factory.collectAsStateWithLifecycle()
     val project = rememberLoaded(cwd) { app.jobsApi.project(cwd) }
-    val jobs = rememberLoaded(cwd, revision) { app.jobsApi.jobs(cwd) }
     Page(project.value?.name ?: cwd.substringAfterLast('\\').substringAfterLast('/'), subtitle = cwd, onBack = onBack) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-            val list = jobs.value.orEmpty().sortedByDescending { it.updatedAt }
-            if (list.isNotEmpty()) {
-                item { SectionHeader("Jobs") }
-                items(list, key = { "j:" + it.id }) { job ->
-                    Column(Modifier.fillMaxWidth().clickable { openJob(job.id) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Chip(jobLabel(job.status, job.gate, job.parkReason, job.stage), statusColor(job.status))
-                            Text(job.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
+            val units = JobsFeed.liveUnits(factory?.units.orEmpty().filter { it.projectCwd == cwd })
+            if (units.isNotEmpty()) {
+                item { SectionHeader("Factory") }
+                items(units, key = { "u:" + it.key }) { unit -> UnitRow(unit) { openUnit(unit.key) } }
             }
             val p = project.value
             if (p == null) item { LoadingOrError(project) }

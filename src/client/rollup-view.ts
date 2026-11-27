@@ -2,14 +2,12 @@ import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { shortAge } from './format.js';
 
 /**
- * Cross-project overview: what is in flight and what is waiting on you.
- *
- * Deliberately leads with "Needs you" rather than a project list. A list of 22
- * projects tells you nothing you did not already know; three items blocking
- * work do.
+ * Cross-project overview: every project, led by the features marked blocked.
+ * What the factory is running or waits on is the Factory overlay's (pushed
+ * `factory.summary`), not this page's.
  */
 
-export type AttentionKind = 'question' | 'failed' | 'gate' | 'blocked';
+export type AttentionKind = 'blocked';
 
 export interface AttentionItem {
   kind: AttentionKind;
@@ -17,7 +15,6 @@ export interface AttentionItem {
   projectName: string;
   title: string;
   detail: string | null;
-  jobId: string | null;
   featureId: string | null;
   since: string;
 }
@@ -28,8 +25,6 @@ export interface ProjectSummary {
   status: string | null;
   hasDoc: boolean;
   counts: { total: number; done: number; in_progress: number; pending: number; blocked: number };
-  runningJobs: number;
-  waitingJobs: number;
   lastActivity: string | null;
   lastModified: string | null;
   vcsKind: string;
@@ -38,7 +33,6 @@ export interface ProjectSummary {
 
 export interface Rollup {
   attention: AttentionItem[];
-  inFlight: { jobId: string; projectName: string; title: string; stage: string | null }[];
   projects: ProjectSummary[];
   totals: {
     projects: number;
@@ -48,23 +42,15 @@ export interface Rollup {
     inProgress: number;
     blocked: number;
     attention: number;
-    running: number;
   };
 }
 
 const KIND_LABEL: Record<AttentionKind, string> = {
-  question: 'needs a decision',
-  failed: 'failed',
-  gate: 'waiting for you',
   blocked: 'blocked',
 };
 
-/** Re-poll only while something is actually moving. */
-const POLL_MS = 6000;
-
 export class RollupView {
   private data: Rollup | null = null;
-  private pollTimer: number | null = null;
   private visible = false;
 
   constructor(private readonly onOpenProject: (cwd: string) => void) {}
@@ -85,7 +71,6 @@ export class RollupView {
 
   hide(): void {
     this.visible = false;
-    this.stopPolling();
     document.getElementById('rollup-view')?.classList.add('hidden');
   }
 
@@ -98,20 +83,6 @@ export class RollupView {
       this.data = null;
     }
     this.render();
-    this.schedulePoll();
-  }
-
-  private schedulePoll(): void {
-    this.stopPolling();
-    if (!this.visible || !this.data || this.data.inFlight.length === 0) return;
-    this.pollTimer = window.setTimeout(() => void this.load(), POLL_MS);
-  }
-
-  private stopPolling(): void {
-    if (this.pollTimer !== null) {
-      window.clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
   }
 
   private render(): void {
@@ -126,7 +97,6 @@ export class RollupView {
       joinHtml([
         this.renderTotals(this.data),
         this.renderAttention(this.data),
-        this.renderInFlight(this.data),
         this.renderProjects(this.data),
       ])
     );
@@ -139,8 +109,6 @@ export class RollupView {
 
     return html`
       <div class="rv-tiles">
-        ${tile(t.attention, t.attention === 1 ? 'needs you' : 'need you', t.attention ? 'warn' : '')}
-        ${tile(t.running, 'running', t.running ? 'active' : '')}
         ${tile(`${t.done}/${t.features}`, 'features done')}
         ${tile(t.inProgress, 'in progress')}
         ${tile(t.blocked, 'blocked', t.blocked ? 'danger' : '')}
@@ -152,8 +120,8 @@ export class RollupView {
     if (data.attention.length === 0) {
       return html`
         <section class="rv-section">
-          <h3 class="project-log-subhead">Needs you</h3>
-          <div class="project-empty">Nothing is waiting on you.</div>
+          <h3 class="project-log-subhead">Blocked</h3>
+          <div class="project-empty">No feature is marked blocked.</div>
         </section>`;
     }
 
@@ -172,24 +140,7 @@ export class RollupView {
 
     return html`
       <section class="rv-section">
-        <h3 class="project-log-subhead">Needs you</h3>
-        <ul class="rv-list">${rows}</ul>
-      </section>`;
-  }
-
-  private renderInFlight(data: Rollup): SafeHtml {
-    if (data.inFlight.length === 0) return html``;
-    const rows = data.inFlight.map(
-      (j) => html`
-        <li class="rv-item running">
-          <span class="rv-kind running">${j.stage || 'running'}</span>
-          <div class="rv-item-body"><div class="rv-item-title">${j.title}</div></div>
-          <span class="rv-item-project">${j.projectName}</span>
-        </li>`
-    );
-    return html`
-      <section class="rv-section">
-        <h3 class="project-log-subhead">In flight</h3>
+        <h3 class="project-log-subhead">Blocked</h3>
         <ul class="rv-list">${rows}</ul>
       </section>`;
   }
@@ -207,8 +158,6 @@ export class RollupView {
     const rows = sorted.map((p) => {
         const pct = p.counts.total > 0 ? Math.round((p.counts.done / p.counts.total) * 100) : 0;
         const badges: SafeHtml[] = [];
-        if (p.runningJobs) badges.push(html`<span class="rv-badge active">${p.runningJobs} running</span>`);
-        if (p.waitingJobs) badges.push(html`<span class="rv-badge warn">${p.waitingJobs} waiting</span>`);
         if (p.counts.blocked) badges.push(html`<span class="rv-badge danger">${p.counts.blocked} blocked</span>`);
         if (!p.canDispatch) badges.push(html`<span class="rv-badge">${p.vcsKind}</span>`);
 
@@ -233,7 +182,7 @@ export class RollupView {
       </section>`;
   }
 
-  /** One delegated listener; rows are re-rendered on every poll. */
+  /** One delegated listener; rows are re-rendered on every load. */
   attach(container: HTMLElement): void {
     container.addEventListener('click', (event) => {
       const row = (event.target as HTMLElement).closest('[data-cwd]') as HTMLElement | null;

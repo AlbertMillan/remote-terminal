@@ -25,6 +25,8 @@ import {
   type TakeoverDeps,
 } from './takeover.js';
 import { isTrackWorkflow } from './templates.js';
+import { cancelUnit, type CancelResult } from './cancel.js';
+import { getDispatcher } from './dispatcher.js';
 
 const logger = createLogger('factory-session-routes');
 
@@ -32,9 +34,9 @@ const logger = createLogger('factory-session-routes');
  * Sessions claiming factory units over HTTP (takeover.ts):
  *
  * - the board, behind the access gate like every `/api/*` route:
- *   POST /api/factory/items/:featureId/take | return | done, with `{ cwd }`;
- * - sessions (`cr factory take|return|done`), on loopback with the caller's
- *   token (`authenticate()`): `/api/agent/factory/take|return|done`, with
+ *   POST /api/factory/items/:featureId/take | return | done | cancel, with `{ cwd }`;
+ * - sessions (`cr factory take|return|done|cancel`), on loopback with the caller's
+ *   token (`authenticate()`): `/api/agent/factory/take|return|done|cancel`, with
  *   `{ target }` — a feature id or a track name; return and done default to
  *   what the caller holds.
  *
@@ -80,6 +82,7 @@ export interface SessionRouteDeps {
   trackOfFolder(cwd: string): string | null;
   /** Ids of the sessions this one started. */
   childrenOf(sessionId: string): string[];
+  cancel(projectCwd: string, featureId: string): Promise<CancelResult>;
 }
 
 export const defaultSessionRouteDeps: SessionRouteDeps = {
@@ -97,6 +100,12 @@ export const defaultSessionRouteDeps: SessionRouteDeps = {
       .getSessionList()
       .filter((s) => s.spawnedBy === id)
       .map((s) => s.id),
+  async cancel(projectCwd, featureId) {
+    const result = await cancelUnit(projectCwd, featureId);
+    // A seat, or the pause's parked count, may have come free.
+    void getDispatcher()?.tick();
+    return result;
+  },
 };
 
 const FEATURE = /^f-[a-z0-9]+$/;
@@ -203,7 +212,34 @@ export function registerFactorySessionRoutes(app: FastifyInstance, deps: Session
     });
   }
 
-  // --- Sessions (cr factory take|return|done) -------------------------------------
+  // Cancel a unit (cancel.ts): its run aborted and awaited, its items closed, a loose
+  // item's worktree removed. Refused while a terminal session holds it.
+  app.post<{ Params: { featureId: string }; Body?: unknown }>('/api/factory/items/:featureId/cancel', async (request, reply) => {
+    try {
+      checkFeature(request.params.featureId);
+      const cwd = boardCwd(deps, bodyOf(request.body).cwd);
+      return await deps.cancel(cwd, request.params.featureId);
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  // --- Sessions (cr factory take|return|done|cancel) -------------------------------
+
+  app.post<{ Body?: unknown }>('/api/agent/factory/cancel', async (request, reply) => {
+    try {
+      const caller = agentCaller(deps, request);
+      // As for take: a started session (a builder, a read-only peer) must not cancel work, and
+      // with it a loose item's worktree, on its own; its parent or the board does.
+      if (caller.session.spawnedBy) throw new AgentSessionError(403, 'A started session cannot cancel factory work; ask the session that started it');
+      const raw = bodyOf(request.body).target;
+      if (typeof raw !== 'string' || !raw.trim()) throw new ClaimError(400, 'Name the feature id or track to cancel');
+      const featureId = resolveTarget(caller.project, raw.trim());
+      return await deps.cancel(caller.project.cwd, featureId);
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
 
   app.post<{ Body?: unknown }>('/api/agent/factory/take', async (request, reply) => {
     try {

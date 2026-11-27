@@ -19,7 +19,7 @@ vi.mock('../src/server/utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
-vi.mock('../src/server/jobs/worktree.js', () => ({
+vi.mock('../src/server/worktrees/worktree.js', () => ({
   worktreeRoot: () => join(FAKE_HOME, '.claude-remote', 'worktrees'),
 }));
 

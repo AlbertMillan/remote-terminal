@@ -59,8 +59,8 @@ export function renderQaCard(
         <p class="pw-hint">
           ${
             verify > 0
-              ? `Jobs will run the ${verify} verify command${verify === 1 ? '' : 's'} from PROJECT.md, but nothing else is checked.`
-              : 'Nothing is automatically verified for this project. Jobs will reach the merge gate with QA skipped.'
+              ? `The factory will run the ${verify} verify command${verify === 1 ? '' : 's'} from PROJECT.md, but nothing else is checked.`
+              : 'Nothing is automatically verified for this project: the factory merges what its reviewer passes.'
           }
         </p>
         <button class="btn-secondary pw-qa-gen" data-cwd="${cwd}" ${busy ? 'disabled' : ''}>
@@ -201,7 +201,7 @@ export function renderTrackActions(
   const name = track.name;
   const loading = planning.has(`${project.cwd}|${track.name}`);
   const del = html`<button class="pw-track-delete" data-cwd="${cwd}" data-track="${name}"
-                       title="Delete this track: its lines, specs, jobs, branch and landed code"
+                       title="Delete this track: its lines, specs, factory work, branch and landed code"
                        ${loading ? 'disabled aria-busy="true"' : ''}>${loading ? 'Loading…' : 'Delete'}</button>`;
   if (!project.vcs.canDispatch) return html`<span class="pw-track-actions">${del}</span>`;
   const badge = track.branch
@@ -324,17 +324,6 @@ export function renderFeatureRow(
         f.spec &&
         html`<button class="pw-spec" data-cwd="${cwd}" data-id="${id}"
                      title="${f.spec}">spec</button>`
-      }
-      ${
-        project.vcs.canDispatch
-          ? html`<button class="pw-dispatch" data-cwd="${cwd}" data-id="${id}"
-                     data-title="${f.title}"
-                     title="Dispatch this feature to the pipeline${
-                       project.account ? ` (runs as ${project.account.effective})` : ''
-                     }">▸</button>`
-          : html`<span class="pw-dispatch disabled" title="${
-              project.vcs.note || 'Dispatch unavailable'
-            }">▸</span>`
       }
       ${
         // A branched track's code sits on its branch: removing one line would

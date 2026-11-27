@@ -66,7 +66,7 @@ function tokenTable(five: WindowTokens | null | undefined, week: WindowTokens | 
     row('Cache write', (t) => formatTokens(t.cacheWriteTokens)),
     row('Est. cost', (t) => `${formatCost(t.costUsd)}${t.unpriced ? '+' : ''}`),
     row('Sessions', (t) => String(t.sessions)),
-    row('Job runs', (t) => String(t.jobRuns)),
+    row('Factory runs', (t) => String(t.jobRuns)),
   ]}</tbody></table></div><p class="pu-detail">Est. at API list price; from the transcripts of projects with a PROJECT.md.</p>`;
 }
 
@@ -79,7 +79,7 @@ function card(a: AccountPlanUsage, index: number, attached: string | undefined, 
         ? html`<span class="pu-tag ok">verified</span>`
         : '',
     a.account === attached ? html`<span class="pu-tag">attached</span>` : '',
-    a.jobs ? html`<span class="pu-tag">jobs run here</span>` : '',
+    a.jobs ? html`<span class="pu-tag">factory runs here</span>` : '',
   ];
   const week = a.tokens?.sevenDay;
   const moved =

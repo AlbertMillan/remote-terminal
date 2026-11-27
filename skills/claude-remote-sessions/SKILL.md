@@ -260,8 +260,8 @@ exactly as the board's Land button does, and **closes this session** to do it.
 node "$CLAUDE_REMOTE_CLI" land
 ```
 
-- A refusal (uncommitted code, a live job, a merge that would conflict, the
-  project on another branch) prints the server's reason and exits non-zero.
+- A refusal (uncommitted code, factory work still running on the track, a merge
+  that would conflict, the project on another branch) prints the server's reason and exits non-zero.
   Fix it, or tell the user, while you still can.
 - On success it prints `Land accepted; this session will close.` Say that to
   the user as your last message: the server closes this session within
@@ -406,6 +406,17 @@ node "$CLAUDE_REMOTE_CLI" factory done                 # finished: summary, revi
 - `done` never merges: the factory checks, summarizes and reviews the work, then
   the merge queue lands it. `return` hands it back unfinished; the factory
   resumes from the last commit.
+
+**Cancel factory work**, only when the user asks:
+
+```bash
+node "$CLAUDE_REMOTE_CLI" factory cancel f-ab12cd       # or a track name
+```
+
+It stops the unit's agent, closes its items (their PROJECT.md lines stay
+unticked) and removes a loose item's worktree and branch; a track keeps its
+worktree. Refused (409) while a terminal session holds the unit: `return` it
+first. Refused once its merge is running.
 
 ## Limits
 

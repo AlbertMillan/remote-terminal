@@ -86,74 +86,6 @@ export interface AccountRefusal {
   message: string;
 }
 
-// --- Jobs ---------------------------------------------------------------------
-
-export type StageName =
-  | 'design'
-  | 'implement'
-  | 'integrate'
-  | 'review'
-  | 'fix'
-  | 'qa'
-  | 'merge'
-  | 'rebuild';
-
-export type JobStatus =
-  | 'queued' // waiting for the scheduler to admit it
-  | 'running' // a stage is executing
-  | 'parked' // waiting at a gate, or on an open question
-  | 'done' // merged (or completed without merging) and torn down
-  | 'failed' // a stage failed hard; worktree retained for inspection
-  | 'cancelled'; // user abandoned it
-
-export type StageStatus =
-  | 'pending'
-  | 'running'
-  | 'passed'
-  | 'skipped'
-  | 'failed'
-  /**
-   * The stage ran, could not settle a decision, and stopped rather than guess.
-   * Distinct from 'passed' because the pipeline strip must not show a tick
-   * beside a job that is waiting on the user, and distinct from 'failed'
-   * because nothing went wrong.
-   */
-  | 'needs_decision';
-
-export interface JobSummaryStage {
-  name: StageName;
-  status: StageStatus;
-}
-
-/** One card of the live job overlay (server jobs/summary.ts builds it). */
-export interface JobSummary {
-  id: string;
-  projectCwd: string;
-  /** Resolved exactly as the workspace board resolves it, so the two agree. */
-  projectName: string;
-  featureId: string | null;
-  title: string;
-  status: JobStatus;
-  stage: StageName | null;
-  gate: string | null;
-  parkReason: string | null;
-  detail: string | null;
-  /** All eight stages, in STAGE_ORDER: the strip renders them positionally. */
-  stages: JobSummaryStage[];
-  costUsd: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * The live job feed behind the overlay, pushed on every job or stage write and once per
- * client just after auth. No counts ride along: the pill counts the cards it is showing,
- * and a finished job leaves the panel a minute before it leaves this feed.
- */
-export interface JobsSummary {
-  jobs: JobSummary[];
-}
-
 // --- Code factory (project/code-factory.md; server factory/board.ts builds these) ---------
 
 /** The board's columns, left to right. `done` is today's (server-local midnight on). */
@@ -571,7 +503,6 @@ export interface ServerPayloads {
   'notification.preferences': NotificationPreferencesPayload;
   'notification.preferences.updated': NotificationPreferencesPayload;
   'notification': AnyNotificationPayload;
-  'jobs.summary': JobsSummary;
   'factory.summary': FactorySummary;
   'projects.changed': { projectCwd: string };
   'error': ErrorPayload;

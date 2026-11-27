@@ -36,8 +36,8 @@ object Notifications {
                 NotificationChannel(CHANNEL_DONE, "Finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "Claude finished a turn in a session"
                 },
-                NotificationChannel(CHANNEL_JOBS, "Job gates", NotificationManager.IMPORTANCE_HIGH).apply {
-                    description = "A pipeline job is waiting at a gate or has a question"
+                NotificationChannel(CHANNEL_JOBS, "Factory waiting", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "A factory unit is waiting for you"
                 },
                 NotificationChannel(CHANNEL_LAND, "Land results", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "A track landed, or failed to"
@@ -48,17 +48,17 @@ object Notifications {
 
     fun channelFor(data: Map<String, String>): String = when (data["kind"]) {
         "session" -> if (data["event"] == "needs-input") CHANNEL_INPUT else CHANNEL_DONE
-        "job" -> CHANNEL_JOBS
+        "factory" -> CHANNEL_JOBS
         else -> CHANNEL_LAND
     }
 
     /**
-     * One notification per session, job or track: a newer event replaces the older one.
+     * One notification per session, factory unit or track: a newer event replaces the older one.
      * A Land is per track (the server's collapseKey too), so two tracks of one project
      * landing are two notifications.
      */
     fun tagFor(data: Map<String, String>): String =
-        data["kind"] + ":" + (data["sessionId"] ?: data["jobId"] ?: data["track"] ?: data["projectCwd"] ?: "")
+        data["kind"] + ":" + (data["sessionId"] ?: data["unitKey"] ?: data["track"] ?: data["projectCwd"] ?: "")
 
     fun show(context: Context, data: Map<String, String>) {
         if (Build.VERSION.SDK_INT >= 33 &&

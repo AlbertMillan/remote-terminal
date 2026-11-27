@@ -52,9 +52,9 @@ function formatDuration(ms: number): string {
 
 /**
  * Runs queue per LANE, not globally — otherwise one project's stage waits on
- * another's, invisibly. See `docs/job-pipeline.md`.
+ * another's, invisibly. See `docs/code-factory.md`.
  *
- * The lane is the project, passed by the job runner. Runs without one (the
+ * The lane is the project, passed by the factory runner. Runs without one (the
  * session-log generator, PROJECT.md migration) share the default lane: they are
  * background work and should not multiply.
  */

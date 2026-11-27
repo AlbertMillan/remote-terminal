@@ -30,7 +30,7 @@ user-scope MCP servers are per account.
 
 1. the account the start names (new-session dialog);
 2. else its project's `account` in `projects.json` (most specific project containing the cwd);
-   a track or job worktree is looked up by its owner's checkout (`projectCwdFor`), since
+   a track worktree is looked up by its owner's checkout (`projectCwdFor`), since
    worktrees sit outside every project;
 3. else `defaultAccount`.
 
@@ -45,7 +45,7 @@ favourite, adding an entry for a project without one (which makes it a roll-up a
 on clear, dropping only the key. The board carries `account: { own, effective, source }`;
 an entry inherited from a containing project shows as "Inherited". The new-session dialog's
 empty option names what it resolves to for the typed folder (`GET /api/accounts/resolve`),
-and the dispatch button and job board say which account jobs run as: jobs can't override it.
+and the plan chip says which account the project's factory runs use: they can't override it.
 
 A named account that doesn't exist is refused, never swapped for another. The account is
 stored on the row (`sessions.account`, migration `019_session_account`, which backfilled
@@ -75,8 +75,8 @@ login's folder for a personal session.
 - `claudeJsonPath(account)` — the global config file (login, trust, MCP servers). Inside a
   custom folder, but **`~/.claude.json` beside the default `~/.claude`**: an account on
   `~/.claude` is launched with `CLAUDE_CONFIG_DIR` removed, so Claude Code reads that file.
-- Jobs and other headless runs with no session use `projectAccount(cwd)`: the project's
-  default, else the configured one. The review stage reads that account's `/code-review`.
+- Factory runs and other headless runs with no session use `projectAccount(cwd)`: the
+  project's default, else the configured one. The reviewer agent reads that account's `/code-review`.
 
 ## Launch
 
@@ -90,7 +90,7 @@ and a headless run (`spawnClaude`) — gets `accountEnv(env, account)`:
 
 **Preflight** (`preflight(account)`) runs before every launch: create, Fork, history
 Resume, revive, an agent start (before its branch and worktree), and every `runClaude`
-(a job stage or session log runs under `projectAccount(cwd)`). It reads `oauthAccount`
+(a factory step or session log runs under `projectAccount(cwd)`). It reads `oauthAccount`
 from `claudeJsonPath(account)` and refuses (`AccountRefusedError`, 409):
 
 | reason | when |

@@ -47,7 +47,7 @@ const COLUMNS: { id: FactoryColumn; label: string }[] = [
 export const LAST_OPENED_KEY = 'factoryBoardLastOpened';
 
 type Drawer =
-  | { kind: 'unit'; key: string; view: 'main' | 'summary' | 'diff' | 'changes' }
+  | { kind: 'unit'; key: string; view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel' }
   | { kind: 'merge'; id: string }
   | { kind: 'add' };
 
@@ -377,7 +377,7 @@ export class FactoryBoardView {
         return this.load();
       case 'view':
         if (drawer?.kind === 'unit') {
-          drawer.view = (el.dataset.view as 'main' | 'summary' | 'diff' | 'changes') ?? 'main';
+          drawer.view = (el.dataset.view as 'main' | 'summary' | 'diff' | 'changes' | 'cancel') ?? 'main';
           if (drawer.view === 'summary' && unit) void this.loadSummary(unit);
           if (drawer.view === 'diff' && unit) void this.loadDiff(unit);
         }
@@ -436,6 +436,15 @@ export class FactoryBoardView {
         const label = verb === 'accept' ? 'Accepted into the factory' : verb === 'backlog' ? 'Moved to the backlog' : 'Dismissed';
         return this.act(label, () => this.post(`/api/factory/triage/${featureId}`, { cwd: unit.projectCwd, action: verb }));
       }
+      case 'cancel-unit':
+        if (!unit || !featureId) return;
+        return this.act(
+          `Cancelled ${unit.isTrack ? `"${unit.trackName}"` : featureId}`,
+          () => this.post(`/api/factory/items/${featureId}/cancel`, { cwd: unit.projectCwd }),
+          () => {
+            this.drawer = null;
+          }
+        );
       case 'retry-merge': {
         const id = el.dataset.mergeId;
         if (!id) return;
@@ -668,7 +677,7 @@ export class FactoryBoardView {
     return html`${close}${this.renderUnit(u, d.view)}${notice}`;
   }
 
-  private renderUnit(u: FactoryBoardUnit, view: 'main' | 'summary' | 'diff' | 'changes'): SafeHtml {
+  private renderUnit(u: FactoryBoardUnit, view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel'): SafeHtml {
     const head = html`<span class="fb-path">${u.isTrack ? 'Track' : u.unitId} · ${u.projectName}</span>
       <h3>${u.title}</h3>
       <div class="fb-chips">
@@ -701,6 +710,18 @@ export class FactoryBoardView {
         </div>`;
     }
 
+    if (view === 'cancel') {
+      return html`${head}<h4>Cancel this ${u.isTrack ? 'track' : 'item'}?</h4>
+        <p>${u.status === 'in_progress' ? 'Its agent is stopped first. ' : ''}${u.isTrack ? 'Its features leave' : 'It leaves'} the factory,
+        and ${u.isTrack ? 'their lines stay' : 'its line stays'} unticked in PROJECT.md. ${u.isTrack
+          ? 'The track keeps its worktree and branch, with every commit made so far.'
+          : 'Its worktree and branch are removed, with any work in them.'}${u.mergeStatus === 'parked' ? ' Its parked merge is dropped.' : ''}</p>
+        <div class="fb-acts">
+          <button type="button" class="btn-primary" data-fb="cancel-unit" ${this.busy ? 'disabled' : ''}>Cancel ${u.isTrack ? 'track' : 'item'}</button>
+          ${this.viewButton('main', 'Keep it')}
+        </div>`;
+    }
+
     const parts: SafeHtml[] = [head];
     if (u.triage) {
       parts.push(html`<p>An agent filed this while working on something else. Accept it into the factory, move it to the backlog, or dismiss it.</p>
@@ -727,7 +748,7 @@ export class FactoryBoardView {
       parts.push(m ? this.renderMerge(m, false) : html`<p class="fb-path">Handed to the merge queue.</p>`);
     } else if (isMockupPark(u)) {
       // Only the mockup: the Live block's ages would change the drawer, and reload the frame, every minute.
-      return joinHtml([head, this.mockup.render(u)]);
+      return joinHtml([head, this.mockup.render(u), cancellable(u) ? html`<div class="fb-acts">${this.viewButton('cancel', 'Cancel item')}</div>` : html``]);
     } else if (u.status === 'parked') {
       parts.push(html`<div class="fb-verdict"><b>Parked</b> at ${u.step ?? 'setup'}</div>
         ${u.detail.parkReason && html`<pre class="fb-pre">${u.detail.parkReason}</pre>`}
@@ -755,6 +776,7 @@ export class FactoryBoardView {
     const extra: SafeHtml[] = [];
     if (u.detail.hasSummary && !(u.column === 'review' && u.needsYou)) extra.push(this.viewButton('summary', 'Summary page'));
     if (u.detail.worktreePath && !u.needsYou) extra.push(this.viewButton('diff', 'Open diff'));
+    if (cancellable(u)) extra.push(this.viewButton('cancel', u.isTrack ? 'Cancel track' : 'Cancel item'));
     if (extra.length > 0) parts.push(html`<div class="fb-acts">${extra}</div>`);
     return joinHtml(parts);
   }
@@ -821,7 +843,16 @@ export class FactoryBoardView {
         : html`<p class="fb-path">Nothing was filed.</p>`}`}`;
   }
 
-  private viewButton(view: 'main' | 'summary' | 'diff' | 'changes', label: string): SafeHtml {
+  private viewButton(view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel', label: string): SafeHtml {
     return html`<button type="button" class="btn-secondary" data-fb="view" data-view="${view}">${label}</button>`;
   }
+}
+
+/**
+ * Cancel is offered on any live unit no terminal session holds and no merge is
+ * running for (server factory/cancel.ts refuses those too): a parked merge is dropped.
+ */
+export function cancellable(u: FactoryBoardUnit): boolean {
+  if (u.triage || u.claim || u.status === 'done') return false;
+  return !(u.column === 'merging' && u.mergeStatus !== 'parked');
 }

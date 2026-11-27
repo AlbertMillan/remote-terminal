@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { FactoryBoardView, LAST_OPENED_KEY, joinAnswers, readAddResult, renderMarkdown } from '../src/client/factory-board.js';
+import { FactoryBoardView, LAST_OPENED_KEY, cancellable, joinAnswers, readAddResult, renderMarkdown } from '../src/client/factory-board.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
 
 /**
@@ -325,6 +325,30 @@ describe('drawers', () => {
     expect(drawer().textContent).toContain('fix ran 2 times without settling it');
     await click('[data-fb="release"]', drawer());
     expect(lastPost()).toEqual({ url: '/api/factory/items/f-cap/release', method: 'POST', body: { cwd: CWD } });
+  });
+
+  it('cancels a parked unit after a confirm step, and Keep it backs out', async () => {
+    await open('f-cap');
+    await click('[data-fb="view"][data-view="cancel"]', drawer());
+    expect(drawer().textContent).toContain('Cancel this item?');
+    expect(drawer().textContent).toContain('Its worktree and branch are removed');
+    await click('[data-fb="view"][data-view="main"]', drawer());
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([]);
+    await click('[data-fb="view"][data-view="cancel"]', drawer());
+    await click('[data-fb="cancel-unit"]', drawer());
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-cap/cancel', method: 'POST', body: { cwd: CWD } });
+    expect(drawer().querySelector('[data-fb="cancel-unit"]')).toBeNull();
+  });
+
+  it('offers Cancel on a parked merge, a running track and a review, never on a merge under way or claimed work', () => {
+    const u = (key: string) => BOARD.units.find((x) => x.key === key)!;
+    expect(cancellable(u('f-merge'))).toBe(true);
+    expect(cancellable(u('f-esc'))).toBe(true);
+    expect(cancellable(u('track:History search'))).toBe(true);
+    expect(cancellable(u('f-triage'))).toBe(false);
+    expect(cancellable(u('f-done'))).toBe(false);
+    expect(cancellable({ ...u('f-merge'), mergeStatus: 'running', status: 'open' })).toBe(false);
+    expect(cancellable({ ...u('f-cap'), claim: { sessionId: 's-1', sessionName: 'x', live: true } })).toBe(false);
   });
 
   it("shows a refusal from the server in the drawer", async () => {
