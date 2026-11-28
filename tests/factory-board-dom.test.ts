@@ -358,6 +358,23 @@ describe('drawers', () => {
     expect(drawer().querySelector('.fb-notice.error')!.textContent).toBe('f-cap is not parked');
   });
 
+  it("scrolls the opened unit's card into view once the board data is drawn, and only once", async () => {
+    const scrolled: string[] = [];
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: () => void };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.dataset.unitKey ?? '');
+    };
+    try {
+      await open('f-esc');
+      expect(scrolled).toEqual(['f-esc']);
+      await view.load();
+      expect(scrolled).toEqual(['f-esc']);
+    } finally {
+      proto.scrollIntoView = original;
+    }
+  });
+
   it('opens a session Land from its card', async () => {
     await open();
     await click('[data-merge-card="mq-2"]');
