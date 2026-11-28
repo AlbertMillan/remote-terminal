@@ -258,7 +258,7 @@
       </div>
 
       <!-- Cross-project overview -->
-      <!-- The factory board (src/client/factory-board.ts): columns, drawers, Add work, the morning report. -->
+      <!-- The factory board (src/client/factory-board.ts): Needs you, the Pipeline's stage picker, the side panel, drawers, Add work. -->
       <div id="factory-board-view" class="project-log-view factory-board-view hidden">
         <div class="project-log-header">
           <div class="project-log-titles">
@@ -266,13 +266,29 @@
             <span id="factory-board-status" class="fb-status"></span>
           </div>
           <div class="project-log-actions">
+            <!-- Board (stage picker) or Flow (lanes per track), remembered per browser (factory-board-flow.ts). -->
+            <div class="fb-mode" role="group" aria-label="View">
+              <button type="button" data-fb="view-mode" data-mode="board" aria-pressed="true">Board</button>
+              <button type="button" data-fb="view-mode" data-mode="flow" aria-pressed="false">Flow</button>
+            </div>
             <button type="button" class="btn-secondary" data-fb="refresh">Refresh</button>
             <button type="button" class="btn-secondary" data-fb="add">Add work</button>
             <button type="button" class="btn-primary" data-fb="back">Back</button>
           </div>
         </div>
-        <div id="factory-board-body" class="fb-body"></div>
-        <aside id="factory-drawer" class="fb-drawer hidden" aria-label="Factory item"></aside>
+        <div class="fb-split">
+          <div id="factory-board-body" class="fb-body"></div>
+          <!-- The right-hand column: the side panel, or the detail pane docked in its place. -->
+          <div class="fb-right">
+            <div id="factory-side"></div>
+            <aside id="factory-drawer" class="fb-pane hidden" aria-label="Factory item"></aside>
+          </div>
+        </div>
+        <!-- On a phone (≤640px): You / Flow / Done (src/client/factory-board-phone.ts). -->
+        <nav id="factory-phone-tabs" class="fb-phone-tabs hidden" role="tablist" aria-label="Factory"></nav>
+        <div id="factory-add" class="fb-modal hidden"></div>
+        <!-- A decision's Undo toast (src/client/factory-decisions.ts): sent when it expires. -->
+        <div id="factory-board-toasts" class="fb-toasts" aria-live="polite"></div>
       </div>
 
       <div id="rollup-view" class="project-log-view hidden">

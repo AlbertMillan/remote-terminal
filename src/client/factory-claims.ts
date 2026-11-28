@@ -64,12 +64,24 @@ export function isClaimAction(kind: string | undefined): boolean {
   return !!kind && ACTIONS.has(kind);
 }
 
+export interface ClaimActionsOptions {
+  /**
+   * How Take over is offered: at once (`direct`), through the pane's confirm step
+   * (`confirm`, the phone's bottom sheet), or not here (`none`: the sheet's sticky bar has it).
+   */
+  takeOver?: 'direct' | 'confirm' | 'none';
+  /** The actions stick to the bottom of the phone's sheet. */
+  sticky?: boolean;
+}
+
 /** The claim block of a unit's drawer, above its Live section. */
 export function renderClaimActions(
   unit: FactoryUnitSummary & { detail?: { worktreePath: string | null } },
   busy: boolean,
-  sessionExists: (id: string) => boolean
+  sessionExists: (id: string) => boolean,
+  opts: ClaimActionsOptions = {}
 ): SafeHtml {
+  const acts = `fb-acts${opts.sticky ? ' fb-sticky' : ''}`;
   const disabled = busy ? 'disabled' : '';
   if (unit.claim) {
     const c = unit.claim;
@@ -78,15 +90,19 @@ export function renderClaimActions(
         ${c.live
           ? html`Held by your terminal ${who}. The factory skips it until you return it.`
           : html`Your terminal ${who} is closed. It stays claimed by you, never handed back on its own.`}</div>
-      <div class="fb-acts">
+      <div class="${acts}">
         ${sessionExists(c.sessionId) && html`<button type="button" class="btn-secondary" data-fb="claim-open">${c.live ? 'Open terminal' : 'Open terminal (revive)'}</button>`}
         <button type="button" class="btn-secondary" data-fb="claim-return" ${disabled}>Return to factory</button>
         <button type="button" class="btn-primary" data-fb="claim-done" ${disabled} title="Its work goes through the summary, the reviewer and the merge queue">Done</button>
       </div>`;
   }
-  if (!canTakeOver(unit)) return html``;
-  return html`<div class="fb-acts">
-      <button type="button" class="btn-primary" data-fb="take-over" ${disabled} title="Stop the factory's agent and continue its conversation in a terminal in the unit's worktree">Take over in terminal</button>
+  const takeOver = opts.takeOver ?? 'direct';
+  if (!canTakeOver(unit) || takeOver === 'none') return html``;
+  const title = "Stop the factory's agent and continue its conversation in a terminal in the unit's worktree";
+  return html`<div class="${acts}">
+      ${takeOver === 'confirm'
+        ? html`<button type="button" class="btn-primary" data-fb="view" data-view="take-over" title="${title}">Take over in terminal</button>`
+        : html`<button type="button" class="btn-primary" data-fb="take-over" ${disabled} title="${title}">Take over in terminal</button>`}
     </div>`;
 }
 

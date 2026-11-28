@@ -154,7 +154,16 @@ status: active
 - [x] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
 - [x] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
 ## Track: Inbox
-- [ ] `f-d92rs5` happy-dom logs iframe-loading errors in factory DOM tests
-- [ ] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
+- [x] `f-d92rs5` happy-dom logs iframe-loading errors in factory DOM tests
+- [x] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
 - [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer → project/mockup-approve-handler.md
 - [ ] `f-7zspo2` Fast test suite has load-sensitive failures
+- [ ] `f-16g6yo` Find where the Undo-decision for mockup approve lives
+
+## Track: Factory page redesign
+- [x] `f-5quljx` P1 Needs you and stage picker — decisions inline on cards, hidden when empty; six stage tabs with counts list the selected stage's units; side panel with capacity, report and merge queue → project/factory-page-redesign.md
+- [x] `f-lrr7qp` P1 Docked detail pane — the drawer becomes a right-hand pane beside the board with stage dots and every current view (review, question, triage, mockup, merge, cancel, claims) → project/factory-page-redesign.md
+- [x] `f-iabd7z` P2 Undo on decisions — Approve, Answer, Build it, Send back and triage apply at once and send after a 5 s Undo toast; flushed on leave → project/factory-page-redesign.md
+- [x] `f-tco9ro` P2 Flow view — Board / Flow toggle; one lane per track with each unit at its stage, remembered per browser → project/factory-page-redesign.md
+- [x] `f-6emftr` P2 Phone layout — You / Flow / Done tabs, B's stage view as Flow, bottom sheet for the detail pane, full-screen Add work → project/factory-page-redesign.md
+- [x] `f-2plxcw` P3 Start now — `POST /api/factory/items/:id/start` claims a ready item for a free seat ahead of priority; button on Ready rows → project/factory-page-redesign.md

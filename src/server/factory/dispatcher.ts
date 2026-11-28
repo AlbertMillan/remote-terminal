@@ -29,6 +29,9 @@ export interface DispatchStatus {
   running: number;
 }
 
+/** Dispatcher.startNow: the unit started, or why it was refused (409 at the route). */
+export type StartNowResult = { ok: true; key: string; featureIds: string[] } | { ok: false; error: string };
+
 interface Active {
   projectKey: string;
   ac: AbortController;
@@ -144,24 +147,15 @@ export class Dispatcher {
     }
 
     const capped: Record<string, string> = {};
-    const parked = new Set(listItems({ status: ['parked'] }).map(groupKey));
-    if (parked.size >= this.limits.pauseWhenParked) {
-      this.last = { paused: `${parked.size} waiting for you`, capped, running: this.active.size };
+    const paused = this.pausedReason();
+    if (paused) {
+      this.last = { paused, capped, running: this.active.size };
       return [];
     }
 
-    // Seats held, by claim owner: ours, and any a dead run still holds until its lease expires.
-    // A unit a terminal session holds takes no seat and is never started: not even an
-    // open sibling of its track, which would put a second agent in the session's worktree.
-    const owners = new Map<string, string>();
-    const sessionHeld = new Set<string>();
-    for (const item of listItems({ status: ['in_progress'] })) {
-      if (item.claimKind === 'run' && item.claimOwner) owners.set(item.claimOwner, pathKey(item.projectCwd));
-      if (item.claimKind === 'session') sessionHeld.add(groupKey(item));
-    }
-    let total = owners.size;
-    const perProject = new Map<string, number>();
-    for (const pk of owners.values()) perProject.set(pk, (perProject.get(pk) ?? 0) + 1);
+    const seats = this.seatsHeld();
+    const { perProject, sessionHeld } = seats;
+    let total = seats.total;
 
     const handedOff = handedOffUnits();
     const started: string[] = [];
@@ -191,6 +185,72 @@ export class Dispatcher {
 
     this.last = { paused: null, capped, running: this.active.size };
     return started;
+  }
+
+  /** Why nothing new starts at all (review capacity), or null. */
+  private pausedReason(): string | null {
+    const parked = new Set(listItems({ status: ['parked'] }).map(groupKey));
+    return parked.size >= this.limits.pauseWhenParked ? `${parked.size} waiting for you` : null;
+  }
+
+  /**
+   * Seats held, by claim owner: ours, and any a dead run still holds until its lease expires.
+   * A unit a terminal session holds takes no seat and is never started: not even an
+   * open sibling of its track, which would put a second agent in the session's worktree.
+   */
+  private seatsHeld(): { total: number; perProject: Map<string, number>; sessionHeld: Set<string> } {
+    const owners = new Map<string, string>();
+    const sessionHeld = new Set<string>();
+    for (const item of listItems({ status: ['in_progress'] })) {
+      if (item.claimKind === 'run' && item.claimOwner) owners.set(item.claimOwner, pathKey(item.projectCwd));
+      if (item.claimKind === 'session') sessionHeld.add(groupKey(item));
+    }
+    const perProject = new Map<string, number>();
+    for (const pk of owners.values()) perProject.set(pk, (perProject.get(pk) ?? 0) + 1);
+    return { total: owners.size, perProject, sessionHeld };
+  }
+
+  /**
+   * Start one ready unit now, ahead of the priority order (the board's Start now). The
+   * same rules as a dispatch pass, but refused with the reason rather than skipped: no
+   * free seat (overall or in its project), dispatch paused for review capacity, the
+   * project past its plan-usage cap, or the unit not ready. A track starts as a whole,
+   * led by its first ready item, as a pass would claim it. Synchronous, like a pass,
+   * so the two can never interleave between the seat count and the claim.
+   */
+  startNow(projectCwd: string, featureId: string): StartNowResult {
+    const now = this.deps.now();
+    const item = getItem(projectCwd, featureId);
+    if (!item) return { ok: false, error: `${featureId} is not a factory item` };
+    const ready = readyItems(projectCwd);
+    if (!ready.some((i) => i.featureId === featureId)) {
+      const blocked = item.status === 'open' && !item.claimOwner;
+      return { ok: false, error: blocked ? `${featureId} waits for work it depends on` : `${featureId} is not ready to start` };
+    }
+    const isTrack = isTrackWorkflow(item.workflow);
+    const lead = isTrack ? (ready.find((i) => i.trackName === item.trackName && isTrackWorkflow(i.workflow)) ?? item) : item;
+    const key = groupKey(lead);
+
+    const paused = this.pausedReason();
+    if (paused) return { ok: false, error: `Dispatch is paused: ${paused}` };
+    const { total, perProject, sessionHeld } = this.seatsHeld();
+    if (this.active.has(key) || handedOffUnits().has(key)) return { ok: false, error: 'It is already running or in the merge queue' };
+    if (sessionHeld.has(key)) return { ok: false, error: 'A terminal session holds this unit' };
+    if (total >= this.limits.seats) return { ok: false, error: `No free seat: ${total} of ${this.limits.seats} busy` };
+    const pk = pathKey(projectCwd);
+    if ((perProject.get(pk) ?? 0) >= this.limits.seatsPerProject) {
+      return { ok: false, error: `No free seat in this project: ${perProject.get(pk)} of ${this.limits.seatsPerProject} busy` };
+    }
+    const cap = planCapReason(this.deps.planUsage(projectCwd), this.limits, now);
+    if (cap) return { ok: false, error: `Over the plan-usage cap: ${cap}` };
+
+    const claimed = this.claimUnit(lead, `${OWNER_PREFIX}${randomUUID()}`, now);
+    if (!claimed) return { ok: false, error: `${featureId} was claimed by someone else first` };
+    // Asked for by name: a step-aside cool-down from an earlier run does not hold it back.
+    this.notBefore.delete(key);
+    this.launch(key, lead, claimed.owner, claimed.ids);
+    logger.info({ unit: key, items: claimed.ids }, 'factory: started now, ahead of priority');
+    return { ok: true, key, featureIds: claimed.ids };
   }
 
   /** Claim the item, and for a track every other open item of it, under one owner. */
