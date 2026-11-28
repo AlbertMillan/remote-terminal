@@ -8,7 +8,10 @@ import { VIEW_MODE_KEY, flowLanes, readViewMode } from '../src/client/factory-bo
 import { phoneStage, phoneStageGroups, planTile } from '../src/client/factory-board-phone.js';
 import type { PlanUsage } from '../src/client/plan-usage-chip.js';
 import { FakeClock } from './helpers/fake-clock.js';
+import { silenceIframePageLoads } from './helpers/happy-dom-iframe.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
+
+silenceIframePageLoads();
 
 /**
  * The factory board (project/code-factory.md, f-5clssc): its columns, each

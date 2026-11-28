@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FactoryBoardView } from '../src/client/factory-board.js';
 import { frameSrc, isMockupPark, type MockupInfo } from '../src/client/factory-mockup.js';
 import type { FactoryBoard, FactoryBoardUnit } from '../src/shared/protocol.js';
+import { silenceIframePageLoads } from './helpers/happy-dom-iframe.js';
+
+silenceIframePageLoads();
 
 /**
  * The mockup drawer (project/code-factory.md, f-ib2d86): an item parked at
