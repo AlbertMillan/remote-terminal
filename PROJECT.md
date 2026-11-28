@@ -24,7 +24,7 @@ status: active
 - [x] `f-k4w9zd` P2 Drop any file into a session — web drop/paste uploads any type (20 MB), keeps its name under <dataDir>/uploads, pastes every path → project/file-uploads.md
 - [x] `f-slr9eh` P2 Click a file path in the terminal to open it — server-checked links, served in place, the browser or device opens it → project/clickable-file-paths.md
 - [x] `f-2f96b5` P2 Pick or create a project folder in New Session — Tab-complete paths, search known projects, create folders anywhere under the user folder, `~/NodeProjects` default → project/new-session-folder-picker.md
-- [ ] `f-o41i0b` P2 Revive running sessions after Build & restart — the old server records and parks them, the new one resumes them at boot → project/revive-after-build-restart.md
+- [ ] P2 Revive running sessions after Build & restart — the old server records and parks them, the new one resumes them at boot → project/revive-after-build-restart.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
@@ -153,6 +153,11 @@ status: active
 - [x] `f-h1nykc` P2 Sending work — `cr factory send|add|status` from sessions, ▶ on Workspace tracks uses Settings defaults → project/code-factory.md
 - [x] `f-c4urw6` P2 Sessions claim items — Take over / Return to factory, terminal liveness instead of heartbeat, recorded attribution (phase 2) → project/code-factory.md
 - [x] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
+## Track: Inbox
+- [ ] `f-d92rs5` happy-dom logs iframe-loading errors in factory DOM tests
+- [ ] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
+- [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer
+- [ ] `f-7zspo2` Fast test suite has load-sensitive failures
 
 ## Track: Factory page redesign
 - [x] `f-5quljx` P1 Needs you and stage picker — decisions inline on cards, hidden when empty; six stage tabs with counts list the selected stage's units; side panel with capacity, report and merge queue → project/factory-page-redesign.md
