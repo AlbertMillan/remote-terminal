@@ -22,7 +22,10 @@ const store = await import('../src/server/factory/store.js');
 const { LEASE_EXPIRY_MS, LEASE_RENEW_MS } = await import('../src/server/factory/types.js');
 const { RunAbortedError } = await import('../src/server/agent/claude-run.js');
 const { runUnit } = await import('../src/server/factory/runner.js');
-const { Dispatcher, releaseParked, DEFER_MS } = await import('../src/server/factory/dispatcher.js');
+const { Dispatcher, releaseParked, DEFER_MS, startFactory, stopFactory } = await import('../src/server/factory/dispatcher.js');
+// Loaded here, not in the Start now route test: importing the route module under a full run outlasts a test's timeout.
+const { default: Fastify } = await import('fastify');
+const { registerFactoryBoardRoutes } = await import('../src/server/factory/board-routes.js');
 const { ProjectBusyError } = await import('../src/server/projects/project-lock.js');
 const runState = await import('../src/server/factory/run-state.js');
 const { DEFAULT_FACTORY_LIMITS } = await import('../src/server/factory/limits.js');
@@ -589,5 +592,123 @@ describe('dispatcher limits', () => {
     expect(store.getItem(ALPHA, 'f-hi0001')?.status).toBe('in_progress');
     expect(store.getItem(ALPHA, 'f-low001')?.status).toBe('open');
     await d.stop();
+  });
+});
+
+describe('start now', () => {
+  const future = () => clock / 1000 + 3600;
+  const reading = (pct: number) => ({ usedPercentage: pct, resetsAt: future(), observedAt: '', loginUuid: 'u' });
+
+  it('claims a ready item for a free seat ahead of priority, and the next pass sees the seat taken', async () => {
+    loose('f-low001', ALPHA, 3);
+    loose('f-hi0001', ALPHA, 1);
+    const f = fake({ hold: true });
+    const d = new Dispatcher(f.deps, { ...DEFAULT_FACTORY_LIMITS, seats: 1 });
+    expect(d.startNow(ALPHA, 'f-low001')).toEqual({ ok: true, key: expect.any(String), featureIds: ['f-low001'] });
+    expect(store.getItem(ALPHA, 'f-low001')?.status).toBe('in_progress');
+    expect(d.status().running).toBe(1);
+    expect(await d.tick()).toEqual([]);
+    expect(store.getItem(ALPHA, 'f-hi0001')?.status).toBe('open');
+    await d.stop();
+  });
+
+  it('refuses with no free seat, overall or in its project, and leaves the item ready', async () => {
+    loose('f-a00001');
+    loose('f-a00002');
+    const f = fake({ hold: true });
+    const full = new Dispatcher(f.deps, { ...DEFAULT_FACTORY_LIMITS, seats: 1 });
+    expect(await full.tick()).toHaveLength(1);
+    expect(full.startNow(ALPHA, 'f-a00002')).toEqual({ ok: false, error: 'No free seat: 1 of 1 busy' });
+    expect(store.getItem(ALPHA, 'f-a00002')).toMatchObject({ status: 'open', claimOwner: null });
+    await full.stop();
+
+    const perProject = new Dispatcher(f.deps, { ...DEFAULT_FACTORY_LIMITS, seats: 3, seatsPerProject: 1 });
+    expect(await perProject.tick()).toHaveLength(1);
+    const waiting = store.getItem(ALPHA, 'f-a00001')?.status === 'open' ? 'f-a00001' : 'f-a00002';
+    expect(perProject.startNow(ALPHA, waiting)).toEqual({ ok: false, error: 'No free seat in this project: 1 of 1 busy' });
+    await perProject.stop();
+  });
+
+  it('refuses over the plan-usage cap', () => {
+    loose('f-a00001');
+    const f = fake({ hold: true });
+    f.state.planUsage = { fiveHour: reading(85), sevenDay: reading(10) };
+    const d = new Dispatcher(f.deps);
+    expect(d.startNow(ALPHA, 'f-a00001')).toEqual({ ok: false, error: 'Over the plan-usage cap: 5-hour usage at 85% (cap 80%)' });
+    expect(store.getItem(ALPHA, 'f-a00001')?.status).toBe('open');
+  });
+
+  it('refuses while dispatch is paused for review capacity', () => {
+    for (const id of ['f-p00001', 'f-p00002', 'f-p00003']) {
+      loose(id);
+      store.updateItem(ALPHA, id, { status: 'parked' });
+    }
+    loose('f-a00001', BETA);
+    const d = new Dispatcher(fake({ hold: true }).deps);
+    expect(d.startNow(BETA, 'f-a00001')).toEqual({ ok: false, error: 'Dispatch is paused: 3 waiting for you' });
+  });
+
+  it('refuses what is not ready: unknown, parked, or waiting for a blocker', () => {
+    loose('f-a00001');
+    loose('f-a00002');
+    loose('f-p00001');
+    store.updateItem(ALPHA, 'f-p00001', { status: 'parked' });
+    store.addDependency({ projectCwd: ALPHA, fromFeature: 'f-a00002', toFeature: 'f-a00001', type: 'blocks' }, clock);
+    const d = new Dispatcher(fake({ hold: true }).deps);
+    expect(d.startNow(ALPHA, 'f-zzzzzz')).toEqual({ ok: false, error: 'f-zzzzzz is not a factory item' });
+    expect(d.startNow(ALPHA, 'f-p00001')).toEqual({ ok: false, error: 'f-p00001 is not ready to start' });
+    expect(d.startNow(ALPHA, 'f-a00002')).toEqual({ ok: false, error: 'f-a00002 waits for work it depends on' });
+    expect(d.status().running).toBe(0);
+  });
+
+  it('refuses a unit a terminal session holds', () => {
+    trackItem('f-t00001');
+    trackItem('f-t00002');
+    // The session holds the track (its first item); its open sibling is never started apart.
+    expect(store.claimForSession(ALPHA, ['f-t00001'], 'sess-1', clock).ok).toBe(true);
+    const d = new Dispatcher(fake({ hold: true }).deps);
+    expect(d.startNow(ALPHA, 'f-t00002')).toEqual({ ok: false, error: 'A terminal session holds this unit' });
+  });
+
+  it('starts a track as a whole, led by its first ready item, from any of its items', async () => {
+    trackItem('f-t00001');
+    trackItem('f-t00002');
+    const d = new Dispatcher(fake({ hold: true }).deps);
+    const started = d.startNow(ALPHA, 'f-t00002');
+    expect(started).toMatchObject({ ok: true, featureIds: ['f-t00001', 'f-t00002'] });
+    expect(store.listItems({ status: ['in_progress'] }).map((i) => i.featureId).sort()).toEqual(['f-t00001', 'f-t00002']);
+    expect(d.startNow(ALPHA, 'f-t00001')).toEqual({ ok: false, error: 'f-t00001 is not ready to start' });
+    await d.stop();
+  });
+
+  it('POST /api/factory/items/:id/start: started, refused 409, bad input 400, unknown 404, no dispatcher 409', async () => {
+    const app = Fastify();
+    registerFactoryBoardRoutes(app);
+    await app.ready();
+    const post = (id: string, body: object) => app.inject({ method: 'POST', url: `/api/factory/items/${id}/start`, payload: body });
+
+    const d = startFactory(fake({ hold: true }).deps, { ...DEFAULT_FACTORY_LIMITS, seats: 1 });
+    try {
+      await d.tick(); // the boot pass, with nothing ready yet
+      loose('f-a00001');
+      loose('f-a00002');
+      const ok = await post('f-a00002', { cwd: ALPHA });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ ok: true, featureIds: ['f-a00002'] });
+      expect(store.getItem(ALPHA, 'f-a00002')?.status).toBe('in_progress');
+
+      const refused = await post('f-a00001', { cwd: ALPHA });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toEqual({ error: 'No free seat: 1 of 1 busy' });
+      expect((await post('f-a00001', {})).statusCode).toBe(400);
+      expect((await post('not-an-id', { cwd: ALPHA })).statusCode).toBe(400);
+      expect((await post('f-zzzzzz', { cwd: ALPHA })).statusCode).toBe(404);
+    } finally {
+      await stopFactory();
+    }
+    const off = await post('f-a00001', { cwd: ALPHA });
+    expect(off.statusCode).toBe(409);
+    expect(off.json().error).toMatch(/not dispatching/);
+    await app.close();
   });
 });

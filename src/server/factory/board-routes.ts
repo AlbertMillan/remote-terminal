@@ -164,6 +164,23 @@ export function registerFactoryBoardRoutes(app: FastifyInstance): void {
     }
   );
 
+  /**
+   * Start now: claim a ready item (its whole track, for a track) for a free seat ahead
+   * of the priority order. Refused (409), never queued, with no free seat, over the
+   * plan-usage cap, while dispatch is paused, or when the dispatcher is not running here.
+   */
+  app.post<{ Params: { featureId: string }; Body?: { cwd?: unknown } }>('/api/factory/items/:featureId/start', async (request, reply) => {
+    const { featureId } = request.params;
+    const { cwd } = request.body ?? {};
+    if (!isText(cwd) || !/^f-[a-z0-9]+$/.test(featureId)) return reply.status(400).send({ error: 'cwd and a feature id required' });
+    if (!getItem(cwd, featureId)) return reply.status(404).send({ error: `${featureId} is not a factory item` });
+    const dispatcher = getDispatcher();
+    if (!dispatcher) return reply.status(409).send({ error: 'The factory is not dispatching on this server' });
+    const started = dispatcher.startNow(cwd, featureId);
+    if (!started.ok) return reply.status(409).send({ error: started.error });
+    return { ok: true, unit: started.key, featureIds: started.featureIds };
+  });
+
   // Run a parked merge entry again once you settled what parked it (merge-queue.ts requeueMerge).
   app.post<{ Params: { id: string } }>('/api/factory/merges/:id/retry', async (request, reply) => {
     const { id } = request.params;

@@ -183,6 +183,7 @@ class SessionManager {
     syncOverlay: () => this.syncFactoryOverlay(),
     openSession: (id) => this.openClaimSession(id),
     sessionExists: (id) => this.sessions.has(id),
+    planUsage: () => this.planUsage.latest(),
   });
   /** Which session holds which factory unit: the header's Return to factory and the sidebar badge. */
   private factoryClaims = new FactoryClaims({
