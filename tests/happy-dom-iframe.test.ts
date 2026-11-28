@@ -39,9 +39,20 @@ describe('silenceIframePageLoads', () => {
 
   it('drops the refusal that happy-dom logs when an iframe with a src is attached', () => {
     reached.length = 0;
-    document.body.innerHTML = '<iframe class="fb-mockup-frame" src="http://localhost:3000/api/factory/mockup/a/index.html"></iframe>';
+    const frame = document.createElement('iframe');
+    frame.className = 'fb-mockup-frame';
+    frame.src = 'http://localhost:3000/api/factory/mockup/a/index.html';
+    // Positive control: happy-dom dispatches 'error' right after it logs the refusal, so
+    // the event proves the refusal was emitted. Without it, an empty capture proves nothing.
+    let errored = false;
+    frame.addEventListener('error', () => {
+      errored = true;
+    });
+    document.body.appendChild(frame);
+    expect(errored).toBe(true);
     const refusals = reached.filter((args) => args.some(isIframeLoadNoise));
     expect(refusals).toHaveLength(0);
+    frame.remove();
   });
 
   it('still forwards any other console.error', () => {
