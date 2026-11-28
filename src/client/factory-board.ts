@@ -199,9 +199,6 @@ export class FactoryBoardView {
     markdown: renderMarkdown,
   });
 
-  /** A unit the board was opened on, scrolled to once its card is drawn. */
-  private revealKey: string | null = null;
-
   constructor(private readonly host: FactoryBoardHost) {}
 
   isVisible(): boolean {
@@ -226,10 +223,8 @@ export class FactoryBoardView {
     this.host.takeMainArea();
     document.getElementById('factory-board-view')?.classList.remove('hidden');
     this.host.syncOverlay();
-    if (unitKey) {
-      this.drawer = { kind: 'unit', key: unitKey, view: 'main' };
-      this.revealKey = unitKey;
-    } else if (add) this.openAdd();
+    if (unitKey) this.drawer = { kind: 'unit', key: unitKey, view: 'main' };
+    else if (add) this.openAdd();
     this.render();
     const loads: Promise<void>[] = [this.load()];
     if (!wasVisible) loads.push(this.loadReport());
@@ -240,7 +235,6 @@ export class FactoryBoardView {
     if (!this.visible) return;
     this.visible = false;
     this.drawer = null;
-    this.revealKey = null;
     this.notice = null;
     document.getElementById('factory-board-view')?.classList.add('hidden');
     this.host.syncOverlay();
@@ -571,8 +565,6 @@ export class FactoryBoardView {
       this.drawnDrawer = markup.value;
     }
 
-    this.revealUnit();
-
     if (focusDraft) {
       // Matched by dataset, not a selector: the key holds a project path.
       const again = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('#factory-board-view [data-draft]')].find(
@@ -583,20 +575,6 @@ export class FactoryBoardView {
         if (selection && selection[0] !== null) again.setSelectionRange(selection[0], selection[1]);
       }
     }
-  }
-
-  /**
-   * Opening the board on a unit brings its card, and so its stage's column, into view:
-   * the columns scroll sideways, so the open drawer could name a unit that is off screen.
-   * Waits for the card (the first render may precede the board data), then fires once.
-   */
-  private revealUnit(): void {
-    const key = this.revealKey;
-    if (!key) return;
-    const card = [...document.querySelectorAll<HTMLElement>('#factory-board-body .fb-card[data-unit-key]')].find((el) => el.dataset.unitKey === key);
-    if (!card) return;
-    this.revealKey = null;
-    card.scrollIntoView?.({ block: 'nearest', inline: 'center' });
   }
 
   private renderStatus(): void {
