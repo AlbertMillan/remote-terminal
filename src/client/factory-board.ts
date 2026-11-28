@@ -593,7 +593,7 @@ export class FactoryBoardView {
   private revealUnit(): void {
     const key = this.revealKey;
     if (!key) return;
-    const card = [...document.querySelectorAll<HTMLElement>('#factory-board-body [data-unit-key]')].find((el) => el.dataset.unitKey === key);
+    const card = [...document.querySelectorAll<HTMLElement>('#factory-board-body .fb-card[data-unit-key]')].find((el) => el.dataset.unitKey === key);
     if (!card) return;
     this.revealKey = null;
     card.scrollIntoView?.({ block: 'nearest', inline: 'center' });

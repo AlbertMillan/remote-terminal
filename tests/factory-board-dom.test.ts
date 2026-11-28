@@ -411,6 +411,25 @@ describe('Add work', () => {
 });
 
 describe('the morning report', () => {
+  it("scrolls to a stalled unit's card in its column, not its link in the report", async () => {
+    localStorage.setItem(LAST_OPENED_KEY, new Date(Date.now() - 10 * 3600_000).toISOString());
+    const scrolled: HTMLElement[] = [];
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: () => void };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this);
+    };
+    try {
+      await open('f-ready');
+      expect(document.querySelector('.fb-report .fb-link[data-unit-key="f-ready"]')).not.toBeNull();
+      expect(scrolled).toHaveLength(1);
+      expect(scrolled[0].classList.contains('fb-card')).toBe(true);
+      expect(scrolled[0].closest('[data-column="ready"]')).not.toBeNull();
+    } finally {
+      proto.scrollIntoView = original;
+    }
+  });
+
   it('says what landed, what stalls and the tokens since the last visit, then counts from now', async () => {
     const last = new Date(Date.now() - 10 * 3600_000).toISOString();
     localStorage.setItem(LAST_OPENED_KEY, last);
