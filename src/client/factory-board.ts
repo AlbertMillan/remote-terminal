@@ -604,6 +604,13 @@ export class FactoryBoardView {
             this.pane = null;
           }
         );
+      case 'start-now': {
+        // A Ready row's button: its unit is named on the button, not the pane's.
+        const ready = el.dataset.unit ? this.unit(el.dataset.unit) : undefined;
+        const id = ready?.featureIds[0];
+        if (!ready || !id) return;
+        return this.act('Started now: it moves to Running', () => this.post(`/api/factory/items/${id}/start`, { cwd: ready.projectCwd }));
+      }
       case 'retry-merge': {
         const id = el.dataset.mergeId;
         if (!id) return;
@@ -757,10 +764,12 @@ export class FactoryBoardView {
     const openKey = this.pane?.kind === 'unit' ? this.pane.key : null;
     const openMerge = this.pane?.kind === 'merge' ? this.pane.id : null;
     const notice = this.notice && !this.pane && !this.adding ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : '';
+    // Ready rows offer Start now (POST /api/factory/items/:id/start).
+    const start = { dispatch: d.dispatch, busy: this.busy };
     if (this.isPhone()) {
       const tab =
         this.phoneTab === 'flow'
-          ? renderPhoneFlow(phoneStageGroups(groups), phoneStage(this.stage), openKey, openMerge)
+          ? renderPhoneFlow(phoneStageGroups(groups), phoneStage(this.stage), openKey, openMerge, start)
           : this.phoneTab === 'done'
             ? renderDone(groups.find((g) => g.id === 'done') as StageGroup, this.report, openKey, openMerge)
             : renderYou(d, groups, this.host.planUsage?.() ?? null, this.busy, openKey);
@@ -774,7 +783,7 @@ export class FactoryBoardView {
           : html`<section class="fb-pipeline" aria-label="Pipeline">
               <h3>Pipeline</h3>
               ${renderStagePicker(groups, selected.id)}
-              ${renderStageRows(selected, openKey, openMerge)}
+              ${renderStageRows(selected, openKey, openMerge, start)}
             </section>`}
       </div>`;
   }

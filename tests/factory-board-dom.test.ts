@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FactoryBoardView, LAST_OPENED_KEY, cancellable, joinAnswers, readAddResult, renderMarkdown } from '../src/client/factory-board.js';
-import { looseMerges, stageGroups } from '../src/client/factory-board-pipeline.js';
+import { looseMerges, stageGroups, startBlocker } from '../src/client/factory-board-pipeline.js';
 import { needsYouUnits } from '../src/client/factory-board-needs.js';
 import { UNDO_MS } from '../src/client/factory-decisions.js';
 import { VIEW_MODE_KEY, flowLanes, readViewMode } from '../src/client/factory-board-flow.js';
@@ -203,9 +203,11 @@ const click = async (selector: string, within: ParentNode = document) => {
   await flush();
 };
 const lastPost = () => calls.filter((c) => c.method === 'POST').pop();
-/** The selected stage's rows: a unit's key, or `merge:<id>` for a loose merge entry. */
+/** The selected stage's rows: a unit's key, or `merge:<id>` for a loose merge entry (a Ready row sits in a line with Start now). */
 const rows = () =>
-  [...document.querySelectorAll<HTMLElement>('[data-stage-rows] > .fb-row')].map((r) => r.dataset.unitKey ?? `merge:${r.dataset.mergeCard}`);
+  [...document.querySelectorAll<HTMLElement>('[data-stage-rows] > .fb-row, [data-stage-rows] > .fb-row-line > .fb-row')].map(
+    (r) => r.dataset.unitKey ?? `merge:${r.dataset.mergeCard}`
+  );
 const need = (key: string) => [...document.querySelectorAll<HTMLElement>('[data-need]')].find((el) => el.dataset.need === key)!;
 
 async function open(key?: string) {
@@ -611,6 +613,76 @@ describe('Flow view', () => {
     await open();
     expect(document.querySelector('.fb-flow')).not.toBeNull();
     expect(document.querySelector('[data-mode="flow"]')!.classList.contains('on')).toBe(true);
+  });
+});
+
+describe('Start now', () => {
+  const free = unit('f-free', { column: 'ready', status: 'open', step: null, title: 'Free to start' });
+  const startButton = (key: string) => document.querySelector<HTMLButtonElement>(`[data-fb="start-now"][data-unit="${key}"]`)!;
+  const withDispatch = (dispatch: Partial<FactoryBoard['dispatch']>) =>
+    (responses['/api/factory/board'] = { ...BOARD, units: [...UNITS, free], dispatch: { ...BOARD.dispatch, ...dispatch } });
+
+  async function openReady() {
+    await open();
+    await click('[data-fb="stage"][data-stage="ready"]');
+  }
+
+  it('offers Start now on Ready rows only, and posts the item with its project', async () => {
+    withDispatch({});
+    await openReady();
+    expect(rows()).toEqual(['f-ready', 'f-free']);
+    expect(startButton('f-free').disabled).toBe(false);
+    await click('[data-fb="start-now"][data-unit="f-free"]');
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-free/start', method: 'POST', body: { cwd: CWD } });
+    expect(document.querySelector('.fb-main > .fb-notice')!.textContent).toBe('Started now: it moves to Running');
+    await click('[data-fb="stage"][data-stage="running"]');
+    expect(document.querySelector('[data-fb="start-now"]')).toBeNull();
+  });
+
+  it('disables it, saying why, when the board can tell it would be refused', async () => {
+    withDispatch({});
+    await openReady();
+    // f-ready waits for a blocker.
+    expect(startButton('f-ready').disabled).toBe(true);
+    expect(startButton('f-ready').title).toBe('Waits for f-intake');
+    const reasonFor = async (dispatch: Partial<FactoryBoard['dispatch']>) => {
+      withDispatch(dispatch);
+      view.onSummary();
+      await flush();
+      await flush();
+      return [startButton('f-free').disabled, startButton('f-free').title];
+    };
+    expect(await reasonFor({ running: 3 })).toEqual([true, 'No free seat: 3 of 3 busy']);
+    expect(await reasonFor({ paused: '3 waiting for you' })).toEqual([true, 'Dispatch is paused: 3 waiting for you']);
+    expect(await reasonFor({ capped: { [CWD]: '5-hour usage at 85% (cap 80%)' } })).toEqual([true, 'Over the plan-usage cap: 5-hour usage at 85% (cap 80%)']);
+    expect(await reasonFor({ started: false })).toEqual([true, 'The dispatcher is off']);
+    expect(await reasonFor({})).toEqual([false, 'Claim a free seat for it now, ahead of the priority order']);
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([]);
+  });
+
+  it("shows the server's refusal", async () => {
+    withDispatch({});
+    await openReady();
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'No free seat in this project: 2 of 2 busy' }), { status: 409 }));
+    await click('[data-fb="start-now"][data-unit="f-free"]');
+    expect(document.querySelector('.fb-main > .fb-notice.error')!.textContent).toBe('No free seat in this project: 2 of 2 busy');
+  });
+
+  it('works out the blocker from the dispatch state and the unit', () => {
+    const d = BOARD.dispatch;
+    expect(startBlocker(free, d)).toBeNull();
+    expect(startBlocker({ ...free, claim: { sessionId: 's', sessionName: 'x', live: true } }, d)).toBe('A terminal session holds it');
+  });
+
+  it('is on the phone too: a Ready item listed under Running', async () => {
+    withDispatch({});
+    document.body.innerHTML = DOM;
+    view = new FactoryBoardView(host, { undoMs: 0, isPhone: () => true });
+    view.attach();
+    await open();
+    await click('[data-fb="phone-tab"][data-tab="flow"]');
+    expect(rows()).toContain('f-free');
+    expect(startButton('f-free').disabled).toBe(false);
   });
 });
 

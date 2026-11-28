@@ -160,4 +160,4 @@ status: active
 - [x] `f-iabd7z` P2 Undo on decisions — Approve, Answer, Build it, Send back and triage apply at once and send after a 5 s Undo toast; flushed on leave → project/factory-page-redesign.md
 - [x] `f-tco9ro` P2 Flow view — Board / Flow toggle; one lane per track with each unit at its stage, remembered per browser → project/factory-page-redesign.md
 - [x] `f-6emftr` P2 Phone layout — You / Flow / Done tabs, B's stage view as Flow, bottom sheet for the detail pane, full-screen Add work → project/factory-page-redesign.md
-- [ ] `f-2plxcw` P3 Start now — `POST /api/factory/items/:id/start` claims a ready item for a free seat ahead of priority; button on Ready rows → project/factory-page-redesign.md
+- [x] `f-2plxcw` P3 Start now — `POST /api/factory/items/:id/start` claims a ready item for a free seat ahead of priority; button on Ready rows → project/factory-page-redesign.md

@@ -4785,6 +4785,11 @@ body {
 .fb-stage-note { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fb-rows { display: flex; flex-direction: column; gap: 6px; }
 .fb-rows .fb-empty { padding: 12px 4px; }
+/* A Ready row with Start now beside it (factory-board-pipeline.ts). */
+.fb-row-line { display: flex; gap: 6px; align-items: stretch; }
+.fb-row-line .fb-row { flex: 1; min-width: 0; }
+.fb-start { flex-shrink: 0; white-space: nowrap; }
+.fb-phone .fb-start { min-height: 44px; }
 .fb-row {
   display: flex;
   gap: 10px;

@@ -1,7 +1,7 @@
 import { html, type SafeHtml } from './html-utils.js';
 import { levelOf, type PlanUsage } from './plan-usage-chip.js';
 import { renderNeedsYou } from './factory-board-needs.js';
-import { renderStageRows, type StageGroup } from './factory-board-pipeline.js';
+import { renderStageRows, type StageGroup, type StartNowContext } from './factory-board-pipeline.js';
 import { renderReport } from './factory-board-side.js';
 import type { FactoryBoard, FactoryColumn, FactoryReport } from '../shared/protocol.js';
 
@@ -105,7 +105,13 @@ export function renderYou(
   </div>`;
 }
 
-export function renderPhoneFlow(groups: StageGroup[], stage: FactoryColumn, openKey: string | null, openMerge: string | null): SafeHtml {
+export function renderPhoneFlow(
+  groups: StageGroup[],
+  stage: FactoryColumn,
+  openKey: string | null,
+  openMerge: string | null,
+  start?: StartNowContext
+): SafeHtml {
   const selected = groups.find((g) => g.id === stage) ?? (groups.find((g) => g.id === 'running') as StageGroup);
   return html`<div class="fb-main fb-phone-flow">
     <div class="fb-phone-stages" role="tablist" aria-label="Stages">${PHONE_STAGES.map((s) => {
@@ -114,7 +120,7 @@ export function renderPhoneFlow(groups: StageGroup[], stage: FactoryColumn, open
       return html`<button type="button" role="tab" class="fb-phone-stage${on ? ' on' : ''}${g.you > 0 ? ' you' : ''}" aria-selected="${on ? 'true' : 'false'}"
         data-fb="stage" data-stage="${s.id}">${s.label} <em>${g.units.length + g.merges.length}</em></button>`;
     })}</div>
-    ${renderStageRows(selected, openKey, openMerge)}
+    ${renderStageRows(selected, openKey, openMerge, start)}
   </div>`;
 }
 

@@ -1,7 +1,7 @@
 import { html, type SafeHtml } from './html-utils.js';
 import { formatTokens } from './format.js';
 import { cardKind, cardStatus, progressStrip } from './factory-overlay.js';
-import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryMergeSummary } from '../shared/protocol.js';
+import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryDispatchState, FactoryMergeSummary } from '../shared/protocol.js';
 
 /**
  * The board's Pipeline (project/factory-page-redesign.md, layout E): a stage
@@ -70,14 +70,46 @@ export function renderStagePicker(groups: StageGroup[], selected: FactoryColumn)
   })}</div>`;
 }
 
-export function renderStageRows(group: StageGroup, openKey: string | null, openMerge: string | null): SafeHtml {
+/** What a Ready row's Start now needs: the dispatcher's state, and the board's busy flag. */
+export interface StartNowContext {
+  dispatch: FactoryDispatchState;
+  busy: boolean;
+}
+
+/**
+ * Why Start now would be refused, as far as the board can tell, or null. The server
+ * (dispatcher.ts startNow) decides; this only spares a click that can't work. It
+ * can't see the per-project seat limit, so that refusal comes back from the route.
+ */
+export function startBlocker(u: FactoryBoardUnit, dispatch: FactoryDispatchState): string | null {
+  if (u.claim) return 'A terminal session holds it';
+  if (u.waitsFor.length > 0) return `Waits for ${u.waitsFor.join(', ')}`;
+  if (!dispatch.started) return 'The dispatcher is off';
+  if (dispatch.paused) return `Dispatch is paused: ${dispatch.paused}`;
+  if (dispatch.capped[u.projectCwd]) return `Over the plan-usage cap: ${dispatch.capped[u.projectCwd]}`;
+  if (dispatch.running >= dispatch.seats) return `No free seat: ${dispatch.running} of ${dispatch.seats} busy`;
+  return null;
+}
+
+/** The stage's rows; with `start`, each Ready row offers Start now. */
+export function renderStageRows(group: StageGroup, openKey: string | null, openMerge: string | null, start?: StartNowContext): SafeHtml {
   const label = STAGES.find((s) => s.id === group.id)?.label ?? group.id;
   if (group.units.length === 0 && group.merges.length === 0) {
     return html`<div class="fb-rows" data-stage-rows="${group.id}"><p class="fb-empty">Nothing in ${label}.</p></div>`;
   }
   return html`<div class="fb-rows" data-stage-rows="${group.id}">
-    ${group.units.map((u) => renderRow(u, u.key === openKey))}
+    ${group.units.map((u) => (start && u.column === 'ready' ? renderReadyRow(u, u.key === openKey, start) : renderRow(u, u.key === openKey)))}
     ${group.merges.map((m) => renderMergeRow(m, m.id === openMerge))}
+  </div>`;
+}
+
+/** A Ready row with Start now beside it (a button can't sit inside the row's button). */
+function renderReadyRow(u: FactoryBoardUnit, open: boolean, start: StartNowContext): SafeHtml {
+  const blocker = startBlocker(u, start.dispatch);
+  return html`<div class="fb-row-line">
+    ${renderRow(u, open)}
+    <button type="button" class="btn-secondary fb-start" data-fb="start-now" data-unit="${u.key}" ${blocker || start.busy ? 'disabled' : ''}
+      title="${blocker ?? 'Claim a free seat for it now, ahead of the priority order'}">Start now</button>
   </div>`;
 }
 
