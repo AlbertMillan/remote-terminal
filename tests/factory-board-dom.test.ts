@@ -19,8 +19,14 @@ const DOM = `
       <span id="factory-board-status"></span>
       <button data-fb="add">Add work</button>
       <button data-fb="back">Back</button>
-      <div id="factory-board-body"></div>
-      <aside id="factory-drawer" class="hidden"></aside>
+      <div class="fb-split">
+        <div id="factory-board-body"></div>
+        <div class="fb-right">
+          <div id="factory-side"></div>
+          <aside id="factory-drawer" class="hidden"></aside>
+        </div>
+      </div>
+      <div id="factory-add" class="hidden"></div>
     </div>
   </main>`;
 
@@ -174,7 +180,11 @@ function respond(url: string): unknown {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+/** The docked detail pane (it keeps the drawer's element id). */
 const drawer = () => document.getElementById('factory-drawer')!;
+const addModal = () => document.getElementById('factory-add')!;
+const root = () => document.getElementById('factory-board-view')!;
+const dots = () => [...drawer().querySelectorAll<HTMLElement>('.fb-dots li')].map((li) => li.dataset.dot);
 const click = async (selector: string, within: ParentNode = document) => {
   const el = within.querySelector<HTMLElement>(selector);
   if (!el) throw new Error(`no ${selector}`);
@@ -541,25 +551,112 @@ describe('Add work', () => {
     await view.show(undefined, true);
     await flush();
     await flush();
-    const options = [...drawer().querySelectorAll('option')].map((o) => o.textContent);
+    const options = [...addModal().querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['alpha', 'beta']);
-    drawer().querySelector<HTMLTextAreaElement>('textarea')!.value = '- android push should retry on 503, but do not spam';
-    await click('[data-fb="submit-add"]', drawer());
+    addModal().querySelector<HTMLTextAreaElement>('textarea')!.value = '- android push should retry on 503, but do not spam';
+    await click('[data-fb="submit-add"]', addModal());
     expect(lastPost()).toEqual({
       url: '/api/factory/add',
       method: 'POST',
       body: { cwd: CWD, text: '- android push should retry on 503, but do not spam' },
     });
-    expect(drawer().querySelector('.fb-intake')!.textContent).toContain('Android push retries on 503');
-    expect(drawer().querySelector('.fb-intake')!.textContent).toContain('requirement: back off, no spam');
+    expect(addModal().querySelector('.fb-intake')!.textContent).toContain('Android push retries on 503');
+    expect(addModal().querySelector('.fb-intake')!.textContent).toContain('requirement: back off, no spam');
   });
 
   it('refuses empty text without calling the server', async () => {
     await view.show(undefined, true);
     await flush();
-    await click('[data-fb="submit-add"]', drawer());
+    await click('[data-fb="submit-add"]', addModal());
     expect(calls.some((c) => c.url === '/api/factory/add')).toBe(false);
-    expect(drawer().querySelector('.fb-notice.error')).not.toBeNull();
+    expect(addModal().querySelector('.fb-notice.error')).not.toBeNull();
+  });
+
+  it('is a modal over the board: the pane and its unit stay as they were, × and Escape close it', async () => {
+    await open('f-cap');
+    await click('[data-fb="add"]');
+    expect(addModal().classList.contains('hidden')).toBe(false);
+    expect(addModal().querySelector('[role="dialog"]')).not.toBeNull();
+    expect(drawer().classList.contains('hidden')).toBe(false);
+    expect(drawer().textContent).toContain('fix ran 2 times without settling it');
+    await click('[data-fb="close-add"]', addModal());
+    expect(addModal().classList.contains('hidden')).toBe(true);
+    expect(drawer().classList.contains('hidden')).toBe(false);
+    await click('[data-fb="add"]');
+    root().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(addModal().classList.contains('hidden')).toBe(true);
+    // The modal went first; the pane is still open.
+    expect(drawer().classList.contains('hidden')).toBe(false);
+  });
+});
+
+describe('the docked detail pane', () => {
+  it("opens beside the board in the side panel's place, never over it, and closing brings the panel back", async () => {
+    await open();
+    expect(document.querySelector('#factory-side .fb-side')).not.toBeNull();
+    await click('[data-stage-rows] [data-unit-key="track:History search"]');
+    expect(drawer().classList.contains('hidden')).toBe(false);
+    expect(root().classList.contains('fb-pane-open')).toBe(true);
+    // The pane takes the side panel's column; the board stays rendered and usable.
+    expect(document.getElementById('factory-side')!.classList.contains('hidden')).toBe(true);
+    expect(document.querySelector('#factory-side .fb-side')).toBeNull();
+    expect(document.querySelector('.fb-needs')).not.toBeNull();
+    expect(document.querySelector('.fb-row.open')!.getAttribute('data-unit-key')).toBe('track:History search');
+    await click('[data-fb="close"]', drawer());
+    expect(drawer().classList.contains('hidden')).toBe(true);
+    expect(root().classList.contains('fb-pane-open')).toBe(false);
+    expect(document.querySelector('#factory-side .fb-side')).not.toBeNull();
+  });
+
+  it('opens from a Needs you card, a row and a side-panel link, and Escape closes it', async () => {
+    localStorage.setItem(LAST_OPENED_KEY, new Date(Date.now() - 3600_000).toISOString());
+    await open();
+    await click('.fb-needs [data-need="f-esc"] .fb-title');
+    expect(drawer().querySelector('h3')!.textContent).toBe('Admit tailnet devices by tag');
+    expect(document.querySelector('.fb-need.open')!.getAttribute('data-need')).toBe('f-esc');
+    await click('[data-stage-rows] [data-unit-key="f-cap"]');
+    expect(drawer().querySelector('h3')!.textContent).toBe('Unit f-cap');
+    // The report's stall link lives in the side panel, which the pane replaces: close first.
+    await click('[data-fb="close"]', drawer());
+    await click('.fb-report [data-unit-key="f-ready"]');
+    expect(drawer().querySelector('h3')!.textContent).toBe('Unit f-ready');
+    root().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(drawer().classList.contains('hidden')).toBe(true);
+  });
+
+  it('shows stage dots: stages passed, where the unit is (amber when it waits for you), still ahead', async () => {
+    await open('track:History search');
+    expect(dots()).toEqual(['done', 'done', 'now', 'todo', 'todo', 'todo']);
+    expect(drawer().querySelector('.fb-dots')!.getAttribute('aria-label')).toBe('Stage: Running');
+    await click('[data-unit-key="f-esc"]', document.querySelector('.fb-needs')!);
+    expect(dots()).toEqual(['done', 'done', 'done', 'you', 'todo', 'todo']);
+    await click('[data-fb="stage"][data-stage="intake"]');
+    await click('[data-stage-rows] [data-unit-key="f-intake"]');
+    expect(dots()).toEqual(['now', 'todo', 'todo', 'todo', 'todo', 'todo']);
+    await click('[data-fb="stage"][data-stage="done"]');
+    await click('[data-stage-rows] [data-unit-key="f-done"]');
+    expect(dots()).toEqual(['done', 'done', 'done', 'done', 'done', 'now']);
+  });
+
+  it('shows a merge entry with its dots at Merging, amber while parked', async () => {
+    await open();
+    await click('.fb-queue [data-merge-card="mq-1"]');
+    expect(dots()).toEqual(['done', 'done', 'done', 'done', 'you', 'todo']);
+    expect(drawer().textContent).toContain('Retry merge');
+  });
+
+  it('keeps every view: summary page, diff, request changes and cancel, each with Back', async () => {
+    await open('f-esc');
+    await click('[data-fb="view"][data-view="diff"]', drawer());
+    await flush();
+    expect(drawer().querySelector('.fb-diff')).not.toBeNull();
+    expect(drawer().querySelector('.fb-dots')).not.toBeNull();
+    await click('[data-fb="view"][data-view="main"]', drawer());
+    await click('[data-fb="view"][data-view="changes"]', drawer());
+    expect(drawer().querySelector('textarea[data-draft="changes:f-esc"]')).not.toBeNull();
+    await click('[data-fb="view"][data-view="main"]', drawer());
+    await click('[data-fb="view"][data-view="cancel"]', drawer());
+    expect(drawer().textContent).toContain('Cancel this item?');
   });
 });
 

@@ -4687,7 +4687,16 @@ body {
 
 .factory-board-view { position: relative; }
 .fb-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-.fb-body { padding-bottom: 20px; }
+/* Layout E (project/factory-page-redesign.md): the board on the left, a right-hand column holding
+   the side panel, or the detail pane docked in its place; each scrolls on its own. */
+.fb-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.factory-board-view.fb-pane-open .fb-split { grid-template-columns: minmax(0, 1fr) min(440px, 45%); }
+/* An item parked at its mockup (factory-mockup.ts): room for the page, which is the app's own replica. */
+.factory-board-view.fb-pane-wide .fb-split { grid-template-columns: minmax(0, 1fr) min(920px, 62%); }
+.fb-body { min-width: 0; min-height: 0; overflow-y: auto; padding: 6px 22px 20px; }
+.fb-right { min-width: 0; min-height: 0; overflow-y: auto; padding: 6px 16px 20px 0; }
+.factory-board-view.fb-pane-open .fb-right { padding: 0; border-left: 1px solid var(--border); background: var(--bg-secondary); }
+.fb-pane { padding: 14px 16px 20px; }
 .fb-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
 .fb-mono { font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
 .fb-empty { padding: 24px; color: var(--text-muted); }
@@ -4724,15 +4733,6 @@ body {
 }
 .fb-notice.error { background: rgba(247, 118, 142, 0.1); color: var(--danger); }
 .fb-main > .fb-notice { margin: 0 0 10px; }
-
-/* Layout E (project/factory-page-redesign.md): Needs you and the Pipeline, a side panel on the right. */
-.fb-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
-  padding: 6px 22px 20px;
-  align-items: start;
-}
 .fb-main { min-width: 0; }
 .fb-main h3, .fb-panel h3 {
   display: flex;
@@ -4828,8 +4828,48 @@ body {
 .fb-seats i.busy { background: var(--success); }
 .fb-warn { color: var(--warning); }
 .fb-queue li { margin-bottom: 4px; }
+/* Narrow: one column that scrolls as a whole; an open pane comes first. */
 @media (max-width: 1000px) {
-  .fb-layout { grid-template-columns: minmax(0, 1fr); }
+  .fb-split,
+  .factory-board-view.fb-pane-open .fb-split,
+  .factory-board-view.fb-pane-wide .fb-split { grid-template-columns: minmax(0, 1fr); overflow-y: auto; align-content: start; }
+  .fb-body, .fb-right { overflow: visible; }
+  .fb-right { padding: 0 22px 20px; }
+  .factory-board-view.fb-pane-open .fb-right { order: -1; border-left: none; border-bottom: 1px solid var(--border); }
+}
+
+/* Stage dots at the top of the detail pane (factory-board-pane.ts). */
+.fb-dots { display: flex; list-style: none; margin: 0 0 10px; padding: 0 !important; }
+.fb-dots li { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; position: relative; font-size: 9.5px; color: var(--text-muted); }
+.fb-dots li + li::before { content: ''; position: absolute; top: 4px; right: 50%; width: 100%; height: 2px; background: var(--border-subtle); z-index: 0; }
+.fb-dots li.done::before, .fb-dots li.now::before, .fb-dots li.you::before { background: var(--accent); }
+.fb-dots i { position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-tertiary); border: 2px solid var(--border); box-sizing: border-box; }
+.fb-dots li.done i { background: var(--accent); border-color: var(--accent); }
+.fb-dots li.now i { background: var(--bg-secondary); border-color: var(--accent); }
+.fb-dots li.now span { color: var(--accent); font-weight: 700; }
+.fb-dots li.you i { background: var(--warning); border-color: var(--warning); }
+.fb-dots li.you span { color: var(--warning); font-weight: 700; }
+.fb-dots span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* Add work: a modal over the board (it is not a unit, so it never docks). */
+.fb-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.5);
+}
+.fb-modal-box {
+  width: min(560px, 100%);
+  padding: 14px 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
 .fb-card-top { display: flex; gap: 6px; align-items: baseline; }
@@ -4844,24 +4884,10 @@ body {
 .fb-report-head .fb-x { margin-left: auto; }
 .fb-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 
-.fb-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  width: min(440px, 100%);
-  overflow-y: auto;
-  padding: 14px 16px 20px;
-  background: var(--bg-secondary);
-  border-left: 1px solid var(--border);
-  box-shadow: -16px 0 36px rgba(0, 0, 0, 0.45);
-}
-.fb-drawer.hidden { display: none; }
-.fb-drawer h3 { margin: 4px 0 10px; font-size: 16px; line-height: 1.25; }
-.fb-drawer h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-secondary); }
-.fb-drawer ul { margin: 0; padding-left: 18px; font-size: 13px; }
-.fb-drawer p { margin: 0 0 8px; font-size: 13px; }
+.fb-pane h3, .fb-modal-box h3 { margin: 4px 0 10px; font-size: 16px; line-height: 1.25; }
+.fb-pane h4, .fb-modal-box h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-secondary); }
+.fb-pane ul, .fb-modal-box ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.fb-pane p, .fb-modal-box p { margin: 0 0 8px; font-size: 13px; }
 .fb-x { float: right; background: none; border: none; color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer; }
 .fb-verdict { margin: 8px 0; padding: 8px 10px; border: 1px solid #7a6034; border-radius: 8px; background: #2a2720; font-size: 13px; }
 .fb-verdict b { color: var(--warning); }
@@ -4895,8 +4921,6 @@ body {
 .fb-label { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; font-size: 12.5px; color: var(--text-secondary); }
 .fb-check { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; font-size: 12.5px; cursor: pointer; }
 .fb-check input { accent-color: var(--accent); }
-/* An item parked at its mockup (factory-mockup.ts): room for the page, which is the app's own replica. */
-.fb-drawer.fb-wide { width: min(920px, 100%); }
 .fb-mockup-frame { display: block; width: 100%; height: 62vh; margin: 8px 0 0; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 .fb-acts a.btn-secondary { text-decoration: none; display: inline-flex; align-items: center; }
 .fb-input, .fb-textarea {
@@ -4913,7 +4937,8 @@ body {
 
 @media (max-width: 640px) {
   .factory-toast { max-width: calc(100% - 24px); top: auto; bottom: 14px; }
-  .fb-layout { grid-template-columns: minmax(0, 1fr); padding: 6px 12px 16px; }
+  .fb-body { padding: 6px 12px 16px; }
+  .fb-right { padding: 0 12px 16px; }
   .fb-stages { display: flex; overflow-x: auto; }
   .fb-stage { flex: 0 0 auto; min-width: 104px; }
   .fb-need .fb-acts button { min-height: 44px; }

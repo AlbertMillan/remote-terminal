@@ -1,19 +1,16 @@
-import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
+import { html, setHtml, type SafeHtml } from './html-utils.js';
 import { requestJson, failureMessage } from './api.js';
-import { isClaimAction, renderClaimActions, runClaimAction } from './factory-claims.js';
-import { formatTokens, shortAge } from './format.js';
-import { MockupDrawer, isMockupPark } from './factory-mockup.js';
+import { isClaimAction, runClaimAction } from './factory-claims.js';
+import { formatTokens } from './format.js';
+import { MockupDrawer } from './factory-mockup.js';
 import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups } from './factory-board-pipeline.js';
 import { renderNeedsYou } from './factory-board-needs.js';
 import { renderSidePanel } from './factory-board-side.js';
-import type {
-  FactoryBoard,
-  FactoryBoardUnit,
-  FactoryColumn,
-  FactoryMergeSummary,
-  FactoryQuestion,
-  FactoryReport,
-} from '../shared/protocol.js';
+import { paneShowsMockup, renderMarkdown, renderPane, type PaneSelection, type UnitView } from './factory-board-pane.js';
+import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryQuestion, FactoryReport } from '../shared/protocol.js';
+
+// Their tests and callers import these from the board.
+export { cancellable, renderMarkdown } from './factory-board-pane.js';
 
 /**
  * The factory board (project/code-factory.md, item 7; layout E in
@@ -23,18 +20,20 @@ import type {
  * **Pipeline**, a stage picker over the six columns — intake, ready, running,
  * review, merging, done today — listing the selected stage's units as rows
  * (factory-board-pipeline.ts); on the right a side panel with capacity, the
- * morning report and the merge queue (factory-board-side.ts). A drawer per card: an escalated
- * review with its summary page (Approve / Request changes / Open diff), a
- * shaping question with its options and default, a triage card (accept /
- * backlog / dismiss), a running track's features, a merge entry with its
- * resolver or park state. Add work files free-form text through intake, and
- * the morning report says what landed, what stalls and what it cost since you
- * last opened the board.
+ * morning report and the merge queue (factory-board-side.ts). Clicking a card,
+ * a row or a link opens the unit in the **detail pane** (factory-board-pane.ts),
+ * docked in that right-hand column in the side panel's place, never over the
+ * board: an escalated review with its summary page (Approve / Request changes /
+ * Open diff), a shaping question with its options and default, a triage card
+ * (accept / backlog / dismiss), a running track's features, a mockup, a merge
+ * entry with its resolver or park state. Add work is a modal that files
+ * free-form text through intake.
  *
  * Data: GET /api/factory/board, fetched on open and again on every pushed
  * `factory.summary` while the board is on screen — never polled. `render()`
- * replaces the board and the drawer wholesale; drafts (a note, an answer, Add
- * work's text) are captured before and restored after, with the focus.
+ * replaces the board, the pane and the modal wholesale (an unchanged mockup pane
+ * excepted); drafts (a note, an answer, Add work's text) are captured before and
+ * restored after, with the focus.
  *
  * Routes it calls that the factory's other half serves: POST /api/factory/add,
  * /api/factory/items/:id/answer and /api/factory/triage/:id. Its own (server
@@ -43,11 +42,6 @@ import type {
 
 /** When this browser last opened the board: the morning report counts from here. */
 export const LAST_OPENED_KEY = 'factoryBoardLastOpened';
-
-type Drawer =
-  | { kind: 'unit'; key: string; view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel' }
-  | { kind: 'merge'; id: string }
-  | { kind: 'add' };
 
 /**
  * What POST /api/factory/add answers (server factory/intake.ts): the features
@@ -93,49 +87,6 @@ function writeStorage(key: string, value: string): void {
 }
 
 /**
- * A summary page's markdown, as blocks: headings, bullets, paragraphs and
- * fenced code. The page is the agent's own short text, so this is all it needs;
- * everything is escaped (html``), nothing is trusted.
- */
-export function renderMarkdown(text: string): SafeHtml {
-  const out: SafeHtml[] = [];
-  let list: string[] = [];
-  let code: string[] | null = null;
-  const flush = () => {
-    if (list.length > 0) out.push(html`<ul>${list.map((li) => html`<li>${li}</li>`)}</ul>`);
-    list = [];
-  };
-  for (const line of text.split(/\r?\n/)) {
-    if (code) {
-      if (/^```/.test(line)) {
-        out.push(html`<pre class="fb-pre">${code.join('\n')}</pre>`);
-        code = null;
-      } else code.push(line);
-      continue;
-    }
-    if (/^```/.test(line)) {
-      flush();
-      code = [];
-      continue;
-    }
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    if (heading) {
-      flush();
-      out.push(html`<h4>${heading[1]}</h4>`);
-    } else if (bullet) {
-      list.push(bullet[1]);
-    } else if (line.trim()) {
-      flush();
-      out.push(html`<p>${line}</p>`);
-    } else flush();
-  }
-  flush();
-  if (code) out.push(html`<pre class="fb-pre">${code.join('\n')}</pre>`);
-  return joinHtml(out);
-}
-
-/**
  * The one string the answer route takes: a single answer as given; several,
  * each labelled by its question (as the job board joined its answers).
  */
@@ -163,7 +114,10 @@ export class FactoryBoardView {
   private data: FactoryBoard | null = null;
   private error: string | null = null;
   private visible = false;
-  private drawer: Drawer | null = null;
+  /** The unit or merge entry the docked detail pane shows; null shows the side panel. */
+  private pane: PaneSelection | null = null;
+  /** The Add work modal is open (over the board: it is not a unit, so it never docks). */
+  private adding = false;
   /** The Pipeline's selected stage; kept across visits in this page, not stored. */
   private stage: FactoryColumn = DEFAULT_STAGE;
   private summaries = new Map<string, string>();
@@ -177,9 +131,9 @@ export class FactoryBoardView {
   private projects: { cwd: string; name: string }[] = [];
   private loading: Promise<void> | null = null;
   private reloadQueued = false;
-  /** The drawer markup last set, so an unchanged mockup drawer is not replaced (render()). */
-  private drawnDrawer = '';
-  /** An item parked at its mockup step: its drawer part and `mockup-*` actions (factory-mockup.ts). */
+  /** The pane markup last set, so an unchanged mockup pane is not replaced (render()). */
+  private drawnPane = '';
+  /** An item parked at its mockup step: its pane part and `mockup-*` actions (factory-mockup.ts). */
   private readonly mockup = new MockupDrawer({
     render: () => this.render(),
     act: (label, call, done) => this.act(label, call, done),
@@ -209,21 +163,24 @@ export class FactoryBoardView {
     const root = document.getElementById('factory-board-view');
     root?.addEventListener('click', (event) => void this.onClick(event));
     root?.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && this.drawer) {
-        this.drawer = null;
-        this.render();
-      }
+      if (event.key !== 'Escape') return;
+      // The modal first: it sits over the pane.
+      if (this.adding) this.adding = false;
+      else if (this.pane) this.pane = null;
+      else return;
+      this.notice = null;
+      this.render();
     });
   }
 
-  /** Open the board, with a unit's drawer, or Add work. */
+  /** Open the board, with a unit in the detail pane, or Add work. */
   async show(unitKey?: string, add = false): Promise<void> {
     const wasVisible = this.visible;
     this.visible = true;
     this.host.takeMainArea();
     document.getElementById('factory-board-view')?.classList.remove('hidden');
     this.host.syncOverlay();
-    if (unitKey) this.drawer = { kind: 'unit', key: unitKey, view: 'main' };
+    if (unitKey) this.pane = { kind: 'unit', key: unitKey, view: 'main' };
     else if (add) this.openAdd();
     this.render();
     const loads: Promise<void>[] = [this.load()];
@@ -234,7 +191,8 @@ export class FactoryBoardView {
   hide(): void {
     if (!this.visible) return;
     this.visible = false;
-    this.drawer = null;
+    this.pane = null;
+    this.adding = false;
     this.notice = null;
     document.getElementById('factory-board-view')?.classList.add('hidden');
     this.host.syncOverlay();
@@ -285,7 +243,7 @@ export class FactoryBoardView {
   }
 
   private openAdd(): void {
-    this.drawer = { kind: 'add' };
+    this.adding = true;
     this.addResult = null;
     void this.loadProjects();
   }
@@ -338,12 +296,12 @@ export class FactoryBoardView {
     const action = target.closest<HTMLElement>('[data-fb]');
     if (action) return this.onAction(action);
     if (card) {
-      this.drawer = { kind: 'unit', key: card.dataset.unitKey as string, view: 'main' };
+      this.pane = { kind: 'unit', key: card.dataset.unitKey as string, view: 'main' };
       this.notice = null;
       return this.render();
     }
     if (mergeCard) {
-      this.drawer = { kind: 'merge', id: mergeCard.dataset.mergeCard as string };
+      this.pane = { kind: 'merge', id: mergeCard.dataset.mergeCard as string };
       this.notice = null;
       return this.render();
     }
@@ -351,10 +309,10 @@ export class FactoryBoardView {
 
   private async onAction(el: HTMLElement): Promise<void> {
     const kind = el.dataset.fb;
-    const drawer = this.drawer;
-    // A Needs you card's inline decision acts on its own unit, whatever the drawer shows.
+    const pane = this.pane;
+    // A Needs you card's inline decision acts on its own unit, whatever the pane shows.
     const needKey = el.closest<HTMLElement>('[data-need]')?.dataset.need;
-    const unit = needKey ? this.unit(needKey) : drawer?.kind === 'unit' ? this.unit(drawer.key) : undefined;
+    const unit = needKey ? this.unit(needKey) : pane?.kind === 'unit' ? this.unit(pane.key) : undefined;
     const featureId = unit?.featureIds[0];
     if (kind?.startsWith('mockup-')) {
       this.captureDrafts();
@@ -369,7 +327,11 @@ export class FactoryBoardView {
         this.openAdd();
         return this.render();
       case 'close':
-        this.drawer = null;
+        this.pane = null;
+        this.notice = null;
+        return this.render();
+      case 'close-add':
+        this.adding = false;
         this.notice = null;
         return this.render();
       case 'dismiss-report':
@@ -383,10 +345,10 @@ export class FactoryBoardView {
         return this.render();
       }
       case 'view':
-        if (drawer?.kind === 'unit') {
-          drawer.view = (el.dataset.view as 'main' | 'summary' | 'diff' | 'changes' | 'cancel') ?? 'main';
-          if (drawer.view === 'summary' && unit) void this.loadSummary(unit);
-          if (drawer.view === 'diff' && unit) void this.loadDiff(unit);
+        if (pane?.kind === 'unit') {
+          pane.view = (el.dataset.view as UnitView | undefined) ?? 'main';
+          if (pane.view === 'summary' && unit) void this.loadSummary(unit);
+          if (pane.view === 'diff' && unit) void this.loadDiff(unit);
         }
         return this.render();
       case 'approve':
@@ -407,7 +369,7 @@ export class FactoryBoardView {
           () => this.post(`/api/factory/items/${featureId}/release`, { cwd: unit.projectCwd, outcome: 'changes', note }),
           () => {
             this.drafts.delete(`changes:${unit.key}`);
-            if (this.drawer?.kind === 'unit') this.drawer.view = 'main';
+            if (this.pane?.kind === 'unit') this.pane.view = 'main';
           }
         );
       }
@@ -463,7 +425,7 @@ export class FactoryBoardView {
           `Cancelled ${unit.isTrack ? `"${unit.trackName}"` : featureId}`,
           () => this.post(`/api/factory/items/${featureId}/cancel`, { cwd: unit.projectCwd }),
           () => {
-            this.drawer = null;
+            this.pane = null;
           }
         );
       case 'retry-merge': {
@@ -572,19 +534,8 @@ export class FactoryBoardView {
     this.renderStatus();
     const body = document.getElementById('factory-board-body');
     if (body) setHtml(body, this.renderBody());
-    const drawer = document.getElementById('factory-drawer');
-    if (drawer) {
-      drawer.classList.toggle('hidden', !this.drawer);
-      // A mockup needs room: the drawer widens while it shows one.
-      const shown = this.drawer?.kind === 'unit' && this.drawer.view === 'main' ? this.unit(this.drawer.key) : undefined;
-      const mockup = !!shown && isMockupPark(shown);
-      drawer.classList.toggle('fb-wide', mockup);
-      const markup = this.drawer ? this.renderDrawer() : html``;
-      // Replacing a mockup's frame reloads it and loses where you clicked to; a push for
-      // another unit renders the same drawer, so an unchanged one is left as it is.
-      if (!mockup || markup.value !== this.drawnDrawer) setHtml(drawer, markup);
-      this.drawnDrawer = markup.value;
-    }
+    this.renderRight();
+    this.renderAddModal();
 
     if (focusDraft) {
       // Matched by dataset, not a selector: the key holds a project path.
@@ -622,180 +573,73 @@ export class FactoryBoardView {
     const d = this.data;
     const groups = stageGroups(d);
     const selected = groups.find((g) => g.id === this.stage) ?? groups[0];
-    const openKey = this.drawer?.kind === 'unit' ? this.drawer.key : null;
-    const openMerge = this.drawer?.kind === 'merge' ? this.drawer.id : null;
-    return html`<div class="fb-layout">
-      <div class="fb-main">
-        ${this.notice && !this.drawer ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
+    const openKey = this.pane?.kind === 'unit' ? this.pane.key : null;
+    const openMerge = this.pane?.kind === 'merge' ? this.pane.id : null;
+    return html`<div class="fb-main">
+        ${this.notice && !this.pane && !this.adding ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
         ${renderNeedsYou(d.units, this.busy, openKey)}
         <section class="fb-pipeline" aria-label="Pipeline">
           <h3>Pipeline</h3>
           ${renderStagePicker(groups, selected.id)}
           ${renderStageRows(selected, openKey, openMerge)}
         </section>
-      </div>
-      ${renderSidePanel(d, this.report)}
-    </div>`;
+      </div>`;
   }
 
-  // --- Drawers -------------------------------------------------------------
+  /**
+   * The right-hand column: the side panel, or the detail pane in its place while a
+   * unit is open. The pane docks beside the board, never over it.
+   */
+  private renderRight(): void {
+    const root = document.getElementById('factory-board-view');
+    const side = document.getElementById('factory-side');
+    const paneEl = document.getElementById('factory-drawer');
+    // A mockup needs room: the column widens while the pane shows one.
+    const mockup = paneShowsMockup(this.pane, this.data);
+    root?.classList.toggle('fb-pane-open', !!this.pane);
+    root?.classList.toggle('fb-pane-wide', !!this.pane && mockup);
+    if (side) {
+      side.classList.toggle('hidden', !!this.pane);
+      setHtml(side, this.data && !this.pane ? renderSidePanel(this.data, this.report) : html``);
+    }
+    if (!paneEl) return;
+    paneEl.classList.toggle('hidden', !this.pane);
+    const markup = this.pane
+      ? renderPane(this.pane, {
+          data: this.data,
+          busy: this.busy,
+          notice: this.adding ? null : this.notice,
+          drafts: this.drafts,
+          summary: (u, load) => {
+            const text = this.summaries.get(u.key);
+            if (text === undefined && load) void this.loadSummary(u);
+            return text;
+          },
+          diff: (key) => this.diffs.get(key),
+          mockup: this.mockup,
+          sessionExists: (id) => this.host.sessionExists?.(id) ?? false,
+        })
+      : html``;
+    // Replacing a mockup's frame reloads it and loses where you clicked to; a push for
+    // another unit renders the same pane, so an unchanged one is left as it is.
+    if (!mockup || markup.value !== this.drawnPane) setHtml(paneEl, markup);
+    this.drawnPane = markup.value;
+  }
 
-  private renderDrawer(): SafeHtml {
-    const d = this.drawer;
-    const close = html`<button type="button" class="fb-x" data-fb="close" aria-label="Close">×</button>`;
+  /** Add work: a modal over the board, not a unit, so it never takes the pane's place. */
+  private renderAddModal(): void {
+    const el = document.getElementById('factory-add');
+    if (!el) return;
+    el.classList.toggle('hidden', !this.adding);
     const notice = this.notice ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : '';
-    if (!d) return html``;
-    if (d.kind === 'add') return html`${close}${this.renderAdd()}${notice}`;
-    if (d.kind === 'merge') {
-      const m = this.data?.merges.find((x) => x.id === d.id);
-      return html`${close}${m ? this.renderMerge(m, true) : html`<p class="fb-path">This merge entry is no longer listed.</p>`}${notice}`;
-    }
-    const u = this.unit(d.key);
-    if (!u) {
-      return html`${close}${this.data ? html`<p class="fb-path">This unit is no longer on the board.</p>` : html`<p class="fb-path">Loading…</p>`}`;
-    }
-    return html`${close}${this.renderUnit(u, d.view)}${notice}`;
-  }
-
-  private renderUnit(u: FactoryBoardUnit, view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel'): SafeHtml {
-    const head = html`<span class="fb-path">${u.isTrack ? 'Track' : u.unitId} · ${u.projectName}</span>
-      <h3>${u.title}</h3>
-      <div class="fb-chips">
-        <span class="fb-chip ${u.needsYou ? 'y' : ''}">${u.needsYou ? 'needs you' : u.column}</span>
-        ${u.isTrack && html`<span class="fb-chip b">1 agent${u.modelTier ? ` · ${u.modelTier}` : ''}</span>`}
-        ${!u.isTrack && u.modelTier && html`<span class="fb-chip">${u.modelTier}</span>`}
-        ${u.reviewer && html`<span class="fb-chip v">${u.reviewer === 'agent' ? 'reviewer agent checking' : 'review: you'}</span>`}
-        ${u.waitsFor.length > 0 && html`<span class="fb-chip">waits for ${u.waitsFor.join(', ')}</span>`}
-      </div>
-      ${u.stalled && html`<div class="fb-verdict">Stalled: ${u.stalled}</div>`}`;
-
-    if (view === 'summary') {
-      const text = this.summaries.get(u.key);
-      return html`${head}<div class="fb-tabs">${this.viewButton('main', 'Back')}</div>
-        <h4>Summary page</h4>${text === undefined ? html`<p class="fb-path">Loading…</p>` : html`<div class="fb-md">${renderMarkdown(text)}</div>`}`;
-    }
-    if (view === 'diff') {
-      const diff = this.diffs.get(u.key);
-      return html`${head}<div class="fb-tabs">${this.viewButton('main', 'Back')}</div>
-        ${diff === undefined
-          ? html`<p class="fb-path">Loading the diff…</p>`
-          : html`<pre class="fb-pre">${diff.stat}</pre><pre class="fb-pre fb-diff">${diff.patch}</pre>${diff.truncated && html`<p class="fb-path">Cut short; the worktree has the rest.</p>`}`}`;
-    }
-    if (view === 'changes') {
-      return html`${head}<h4>What should change?</h4>
-        <textarea class="fb-textarea" rows="6" data-draft="changes:${u.key}" placeholder="The fix step reads this as the review's findings">${this.drafts.get(`changes:${u.key}`) ?? ''}</textarea>
-        <div class="fb-acts">
-          <button type="button" class="btn-primary" data-fb="send-changes" ${this.busy ? 'disabled' : ''}>Send back</button>
-          ${this.viewButton('main', 'Cancel')}
-        </div>`;
-    }
-
-    if (view === 'cancel') {
-      return html`${head}<h4>Cancel this ${u.isTrack ? 'track' : 'item'}?</h4>
-        <p>${u.status === 'in_progress' ? 'Its agent is stopped first. ' : ''}${u.isTrack ? 'Its features leave' : 'It leaves'} the factory,
-        and ${u.isTrack ? 'their lines stay' : 'its line stays'} unticked in PROJECT.md. ${u.isTrack
-          ? 'The track keeps its worktree and branch, with every commit made so far.'
-          : 'Its worktree and branch are removed, with any work in them.'}${u.mergeStatus === 'parked' ? ' Its parked merge is dropped.' : ''}</p>
-        <div class="fb-acts">
-          <button type="button" class="btn-primary" data-fb="cancel-unit" ${this.busy ? 'disabled' : ''}>Cancel ${u.isTrack ? 'track' : 'item'}</button>
-          ${this.viewButton('main', 'Keep it')}
-        </div>`;
-    }
-
-    const parts: SafeHtml[] = [head];
-    if (u.triage) {
-      parts.push(html`<p>An agent filed this while working on something else. Accept it into the factory, move it to the backlog, or dismiss it.</p>
-        <div class="fb-acts">
-          <button type="button" class="btn-primary" data-fb="triage" data-action="accept">Accept</button>
-          <button type="button" class="btn-secondary" data-fb="triage" data-action="backlog">Backlog</button>
-          <button type="button" class="btn-secondary" data-fb="triage" data-action="dismiss">Dismiss</button>
-        </div>`);
-    } else if (u.detail.questions.length > 0 && u.needsYou) {
-      parts.push(this.renderQuestions(u));
-    } else if (u.column === 'review' && u.needsYou) {
-      parts.push(html`<div class="fb-verdict"><b>${u.escalated ? 'Escalated to you' : 'Waiting for your review'}</b>${u.detail.parkReason
-        ? html`: ${u.detail.parkReason.split('\n')[0].replace(/^review: (escalated: )?/, '')}`
-        : ''}</div>
-        ${u.detail.verdict && html`<h4>Reviewer agent</h4><pre class="fb-pre">${u.detail.verdict}</pre>`}
-        ${u.detail.hasSummary && this.inlineSummary(u)}
-        <div class="fb-acts">
-          <button type="button" class="btn-primary" data-fb="approve" ${this.busy ? 'disabled' : ''}>Approve</button>
-          ${this.viewButton('changes', 'Request changes')}
-          ${u.detail.worktreePath && this.viewButton('diff', 'Open diff')}
-        </div>`);
-    } else if (u.column === 'merging') {
-      const m = this.data?.merges.find((x) => x.id === u.mergeId);
-      parts.push(m ? this.renderMerge(m, false) : html`<p class="fb-path">Handed to the merge queue.</p>`);
-    } else if (isMockupPark(u)) {
-      // Only the mockup: the Live block's ages would change the drawer, and reload the frame, every minute.
-      return joinHtml([head, this.mockup.render(u), cancellable(u) ? html`<div class="fb-acts">${this.viewButton('cancel', 'Cancel item')}</div>` : html``]);
-    } else if (u.status === 'parked') {
-      parts.push(html`<div class="fb-verdict"><b>Parked</b> at ${u.step ?? 'setup'}</div>
-        ${u.detail.parkReason && html`<pre class="fb-pre">${u.detail.parkReason}</pre>`}
-        <div class="fb-acts">
-          <button type="button" class="btn-primary" data-fb="release" ${this.busy ? 'disabled' : ''}>Release for another round</button>
-          ${u.detail.worktreePath && this.viewButton('diff', 'Open diff')}
-        </div>`);
-    }
-
-    if (u.features.length > 0) {
-      parts.push(html`<h4>Features, in order, one worktree</h4>
-        <ul class="fb-features">${u.features.map(
-          (f) => html`<li class="${f.state}"><span class="fb-mark">${f.state === 'done' ? '✓' : f.state === 'now' ? '…' : '○'}</span> ${f.state === 'now' ? html`<b>${f.title}</b> <span class="fb-path">(now)</span>` : f.title}</li>`
-        )}</ul>`);
-    }
-    parts.push(renderClaimActions(u, this.busy, (id) => this.host.sessionExists?.(id) ?? false));
-    parts.push(html`<h4>Live</h4><dl class="fb-kv">
-      <dt>Step</dt><dd>${u.step ?? '—'}</dd>
-      <dt>Heartbeat</dt><dd>${u.claim ? (u.claim.live ? 'your terminal' : 'terminal closed') : u.heartbeatAt ? `${shortAge(u.heartbeatAt)} ago` : '—'}</dd>
-      <dt>Tokens</dt><dd>${formatTokens(u.tokens)}</dd>
-      ${u.detail.worktreePath && html`<dt>Worktree</dt><dd class="fb-mono">${u.detail.worktreePath}</dd>`}
-      ${u.detail.branch && html`<dt>Branch</dt><dd class="fb-mono">${u.detail.branch}</dd>`}
-      ${u.detail.lastCommit && html`<dt>Last commit</dt><dd class="fb-mono">${u.detail.lastCommit.slice(0, 10)}</dd>`}
-    </dl>`);
-    const extra: SafeHtml[] = [];
-    if (u.detail.hasSummary && !(u.column === 'review' && u.needsYou)) extra.push(this.viewButton('summary', 'Summary page'));
-    if (u.detail.worktreePath && !u.needsYou) extra.push(this.viewButton('diff', 'Open diff'));
-    if (cancellable(u)) extra.push(this.viewButton('cancel', u.isTrack ? 'Cancel track' : 'Cancel item'));
-    if (extra.length > 0) parts.push(html`<div class="fb-acts">${extra}</div>`);
-    return joinHtml(parts);
-  }
-
-  /** The summary page inline under an escalated review: what you read before approving. */
-  private inlineSummary(u: FactoryBoardUnit): SafeHtml {
-    const text = this.summaries.get(u.key);
-    if (text === undefined) void this.loadSummary(u);
-    return html`<h4>Summary</h4>${text === undefined ? html`<p class="fb-path">Loading…</p>` : html`<div class="fb-md">${renderMarkdown(text)}</div>`}`;
-  }
-
-  private renderQuestions(u: FactoryBoardUnit): SafeHtml {
-    return html`<div class="fb-verdict"><b>Shaping needs an answer</b>${u.reason ? html`: ${u.reason}` : ''}</div>
-      ${u.detail.questions.map((q) => {
-        const chosen = this.drafts.get(`choice:${u.key}:${q.id}`) ?? q.default ?? '';
-        const name = `choice:${u.key}:${q.id}`;
-        return html`<fieldset class="fb-question"><legend>${q.question}</legend>
-          ${q.options.map(
-            (o) => html`<label><input type="radio" name="${name}" value="${o}" data-draft="${name}" ${o === chosen ? 'checked' : ''}> ${o}${o === q.default ? html` <span class="fb-path">(default)</span>` : ''}</label>`
-          )}
-          <label><input type="radio" name="${name}" value="__other" data-draft="${name}" ${chosen === '__other' || (q.options.length === 0) ? 'checked' : ''}> Other:</label>
-          <input type="text" class="fb-input" data-draft="other:${u.key}:${q.id}" value="${this.drafts.get(`other:${u.key}:${q.id}`) ?? ''}" placeholder="Your answer">
-        </fieldset>`;
-      })}
-      <div class="fb-acts"><button type="button" class="btn-primary" data-fb="answer" ${this.busy ? 'disabled' : ''}>Answer</button></div>`;
-  }
-
-  private renderMerge(m: FactoryMergeSummary, withHead: boolean): SafeHtml {
-    return html`${withHead && html`<span class="fb-path">${m.kind === 'session-land' ? 'Land' : 'Merge'} · ${m.projectName}</span><h3>${m.title}</h3>`}
-      <h4>Merge queue</h4>
-      <dl class="fb-kv">
-        <dt>Status</dt><dd>${m.status}</dd>
-        <dt>Branch</dt><dd class="fb-mono">${m.branch}</dd>
-        ${m.mergeSha && html`<dt>Merge commit</dt><dd class="fb-mono">${m.mergeSha.slice(0, 10)}</dd>`}
-        <dt>Updated</dt><dd>${shortAge(m.updatedAt)} ago</dd>
-      </dl>
-      ${m.detail && html`<div class="fb-verdict">${m.status === 'parked' ? html`<b>Parked</b>: ` : ''}${m.detail}</div>`}
-      ${m.conflictPaths.length > 0 && html`<h4>Conflicts the resolver could not settle</h4><ul>${m.conflictPaths.map((p) => html`<li class="fb-mono">${p}</li>`)}</ul>`}
-      ${m.status === 'parked' && html`<div class="fb-acts"><button type="button" class="btn-primary" data-fb="retry-merge" data-merge-id="${m.id}" ${this.busy ? 'disabled' : ''}>Retry merge</button></div>`}`;
+    setHtml(
+      el,
+      this.adding
+        ? html`<div class="fb-modal-box" role="dialog" aria-modal="true" aria-label="Add work">
+            <button type="button" class="fb-x" data-fb="close-add" aria-label="Close">×</button>${this.renderAdd()}${notice}
+          </div>`
+        : html``
+    );
   }
 
   private renderAdd(): SafeHtml {
@@ -822,17 +666,4 @@ export class FactoryBoardView {
           )}</ul>`
         : html`<p class="fb-path">Nothing was filed.</p>`}`}`;
   }
-
-  private viewButton(view: 'main' | 'summary' | 'diff' | 'changes' | 'cancel', label: string): SafeHtml {
-    return html`<button type="button" class="btn-secondary" data-fb="view" data-view="${view}">${label}</button>`;
-  }
-}
-
-/**
- * Cancel is offered on any live unit no terminal session holds and no merge is
- * running for (server factory/cancel.ts refuses those too): a parked merge is dropped.
- */
-export function cancellable(u: FactoryBoardUnit): boolean {
-  if (u.triage || u.claim || u.status === 'done') return false;
-  return !(u.column === 'merging' && u.mergeStatus !== 'parked');
 }

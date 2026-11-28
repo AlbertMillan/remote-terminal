@@ -17,7 +17,9 @@ const DOM = `
       <span id="factory-board-status"></span>
       <button data-fb="add">Add work</button>
       <div id="factory-board-body"></div>
-      <aside id="factory-drawer" class="fb-drawer hidden"></aside>
+      <div id="factory-side"></div>
+      <aside id="factory-drawer" class="fb-pane hidden"></aside>
+      <div id="factory-add" class="hidden"></div>
     </div>
   </main>`;
 
@@ -86,6 +88,7 @@ const flush = async () => {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
 };
 const drawer = () => document.getElementById('factory-drawer')!;
+const addModal = () => document.getElementById('factory-add')!;
 const posts = () => calls.filter((c) => c.method === 'POST');
 
 beforeEach(() => {
@@ -139,7 +142,7 @@ describe('the mockup drawer', () => {
     expect(frameSrc({ ...INFO, url: null })).toBeNull();
   });
 
-  it('shows the mockup in a sandboxed frame, Open full size in a new tab, and the walkthrough, in a wide drawer', async () => {
+  it('shows the mockup in a sandboxed frame, Open full size in a new tab, and the walkthrough, in a wide pane', async () => {
     await openUnit();
     expect(calls.some((c) => c.url === `/api/factory/mockup?cwd=${encodeURIComponent(CWD)}&unit=${ID}`)).toBe(true);
     const frame = drawer().querySelector<HTMLIFrameElement>('iframe.fb-mockup-frame')!;
@@ -151,7 +154,8 @@ describe('the mockup drawer', () => {
     expect(open.getAttribute('rel')).toContain('noopener');
     expect(drawer().textContent).toContain('Mockup waiting for your approval');
     expect([...drawer().querySelectorAll('.fb-md li')].map((li) => li.textContent)).toEqual(['Open Settings', 'Flip the toggle']);
-    expect(drawer().classList.contains('fb-wide')).toBe(true);
+    // The docked pane's column widens for the page.
+    expect(document.getElementById('factory-board-view')!.classList.contains('fb-pane-wide')).toBe(true);
     // The generic park's "Release for another round" is not offered over a mockup.
     expect(drawer().querySelector('[data-fb="release"]')).toBeNull();
   });
@@ -214,16 +218,16 @@ describe("Add work's Mockup first checkbox", () => {
   async function submit(checked: boolean) {
     await view.show(undefined, true);
     await flush();
-    drawer().querySelector<HTMLTextAreaElement>('[data-draft="add:text"]')!.value = 'dark mode';
-    drawer().querySelector<HTMLInputElement>('[data-draft="add:mockup"]')!.checked = checked;
-    drawer().querySelector<HTMLElement>('[data-fb="submit-add"]')!.click();
+    addModal().querySelector<HTMLTextAreaElement>('[data-draft="add:text"]')!.value = 'dark mode';
+    addModal().querySelector<HTMLInputElement>('[data-draft="add:mockup"]')!.checked = checked;
+    addModal().querySelector<HTMLElement>('[data-fb="submit-add"]')!.click();
     await flush();
     return posts().find((c) => c.url === '/api/factory/add')?.body;
   }
 
   it('sends mockupFirst when ticked', async () => {
     expect(await submit(true)).toEqual({ cwd: CWD, text: 'dark mode', mockupFirst: true });
-    expect(drawer().textContent).toContain('mockup first');
+    expect(addModal().textContent).toContain('mockup first');
   });
 
   it('leaves it out when not', async () => {

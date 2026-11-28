@@ -271,8 +271,15 @@
             <button type="button" class="btn-primary" data-fb="back">Back</button>
           </div>
         </div>
-        <div id="factory-board-body" class="fb-body"></div>
-        <aside id="factory-drawer" class="fb-drawer hidden" aria-label="Factory item"></aside>
+        <div class="fb-split">
+          <div id="factory-board-body" class="fb-body"></div>
+          <!-- The right-hand column: the side panel, or the detail pane docked in its place. -->
+          <div class="fb-right">
+            <div id="factory-side"></div>
+            <aside id="factory-drawer" class="fb-pane hidden" aria-label="Factory item"></aside>
+          </div>
+        </div>
+        <div id="factory-add" class="fb-modal hidden"></div>
       </div>
 
       <div id="rollup-view" class="project-log-view hidden">
