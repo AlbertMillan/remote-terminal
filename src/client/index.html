@@ -266,6 +266,11 @@
             <span id="factory-board-status" class="fb-status"></span>
           </div>
           <div class="project-log-actions">
+            <!-- Board (stage picker) or Flow (lanes per track), remembered per browser (factory-board-flow.ts). -->
+            <div class="fb-mode" role="group" aria-label="View">
+              <button type="button" data-fb="view-mode" data-mode="board" aria-pressed="true">Board</button>
+              <button type="button" data-fb="view-mode" data-mode="flow" aria-pressed="false">Flow</button>
+            </div>
             <button type="button" class="btn-secondary" data-fb="refresh">Refresh</button>
             <button type="button" class="btn-secondary" data-fb="add">Add work</button>
             <button type="button" class="btn-primary" data-fb="back">Back</button>

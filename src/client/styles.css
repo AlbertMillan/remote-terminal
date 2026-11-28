@@ -4811,6 +4811,52 @@ body {
 .fb-row-meta { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; max-width: 30%; }
 .fb-row-meta .fb-proj { max-width: 100%; }
 
+/* Board / Flow toggle in the header. */
+.fb-mode { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.fb-mode button { padding: 5px 12px; background: none; border: none; color: var(--text-secondary); font: inherit; font-size: 12.5px; cursor: pointer; }
+.fb-mode button + button { border-left: 1px solid var(--border); }
+.fb-mode button.on { background: var(--bg-tertiary); color: var(--text-primary); font-weight: 600; }
+
+/* Flow (factory-board-flow.ts): one lane per track, a tag per unit at its stage. */
+.fb-flow-scroll { overflow-x: auto; }
+.fb-flow-grid { display: flex; flex-direction: column; gap: 4px; min-width: 760px; }
+.fb-flow-row {
+  display: grid;
+  grid-template-columns: 150px repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  align-items: stretch;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.fb-flow-row.you { border-color: #7a6034; }
+.fb-flow-head { background: none; border-color: transparent; padding-top: 0; padding-bottom: 0; font-size: 11px; font-weight: 700; color: var(--text-secondary); }
+.fb-lane-name { display: flex; flex-direction: column; min-width: 0; font-size: 12.5px; }
+.fb-lane-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-lane-name .fb-proj { margin-left: 0; }
+.fb-lane-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 26px; border-left: 1px dashed var(--border-subtle); padding-left: 6px; }
+.fb-tag {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 4px 7px;
+  text-align: left;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.fb-tag:hover { border-color: var(--border); }
+.fb-tag.open { border-color: var(--accent); }
+.fb-tag.you { border-color: #7a6034; background: #2a2720; }
+.fb-tag.stalled { color: var(--warning); }
+.fb-tag-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Side panel (factory-board-side.ts). */
 .fb-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .fb-panel {

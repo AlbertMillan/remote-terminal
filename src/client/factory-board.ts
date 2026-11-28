@@ -5,6 +5,7 @@ import { formatTokens } from './format.js';
 import { MockupDrawer } from './factory-mockup.js';
 import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups } from './factory-board-pipeline.js';
 import { renderNeedsYou } from './factory-board-needs.js';
+import { VIEW_MODE_KEY, flowLanes, readViewMode, renderFlow, type ViewMode } from './factory-board-flow.js';
 import { renderSidePanel } from './factory-board-side.js';
 import {
   DecisionQueue,
@@ -30,7 +31,8 @@ export { cancellable, renderMarkdown } from './factory-board-pane.js';
  * inline (factory-board-needs.ts), hidden when nothing waits; then the
  * **Pipeline**, a stage picker over the six columns — intake, ready, running,
  * review, merging, done today — listing the selected stage's units as rows
- * (factory-board-pipeline.ts); on the right a side panel with capacity, the
+ * (factory-board-pipeline.ts), or, with the header's toggle on Flow, one lane
+ * per track with each unit at its stage (factory-board-flow.ts); on the right a side panel with capacity, the
  * morning report and the merge queue (factory-board-side.ts). Clicking a card,
  * a row or a link opens the unit in the **detail pane** (factory-board-pane.ts),
  * docked in that right-hand column in the side panel's place, never over the
@@ -145,6 +147,8 @@ export class FactoryBoardView {
   private adding = false;
   /** The Pipeline's selected stage; kept across visits in this page, not stored. */
   private stage: FactoryColumn = DEFAULT_STAGE;
+  /** Board (the Pipeline's stage picker) or Flow (lanes per track); remembered per browser. */
+  private mode: ViewMode = readViewMode(readStorage(VIEW_MODE_KEY));
   private summaries = new Map<string, string>();
   private summariesLoading = new Set<string>();
   private diffs = new Map<string, { stat: string; patch: string; truncated: boolean }>();
@@ -441,6 +445,11 @@ export class FactoryBoardView {
         return this.render();
       case 'refresh':
         return this.load();
+      case 'view-mode': {
+        this.mode = readViewMode(el.dataset.mode ?? null);
+        writeStorage(VIEW_MODE_KEY, this.mode);
+        return this.render();
+      }
       case 'stage': {
         const stage = el.dataset.stage as FactoryColumn | undefined;
         if (stage && STAGES.some((s) => s.id === stage)) this.stage = stage;
@@ -650,6 +659,7 @@ export class FactoryBoardView {
     const selection = focusDraft && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
 
     this.renderStatus();
+    this.renderModeToggle();
     const body = document.getElementById('factory-board-body');
     if (body) setHtml(body, this.renderBody());
     this.renderRight();
@@ -697,12 +707,23 @@ export class FactoryBoardView {
     return html`<div class="fb-main">
         ${this.notice && !this.pane && !this.adding ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
         ${renderNeedsYou(d.units, this.busy, openKey)}
-        <section class="fb-pipeline" aria-label="Pipeline">
-          <h3>Pipeline</h3>
-          ${renderStagePicker(groups, selected.id)}
-          ${renderStageRows(selected, openKey, openMerge)}
-        </section>
+        ${this.mode === 'flow'
+          ? renderFlow(flowLanes(d), openKey, openMerge)
+          : html`<section class="fb-pipeline" aria-label="Pipeline">
+              <h3>Pipeline</h3>
+              ${renderStagePicker(groups, selected.id)}
+              ${renderStageRows(selected, openKey, openMerge)}
+            </section>`}
       </div>`;
+  }
+
+  /** The header's Board / Flow toggle shows the view on screen. */
+  private renderModeToggle(): void {
+    for (const el of document.querySelectorAll<HTMLElement>('#factory-board-view [data-fb="view-mode"]')) {
+      const on = el.dataset.mode === this.mode;
+      el.classList.toggle('on', on);
+      el.setAttribute('aria-pressed', String(on));
+    }
   }
 
   /**

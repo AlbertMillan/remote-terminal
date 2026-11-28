@@ -4,6 +4,7 @@ import { FactoryBoardView, LAST_OPENED_KEY, cancellable, joinAnswers, readAddRes
 import { looseMerges, stageGroups } from '../src/client/factory-board-pipeline.js';
 import { needsYouUnits } from '../src/client/factory-board-needs.js';
 import { UNDO_MS } from '../src/client/factory-decisions.js';
+import { VIEW_MODE_KEY, flowLanes, readViewMode } from '../src/client/factory-board-flow.js';
 import { FakeClock } from './helpers/fake-clock.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
 
@@ -19,6 +20,8 @@ const DOM = `
     <div id="terminal-container"></div>
     <div id="factory-board-view" class="hidden">
       <span id="factory-board-status"></span>
+      <button data-fb="view-mode" data-mode="board">Board</button>
+      <button data-fb="view-mode" data-mode="flow">Flow</button>
       <button data-fb="add">Add work</button>
       <button data-fb="back">Back</button>
       <div class="fb-split">
@@ -108,6 +111,7 @@ const UNITS: FactoryBoardUnit[] = [
   unit('f-ready', { column: 'ready', status: 'open', waitsFor: ['f-intake'] }),
   unit('track:History search', {
     isTrack: true,
+    trackName: 'History search',
     title: 'History search',
     featureIds: ['f-h1', 'f-h2'],
     features: [
@@ -507,6 +511,103 @@ describe('Undo on decisions', () => {
     await flush();
     expect(need('f-esc')).toBeDefined();
     expect(document.querySelector('.fb-main > .fb-notice.error')!.textContent).toBe('f-esc is not parked');
+  });
+});
+
+describe('Flow view', () => {
+  const BETA = 'C:\\p\\beta';
+  const lanesOf = () =>
+    [...document.querySelectorAll<HTMLElement>('.fb-flow-row[data-lane]')].map((row) => [
+      row.querySelector('.fb-lane-name b')!.textContent,
+      Object.fromEntries(
+        [...row.querySelectorAll<HTMLElement>('[data-lane-stage]')]
+          .map((cell) => [cell.dataset.laneStage, [...cell.querySelectorAll<HTMLElement>('.fb-tag')].map((t) => t.dataset.unitKey ?? `merge:${t.dataset.mergeCard}`)])
+          .filter(([, tags]) => tags.length > 0)
+      ),
+    ]);
+
+  it('groups track units one lane per project and track, then one Inbox lane per project for loose items', () => {
+    const units = [
+      unit('track:History search', { isTrack: true, trackName: 'History search' }),
+      unit('f-a', { trackName: 'Core' }),
+      unit('track:History search@beta', { isTrack: true, trackName: 'History search', projectCwd: BETA, projectName: 'beta' }),
+      unit('f-b', { projectCwd: BETA, projectName: 'beta' }),
+      unit('track:Auth', { isTrack: true, trackName: 'Auth', column: 'review' }),
+    ];
+    const orphan: FactoryMergeSummary = { ...land, id: 'mq-7', title: 'Gone track' };
+    const lanes = flowLanes({ units, merges: [land, orphan] });
+    expect(lanes.map((l) => [l.name, l.projectName, l.units.map((u) => u.key), l.merges.map((m) => m.id)])).toEqual([
+      // A session's Land sits in the lane of the track it lands.
+      ['History search', 'alpha', ['track:History search'], ['mq-2']],
+      ['History search', 'beta', ['track:History search@beta'], []],
+      ['Auth', 'alpha', ['track:Auth'], []],
+      // Loose items share their project's Inbox, whatever track they were filed into; so does an entry with no lane.
+      ['Inbox', 'alpha', ['f-a'], ['mq-7']],
+      ['Inbox', 'beta', ['f-b'], []],
+    ]);
+    expect(lanes.every((l) => l.inbox === (l.name === 'Inbox'))).toBe(true);
+    // An entry whose unit is on the board is drawn with the unit, never twice.
+    expect(flowLanes({ units: UNITS, merges: [merge] }).flatMap((l) => l.merges)).toEqual([]);
+  });
+
+  it('reads a stored choice, Board by default', () => {
+    expect(readViewMode('flow')).toBe('flow');
+    expect(readViewMode('board')).toBe('board');
+    expect(readViewMode(null)).toBe('board');
+    expect(readViewMode('columns')).toBe('board');
+  });
+
+  it('toggles to lanes with each unit at its stage, Needs you still above, and back', async () => {
+    await open();
+    expect(document.querySelector('[data-mode="board"]')!.getAttribute('aria-pressed')).toBe('true');
+    await click('[data-fb="view-mode"][data-mode="flow"]');
+    expect(document.querySelector('[data-mode="flow"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.fb-pipeline')).toBeNull();
+    expect(document.querySelector('.fb-needs + .fb-flow')).not.toBeNull();
+    expect(lanesOf()).toEqual([
+      ['History search', { running: ['track:History search'], merging: ['merge:mq-2'] }],
+      [
+        'Inbox',
+        {
+          intake: ['f-intake', 'f-triage', 'f-ask'],
+          ready: ['f-ready'],
+          running: ['f-cap'],
+          review: ['f-agent', 'f-esc'],
+          merging: ['f-merge'],
+          done: ['f-done'],
+        },
+      ],
+    ]);
+    // The track's tag names the feature it is at.
+    expect(document.querySelector('.fb-tag[data-unit-key="track:History search"]')!.textContent).toContain('Search API');
+    expect(document.querySelector('.fb-flow-row[data-lane^="inbox:"]')!.classList.contains('you')).toBe(true);
+    await click('[data-fb="view-mode"][data-mode="board"]');
+    expect(document.querySelector('.fb-flow')).toBeNull();
+    expect(document.querySelector('.fb-pipeline')).not.toBeNull();
+  });
+
+  it('opens a lane tag in the detail pane', async () => {
+    await open();
+    await click('[data-fb="view-mode"][data-mode="flow"]');
+    await click('.fb-tag[data-unit-key="f-cap"]');
+    expect(drawer().classList.contains('hidden')).toBe(false);
+    expect(drawer().querySelector('h3')!.textContent).toBe('Unit f-cap');
+    expect(document.querySelector('.fb-tag.open')!.getAttribute('data-unit-key')).toBe('f-cap');
+    await click('.fb-tag[data-merge-card="mq-2"]');
+    expect(drawer().textContent).toContain('queued');
+  });
+
+  it('remembers the choice in this browser: a reload opens in Flow', async () => {
+    await open();
+    await click('[data-fb="view-mode"][data-mode="flow"]');
+    expect(localStorage.getItem(VIEW_MODE_KEY)).toBe('flow');
+    // A reload: a fresh page and view, the same storage.
+    document.body.innerHTML = DOM;
+    view = new FactoryBoardView(host, { undoMs: 0 });
+    view.attach();
+    await open();
+    expect(document.querySelector('.fb-flow')).not.toBeNull();
+    expect(document.querySelector('[data-mode="flow"]')!.classList.contains('on')).toBe(true);
   });
 });
 
