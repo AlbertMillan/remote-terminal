@@ -5,8 +5,10 @@ import { looseMerges, stageGroups } from '../src/client/factory-board-pipeline.j
 import { needsYouUnits } from '../src/client/factory-board-needs.js';
 import { UNDO_MS } from '../src/client/factory-decisions.js';
 import { VIEW_MODE_KEY, flowLanes, readViewMode } from '../src/client/factory-board-flow.js';
+import { phoneStage, phoneStageGroups, planTile } from '../src/client/factory-board-phone.js';
+import type { PlanUsage } from '../src/client/plan-usage-chip.js';
 import { FakeClock } from './helpers/fake-clock.js';
-import type { FactoryBoard, FactoryBoardUnit, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
+import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
 
 /**
  * The factory board (project/code-factory.md, f-5clssc): its columns, each
@@ -33,6 +35,7 @@ const DOM = `
       </div>
       <div id="factory-add" class="hidden"></div>
       <div id="factory-board-toasts"></div>
+      <nav id="factory-phone-tabs" class="hidden"></nav>
     </div>
   </main>`;
 
@@ -608,6 +611,160 @@ describe('Flow view', () => {
     await open();
     expect(document.querySelector('.fb-flow')).not.toBeNull();
     expect(document.querySelector('[data-mode="flow"]')!.classList.contains('on')).toBe(true);
+  });
+});
+
+describe('phone layout', () => {
+  const usage: PlanUsage = {
+    accounts: [
+      { account: 'personal', snapshot: { fiveHour: { usedPercentage: 42.4, resetsAt: 0, observedAt: '' }, sevenDay: { usedPercentage: 18, resetsAt: 0, observedAt: '' } }, setup: { command: null } },
+      { account: 'work', snapshot: { fiveHour: { usedPercentage: 86, resetsAt: 0, observedAt: '' }, sevenDay: null }, setup: { command: null } },
+    ],
+  };
+  let clock: FakeClock;
+  const tabs = () => [...document.querySelectorAll<HTMLElement>('#factory-phone-tabs [data-tab]')].map((t) => [t.dataset.tab, t.classList.contains('on')]);
+  const tile = (id: string) => document.querySelector<HTMLElement>(`[data-tile="${id}"]`)!;
+  const phoneStages = () =>
+    [...document.querySelectorAll<HTMLElement>('.fb-phone-stage')].map((b) => [b.dataset.stage, b.querySelector('em')!.textContent, b.classList.contains('you')]);
+
+  beforeEach(() => {
+    document.body.innerHTML = DOM;
+    clock = new FakeClock();
+    view = new FactoryBoardView({ ...host, planUsage: () => usage }, { clock, isPhone: () => true });
+    view.attach();
+  });
+
+  it('folds Ready into Running for the phone, four stages, and maps a desktop stage onto them', () => {
+    const groups = phoneStageGroups(stageGroups({ units: UNITS, merges: [merge, land] }));
+    expect(groups.map((g) => [g.id, g.units.map((u) => u.key), g.you])).toEqual([
+      ['intake', ['f-intake', 'f-triage', 'f-ask'], 2],
+      ['running', ['track:History search', 'f-cap', 'f-ready'], 1],
+      ['review', ['f-agent', 'f-esc'], 1],
+      ['merging', ['f-merge'], 1],
+    ]);
+    expect(groups.find((g) => g.id === 'merging')!.merges.map((m) => m.id)).toEqual(['mq-2']);
+    expect(['ready', 'done', 'review'].map((s) => phoneStage(s as FactoryColumn))).toEqual(['running', 'running', 'review']);
+  });
+
+  it("reads the plan tile from the highest 5-hour reading, with that login's week", () => {
+    expect(planTile(usage)).toEqual({ value: '86%', note: '5-hour · week — · work', level: 'warn' });
+    expect(planTile({ accounts: [usage.accounts[0]] })).toEqual({ value: '42%', note: '5-hour · week 18%', level: 'ok' });
+    expect(planTile(null)).toEqual({ value: '—', note: 'no reading yet', level: '' });
+  });
+
+  it('opens on You: tiles, Needs you and a running preview, with no side panel or desktop Pipeline', async () => {
+    await open();
+    expect(root().classList.contains('fb-phone')).toBe(true);
+    expect(document.getElementById('factory-phone-tabs')!.classList.contains('hidden')).toBe(false);
+    expect(tabs()).toEqual([
+      ['you', true],
+      ['flow', false],
+      ['done', false],
+    ]);
+    expect(document.querySelector('[data-tab="you"] em')!.textContent).toBe('5');
+    expect(tile('plan').textContent).toContain('86%');
+    expect(tile('plan').classList.contains('warn')).toBe(true);
+    expect(tile('running').querySelector('b')!.textContent).toBe('2');
+    expect(tile('running').textContent).toContain('2 of 3 seats');
+    expect(tile('merging').querySelector('b')!.textContent).toBe('2');
+    expect(document.querySelector('.fb-needs')).not.toBeNull();
+    expect([...document.querySelectorAll<HTMLElement>('.fb-preview .fb-row')].map((r) => r.dataset.unitKey)).toEqual(['track:History search', 'f-cap']);
+    expect(document.querySelector('.fb-pipeline')).toBeNull();
+    expect(document.querySelector('.fb-side')).toBeNull();
+    expect(document.getElementById('factory-side')!.classList.contains('hidden')).toBe(true);
+  });
+
+  it('the running preview opens Flow at Running; stage buttons show counts, amber where work waits for you', async () => {
+    await open();
+    await click('.fb-preview [data-fb="phone-flow"]');
+    expect(tabs().find(([, on]) => on)![0]).toBe('flow');
+    expect(phoneStages()).toEqual([
+      ['intake', '3', true],
+      ['running', '3', true],
+      ['review', '2', true],
+      ['merging', '2', true],
+    ]);
+    expect(document.querySelector('.fb-phone-stage.on')!.getAttribute('data-stage')).toBe('running');
+    expect(rows()).toEqual(['track:History search', 'f-cap', 'f-ready']);
+    // The track's card carries its progress dots.
+    expect(document.querySelector('[data-unit-key="track:History search"] .fo-prog')).not.toBeNull();
+    await click('.fb-phone-stage[data-stage="merging"]');
+    expect(rows()).toEqual(['f-merge', 'merge:mq-2']);
+    // The You tiles lead into Flow as well.
+    await click('[data-fb="phone-tab"][data-tab="you"]');
+    await click('[data-tile="running"]');
+    expect(document.querySelector('.fb-phone-stage.on')!.getAttribute('data-stage')).toBe('running');
+  });
+
+  it('Done lists what merged today and what happened since you last looked', async () => {
+    const last = new Date(Date.now() - 10 * 3600_000).toISOString();
+    localStorage.setItem(LAST_OPENED_KEY, last);
+    responses['/api/factory/board'] = { ...BOARD, merges: [merge, { ...land, status: 'merged', mergeSha: 'abc1234' }] };
+    await open();
+    await click('[data-fb="phone-tab"][data-tab="done"]');
+    expect(rows()).toEqual(['f-done', 'merge:mq-2']);
+    expect(document.querySelector('.fb-done .fb-report')!.textContent).toContain('Revive after Build & restart');
+  });
+
+  it('opens the detail pane as a sheet with sticky Approve, Request changes and Take over; Take over asks first', async () => {
+    await open();
+    await click('.fb-needs [data-need="f-esc"] .fb-title');
+    expect(root().classList.contains('fb-pane-open')).toBe(true);
+    const bar = drawer().querySelector('.fb-sticky')!;
+    expect([...bar.querySelectorAll('button')].map((b) => b.textContent!.trim())).toEqual(['Approve', 'Request changes', 'Take over', 'Open diff']);
+    // Only the sticky bar offers it: no second Take over below.
+    expect(drawer().querySelectorAll('[data-view="take-over"]')).toHaveLength(1);
+    expect(drawer().querySelector('[data-fb="take-over"]')).toBeNull();
+    await click('[data-view="take-over"]', bar);
+    expect(drawer().textContent).toContain('Take this over in a terminal?');
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([]);
+    await click('[data-fb="view"][data-view="main"]', drawer());
+    await click('[data-view="take-over"]', drawer());
+    await click('[data-fb="take-over"]', drawer());
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-esc/take', method: 'POST', body: { cwd: CWD } });
+  });
+
+  it("asks first on a running unit's Take over too, from a sticky block", async () => {
+    await open('track:History search');
+    const takeOver = drawer().querySelector<HTMLElement>('.fb-sticky [data-view="take-over"]')!;
+    expect(takeOver.textContent).toBe('Take over in terminal');
+    expect(drawer().querySelector('[data-fb="take-over"]')).toBeNull();
+  });
+
+  it("says where a decision's unit went in Flow, and the toast takes you there", async () => {
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    const go = document.querySelector<HTMLElement>('#factory-board-toasts [data-fb="phone-flow"]')!;
+    expect(go.textContent).toBe('Flow: Merging');
+    await click('#factory-board-toasts [data-fb="phone-flow"]');
+    expect(tabs().find(([, on]) => on)![0]).toBe('flow');
+    expect(document.querySelector('.fb-phone-stage.on')!.getAttribute('data-stage')).toBe('merging');
+    expect(rows()).toContain('f-esc');
+    // Triage Dismiss leaves the board: no Flow stage to point to.
+    await click('[data-fb="phone-tab"][data-tab="you"]');
+    await click('[data-fb="triage"][data-action="dismiss"]', need('f-triage'));
+    const dismissed = [...document.querySelectorAll<HTMLElement>('#factory-board-toasts .fb-toast')].pop()!;
+    expect(dismissed.querySelector('[data-fb="phone-flow"]')).toBeNull();
+  });
+
+  it('opens Add work in its modal (full-screen on a phone)', async () => {
+    await view.show(undefined, true);
+    await flush();
+    expect(root().classList.contains('fb-phone')).toBe(true);
+    expect(addModal().classList.contains('hidden')).toBe(false);
+    expect(addModal().querySelector('[data-fb="submit-add"]')).not.toBeNull();
+  });
+
+  it('keeps the desktop layout off a phone: no tab bar, Take over at once', async () => {
+    document.body.innerHTML = DOM;
+    view = new FactoryBoardView(host, { undoMs: 0, isPhone: () => false });
+    view.attach();
+    await open('track:History search');
+    expect(root().classList.contains('fb-phone')).toBe(false);
+    expect(document.getElementById('factory-phone-tabs')!.classList.contains('hidden')).toBe(true);
+    expect(document.querySelector('.fb-pipeline')).not.toBeNull();
+    expect(drawer().querySelector('[data-fb="take-over"]')).not.toBeNull();
+    expect(drawer().querySelector('.fb-sticky')).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { html, joinHtml, type SafeHtml } from './html-utils.js';
-import { renderClaimActions } from './factory-claims.js';
+import { canTakeOver, renderClaimActions } from './factory-claims.js';
 import { formatTokens, shortAge } from './format.js';
 import { isMockupPark, type MockupDrawer } from './factory-mockup.js';
 import { STAGES } from './factory-board-pipeline.js';
@@ -19,7 +19,8 @@ import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryMergeSummary
  * element, so `data-fb` actions inside it resolve their unit from the selection.
  */
 
-export type UnitView = 'main' | 'summary' | 'diff' | 'changes' | 'cancel';
+/** `take-over`: the phone's confirm step before Take over (a desktop takes over at once). */
+export type UnitView = 'main' | 'summary' | 'diff' | 'changes' | 'cancel' | 'take-over';
 
 /** What the pane shows: a unit (in one of its views) or a merge-queue entry. */
 export type PaneSelection = { kind: 'unit'; key: string; view: UnitView } | { kind: 'merge'; id: string };
@@ -39,6 +40,11 @@ export interface PaneContext {
   diff(key: string): { stat: string; patch: string; truncated: boolean } | undefined;
   mockup: MockupDrawer;
   sessionExists(id: string): boolean;
+  /**
+   * The pane is the phone's bottom sheet: its main actions stick to the sheet's
+   * bottom (`fb-sticky`), and Take over asks first.
+   */
+  phone?: boolean;
 }
 
 /**
@@ -168,6 +174,15 @@ function renderUnit(u: FactoryBoardUnit, view: UnitView, ctx: PaneContext): Safe
       </div>`;
   }
 
+  if (view === 'take-over') {
+    return html`${head}<h4>Take this over in a terminal?</h4>
+      <p>The factory's agent is stopped and its conversation goes on in a terminal in the unit's worktree. The factory skips the unit until you return it or mark it done.</p>
+      <div class="fb-acts fb-sticky">
+        <button type="button" class="btn-primary" data-fb="take-over" ${busy}>Take over</button>
+        ${viewButton('main', 'Keep it')}
+      </div>`;
+  }
+
   if (view === 'cancel') {
     return html`${head}<h4>Cancel this ${u.isTrack ? 'track' : 'item'}?</h4>
       <p>${u.status === 'in_progress' ? 'Its agent is stopped first. ' : ''}${u.isTrack ? 'Its features leave' : 'It leaves'} the factory,
@@ -196,9 +211,10 @@ function renderUnit(u: FactoryBoardUnit, view: UnitView, ctx: PaneContext): Safe
       : ''}</div>
       ${u.detail.verdict && html`<h4>Reviewer agent</h4><pre class="fb-pre">${u.detail.verdict}</pre>`}
       ${u.detail.hasSummary && inlineSummary(u, ctx)}
-      <div class="fb-acts">
+      <div class="fb-acts${ctx.phone ? ' fb-sticky' : ''}">
         <button type="button" class="btn-primary" data-fb="approve" ${busy}>Approve</button>
         ${viewButton('changes', 'Request changes')}
+        ${ctx.phone && canTakeOver(u) && viewButton('take-over', 'Take over')}
         ${u.detail.worktreePath && viewButton('diff', 'Open diff')}
       </div>`);
   } else if (u.column === 'merging') {
@@ -222,7 +238,14 @@ function renderUnit(u: FactoryBoardUnit, view: UnitView, ctx: PaneContext): Safe
         (f) => html`<li class="${f.state}"><span class="fb-mark">${f.state === 'done' ? '✓' : f.state === 'now' ? '…' : '○'}</span> ${f.state === 'now' ? html`<b>${f.title}</b> <span class="fb-path">(now)</span>` : f.title}</li>`
       )}</ul>`);
   }
-  parts.push(renderClaimActions(u, ctx.busy, (id) => ctx.sessionExists(id)));
+  // On a phone Take over asks first; a review's sticky bar already carries it.
+  const reviewBar = !!ctx.phone && u.column === 'review' && u.needsYou && !u.triage && u.detail.questions.length === 0;
+  parts.push(
+    renderClaimActions(u, ctx.busy, (id) => ctx.sessionExists(id), {
+      takeOver: reviewBar ? 'none' : ctx.phone ? 'confirm' : 'direct',
+      sticky: !!ctx.phone,
+    })
+  );
   parts.push(html`<h4>Live</h4><dl class="fb-kv">
     <dt>Step</dt><dd>${u.step ?? '—'}</dd>
     <dt>Heartbeat</dt><dd>${u.claim ? (u.claim.live ? 'your terminal' : 'terminal closed') : u.heartbeatAt ? `${shortAge(u.heartbeatAt)} ago` : '—'}</dd>

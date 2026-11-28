@@ -3,8 +3,21 @@ import { requestJson, failureMessage } from './api.js';
 import { isClaimAction, runClaimAction } from './factory-claims.js';
 import { formatTokens } from './format.js';
 import { MockupDrawer } from './factory-mockup.js';
-import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups } from './factory-board-pipeline.js';
-import { renderNeedsYou } from './factory-board-needs.js';
+import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups, type StageGroup } from './factory-board-pipeline.js';
+import { needsYouUnits, renderNeedsYou } from './factory-board-needs.js';
+import {
+  PHONE_QUERY,
+  PHONE_STAGES,
+  PHONE_TABS,
+  phoneStage,
+  phoneStageGroups,
+  renderDone,
+  renderPhoneFlow,
+  renderPhoneTabs,
+  renderYou,
+  type PhoneTab,
+} from './factory-board-phone.js';
+import type { PlanUsage } from './plan-usage-chip.js';
 import { VIEW_MODE_KEY, flowLanes, readViewMode, renderFlow, type ViewMode } from './factory-board-flow.js';
 import { renderSidePanel } from './factory-board-side.js';
 import {
@@ -81,6 +94,8 @@ export interface FactoryBoardHost {
   openSession?(sessionId: string): void;
   /** The session's row is still in the sidebar. */
   sessionExists?(sessionId: string): boolean;
+  /** The plan-usage chip's last reading, for the phone's You tile; null before the first. */
+  planUsage?(): PlanUsage | null;
 }
 
 function readStorage(key: string): string | null {
@@ -128,6 +143,8 @@ export interface FactoryBoardOptions {
   undoMs?: number;
   /** Its timers; the tests pass their own. */
   clock?: DecisionClock;
+  /** The page is a phone's (≤640px): You / Flow / Done tabs and a bottom sheet. Default: the media query. */
+  isPhone?: () => boolean;
 }
 
 export class FactoryBoardView {
@@ -149,6 +166,9 @@ export class FactoryBoardView {
   private stage: FactoryColumn = DEFAULT_STAGE;
   /** Board (the Pipeline's stage picker) or Flow (lanes per track); remembered per browser. */
   private mode: ViewMode = readViewMode(readStorage(VIEW_MODE_KEY));
+  /** On a phone: the tab bar's tab (factory-board-phone.ts). You first on every visit. */
+  private phoneTab: PhoneTab = 'you';
+  private readonly isPhone: () => boolean;
   private summaries = new Map<string, string>();
   private summariesLoading = new Set<string>();
   private diffs = new Map<string, { stat: string; patch: string; truncated: boolean }>();
@@ -197,6 +217,7 @@ export class FactoryBoardView {
       options.undoMs ?? UNDO_MS,
       options.clock
     );
+    this.isPhone = options.isPhone ?? (() => window.matchMedia?.(PHONE_QUERY).matches ?? false);
   }
 
   isVisible(): boolean {
@@ -208,6 +229,10 @@ export class FactoryBoardView {
     root?.addEventListener('click', (event) => void this.onClick(event));
     // Leaving the page sends what still waits for its Undo window; keepalive lets it outlive the page.
     window.addEventListener('pagehide', () => void this.decisions.flush(true));
+    // Crossing 640px switches between the desktop layout and the phone's tabs.
+    window.matchMedia?.(PHONE_QUERY).addEventListener?.('change', () => {
+      if (this.visible) this.render();
+    });
     root?.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
       // The modal first: it sits over the pane.
@@ -371,20 +396,32 @@ export class FactoryBoardView {
     const el = document.getElementById('factory-board-toasts');
     if (!el) return;
     const pending = this.decisions.pending();
-    const ids = pending.map((p) => p.id).join(',');
+    const phone = this.isPhone();
+    const ids = `${phone ? 'phone' : 'desk'}:${pending.map((p) => p.id).join(',')}`;
     // Redrawn only when the set changes, or each render would restart the countdown bar.
     if (ids === this.drawnToasts) return;
     this.drawnToasts = ids;
     setHtml(
       el,
-      html`${pending.map(
-        (p) => html`<div class="fb-toast" data-decision="${String(p.id)}" role="status">
+      html`${pending.map((p) => {
+        // On a phone the toast says where the unit went in Flow, and takes you there.
+        const stage = phone ? this.movedTo(p.decision) : null;
+        const label = stage ? PHONE_STAGES.find((s) => s.id === stage)?.label : null;
+        return html`<div class="fb-toast" data-decision="${String(p.id)}" role="status">
           <span>${p.decision.label}</span>
+          ${stage && label && html`<button type="button" class="fb-undo" data-fb="phone-flow" data-stage="${stage}">Flow: ${label}</button>`}
           <button type="button" class="fb-undo" data-fb="undo" data-decision="${String(p.id)}">Undo</button>
           <i class="fb-toast-bar"></i>
-        </div>`
-      )}`
+        </div>`;
+      })}`
     );
+  }
+
+  /** The phone Flow stage a decision moves its unit to, or null when it leaves the board. */
+  private movedTo(decision: Decision): FactoryColumn | null {
+    const before = this.served?.units.find((u) => u.key === decision.unitKey);
+    const after = before ? decision.apply(before) : null;
+    return after && after.column !== 'done' ? phoneStage(after.column) : null;
   }
 
   private async onClick(event: Event): Promise<void> {
@@ -452,6 +489,18 @@ export class FactoryBoardView {
       }
       case 'stage': {
         const stage = el.dataset.stage as FactoryColumn | undefined;
+        if (stage && STAGES.some((s) => s.id === stage)) this.stage = stage;
+        return this.render();
+      }
+      case 'phone-tab': {
+        const tab = el.dataset.tab as PhoneTab | undefined;
+        if (tab && PHONE_TABS.some((t) => t.id === tab)) this.phoneTab = tab;
+        return this.render();
+      }
+      case 'phone-flow': {
+        // A tile, the running preview or a toast: Flow at that stage.
+        const stage = el.dataset.stage as FactoryColumn | undefined;
+        this.phoneTab = 'flow';
         if (stage && STAGES.some((s) => s.id === stage)) this.stage = stage;
         return this.render();
       }
@@ -658,8 +707,11 @@ export class FactoryBoardView {
     const focusDraft = active?.dataset?.draft;
     const selection = focusDraft && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
 
+    const phone = this.isPhone();
+    document.getElementById('factory-board-view')?.classList.toggle('fb-phone', phone);
     this.renderStatus();
     this.renderModeToggle();
+    this.renderPhoneTabs(phone);
     const body = document.getElementById('factory-board-body');
     if (body) setHtml(body, this.renderBody());
     this.renderRight();
@@ -704,8 +756,18 @@ export class FactoryBoardView {
     const selected = groups.find((g) => g.id === this.stage) ?? groups[0];
     const openKey = this.pane?.kind === 'unit' ? this.pane.key : null;
     const openMerge = this.pane?.kind === 'merge' ? this.pane.id : null;
+    const notice = this.notice && !this.pane && !this.adding ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : '';
+    if (this.isPhone()) {
+      const tab =
+        this.phoneTab === 'flow'
+          ? renderPhoneFlow(phoneStageGroups(groups), phoneStage(this.stage), openKey, openMerge)
+          : this.phoneTab === 'done'
+            ? renderDone(groups.find((g) => g.id === 'done') as StageGroup, this.report, openKey, openMerge)
+            : renderYou(d, groups, this.host.planUsage?.() ?? null, this.busy, openKey);
+      return html`${notice}${tab}`;
+    }
     return html`<div class="fb-main">
-        ${this.notice && !this.pane && !this.adding ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
+        ${notice}
         ${renderNeedsYou(d.units, this.busy, openKey)}
         ${this.mode === 'flow'
           ? renderFlow(flowLanes(d), openKey, openMerge)
@@ -715,6 +777,15 @@ export class FactoryBoardView {
               ${renderStageRows(selected, openKey, openMerge)}
             </section>`}
       </div>`;
+  }
+
+  /** The phone's You / Flow / Done bar; empty (and hidden by CSS) on a desktop. */
+  private renderPhoneTabs(phone: boolean): void {
+    const el = document.getElementById('factory-phone-tabs');
+    if (!el) return;
+    el.classList.toggle('hidden', !phone);
+    const needs = phone && this.data ? needsYouUnits(this.data.units).length : 0;
+    setHtml(el, phone ? renderPhoneTabs(this.phoneTab, needs) : html``);
   }
 
   /** The header's Board / Flow toggle shows the view on screen. */
@@ -738,9 +809,12 @@ export class FactoryBoardView {
     const mockup = paneShowsMockup(this.pane, this.data);
     root?.classList.toggle('fb-pane-open', !!this.pane);
     root?.classList.toggle('fb-pane-wide', !!this.pane && mockup);
+    // A phone has no side panel: its tiles are on You, the report on Done.
+    const phone = this.isPhone();
     if (side) {
-      side.classList.toggle('hidden', !!this.pane);
-      setHtml(side, this.data && !this.pane ? renderSidePanel(this.data, this.report) : html``);
+      const shown = !this.pane && !phone;
+      side.classList.toggle('hidden', !shown);
+      setHtml(side, this.data && shown ? renderSidePanel(this.data, this.report) : html``);
     }
     if (!paneEl) return;
     paneEl.classList.toggle('hidden', !this.pane);
@@ -758,6 +832,7 @@ export class FactoryBoardView {
           diff: (key) => this.diffs.get(key),
           mockup: this.mockup,
           sessionExists: (id) => this.host.sessionExists?.(id) ?? false,
+          phone,
         })
       : html``;
     // Replacing a mockup's frame reloads it and loses where you clicked to; a push for
