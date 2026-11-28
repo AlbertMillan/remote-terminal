@@ -145,6 +145,13 @@ status: active
 ## Track: Factory mockup step
 - [x] `f-ib2d86` P2 Mockup-first step — parks the item on a clickable mockup served from its prompt folder → project/code-factory.md
 
+## Track: Self-improving agent runs
+- [ ] `f-8rsuyv` P1 Hard signals — trace digest from run transcripts (failed and repeated tool calls, call counts), shown per item and job; no model calls → project/run-scoring.md
+- [ ] `f-hy10xn` P1 Judge and rubrics — background `score` run after a factory unit or job is done, four Knowledge Centre rubrics with `project/rubrics/` overrides, `run_scores` table, hand-check calibration → project/run-scoring.md
+- [ ] `f-5v56nr` P2 Score trends — weekly pass rate per rubric beside cost per item, change markers with before/after run counts → project/run-scoring.md
+- [ ] `f-me6cq9` P2 Improver — daily per-project pass groups failing scores into deduped factory triage items with evidence; global targets become Knowledge Centre feedback; daily spend cap → project/run-scoring.md
+- [ ] `f-ldneip` P3 Session scoring — sampled interactive sessions scored when their session log is written → project/run-scoring.md
+
 ## Track: Code factory
 - [x] `f-zrdzuy` P1 Item store — factory items keyed by feature id, typed dependencies, ready queue, atomic claim with lease and heartbeat, lease reclaim → project/code-factory.md
 - [x] `f-uwj3b0` P1 Engine — dispatcher under seats, review budget and a plan-usage cap; workflow templates replace `STAGE_ORDER`; a track runs as one agent with per-feature commits and resumes from its last commit → project/code-factory.md
