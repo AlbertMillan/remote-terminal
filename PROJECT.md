@@ -163,7 +163,7 @@ status: active
 ## Track: Inbox
 - [x] `f-d92rs5` happy-dom logs iframe-loading errors in factory DOM tests
 - [x] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
-- [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer → project/mockup-approve-handler.md
+- [x] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer → project/mockup-approve-handler.md
 - [ ] `f-7zspo2` Fast test suite has load-sensitive failures
 
 ## Track: Factory page redesign
