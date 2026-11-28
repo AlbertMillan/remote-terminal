@@ -158,7 +158,6 @@ status: active
 - [ ] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
 - [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer
 - [ ] `f-7zspo2` Fast test suite has load-sensitive failures
-- [ ] `f-u99gpw` Filed item describes a Pipeline/stage UI that doesn't exist in factory-board.ts
 - [ ] `f-16g6yo` Find where the Undo-decision for mockup approve lives
 
 ## Track: Factory page redesign
