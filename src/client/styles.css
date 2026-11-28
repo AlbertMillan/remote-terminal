@@ -4723,32 +4723,75 @@ body {
   color: var(--success);
 }
 .fb-notice.error { background: rgba(247, 118, 142, 0.1); color: var(--danger); }
-.fb-body > .fb-notice { margin: 8px 22px; }
+.fb-main > .fb-notice { margin: 0 0 10px; }
 
-.fb-scroll { overflow-x: auto; }
-.fb-columns {
+/* Layout E (project/factory-page-redesign.md): Needs you and the Pipeline, a side panel on the right. */
+.fb-layout {
   display: grid;
-  grid-template-columns: repeat(6, minmax(150px, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
   padding: 6px 22px 20px;
-  min-width: 960px;
+  align-items: start;
 }
-.fb-col h3 {
+.fb-main { min-width: 0; }
+.fb-main h3, .fb-panel h3 {
   display: flex;
-  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
   margin: 0 0 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-secondary);
 }
-.fb-col h3 em { font-style: normal; font-weight: 500; color: var(--text-muted); }
+.fb-main h3 em, .fb-panel h3 em { font-style: normal; font-weight: 500; color: var(--text-muted); }
 
-.fb-card {
-  display: block;
-  width: 100%;
+/* Needs you (factory-board-needs.ts): hidden when empty. */
+.fb-needs { margin-bottom: 18px; }
+.fb-needs > h3, .fb-needs > h3 em { color: var(--warning); }
+.fb-needs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.fb-need {
+  padding: 9px 11px 11px;
+  border: 1px solid #7a6034;
+  border-radius: 8px;
+  background: #2a2720;
+  font-size: 12.5px;
+}
+.fb-need.open { border-color: var(--accent); }
+.fb-need .fb-title { color: var(--text-primary); }
+.fb-need .fb-acts { margin-top: 10px; align-items: center; }
+.fb-need-q { flex-basis: 100%; font-weight: 600; font-size: 12.5px; }
+
+/* Pipeline (factory-board-pipeline.ts): stage tabs, the selected stage's rows. */
+.fb-stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.fb-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 9px;
   text-align: left;
-  margin-bottom: 8px;
-  padding: 8px 9px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.fb-stage:hover { border-color: var(--border); }
+.fb-stage.on { border-color: var(--accent); background: var(--bg-tertiary); }
+.fb-stage-head { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; font-weight: 700; }
+.fb-stage-head em { font-style: normal; font-weight: 600; color: var(--text-muted); }
+.fb-stage.you .fb-stage-head em { color: var(--warning); }
+.fb-stage-note { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-rows { display: flex; flex-direction: column; gap: 6px; }
+.fb-rows .fb-empty { padding: 12px 4px; }
+.fb-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -4757,10 +4800,38 @@ body {
   font-size: 12.5px;
   cursor: pointer;
 }
-.fb-card:hover { border-color: var(--border); }
-.fb-card.open { border-color: var(--accent); }
-.fb-card.you { border-color: #7a6034; background: #2a2720; }
-.fb-card.stalled .fb-sub { color: var(--warning); }
+.fb-row:hover { border-color: var(--border); }
+.fb-row.open { border-color: var(--accent); }
+.fb-row.you { border-color: #7a6034; background: #2a2720; }
+.fb-row.stalled .fb-sub { color: var(--warning); }
+.fb-row > .fo-id { margin-left: 0; flex-shrink: 0; }
+.fb-row-main { flex: 1; min-width: 0; }
+.fb-row-main .fb-title { margin: 0; }
+.fb-row-main .fb-sub { margin-top: 1px; }
+.fb-row-meta { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; max-width: 30%; }
+.fb-row-meta .fb-proj { max-width: 100%; }
+
+/* Side panel (factory-board-side.ts). */
+.fb-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fb-panel {
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.fb-panel h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
+.fb-panel ul { margin: 0; padding-left: 18px; }
+.fb-panel p { margin: 4px 0 0; }
+.fb-seats { display: flex; gap: 4px; margin-bottom: 8px; }
+.fb-seats i { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-tertiary); }
+.fb-seats i.busy { background: var(--success); }
+.fb-warn { color: var(--warning); }
+.fb-queue li { margin-bottom: 4px; }
+@media (max-width: 1000px) {
+  .fb-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
 .fb-card-top { display: flex; gap: 6px; align-items: baseline; }
 .fb-card-top .fo-id { margin-left: 0; }
 .fb-proj { margin-left: auto; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4768,20 +4839,9 @@ body {
 .fb-sub { display: block; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
 .fb-tokens { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
 
-.fb-report {
-  margin: 8px 22px 14px;
-  padding: 10px 14px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-}
 .fb-report-head { display: flex; align-items: center; }
-.fb-report-head h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.fb-report-head h3 { margin: 0; }
 .fb-report-head .fb-x { margin-left: auto; }
-.fb-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-.fb-report h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
-.fb-report ul { margin: 0; padding-left: 18px; font-size: 12.5px; }
-.fb-report p { margin: 0; }
 .fb-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 
 .fb-drawer {
@@ -4853,8 +4913,10 @@ body {
 
 @media (max-width: 640px) {
   .factory-toast { max-width: calc(100% - 24px); top: auto; bottom: 14px; }
-  .fb-columns { padding: 6px 12px 16px; }
-  .fb-report { margin: 8px 12px 12px; }
+  .fb-layout { grid-template-columns: minmax(0, 1fr); padding: 6px 12px 16px; }
+  .fb-stages { display: flex; overflow-x: auto; }
+  .fb-stage { flex: 0 0 auto; min-width: 104px; }
+  .fb-need .fb-acts button { min-height: 44px; }
 }
 
 /* Settings: the placement radios only mean something while the panel is on. */

@@ -2,8 +2,10 @@ import { html, joinHtml, setHtml, type SafeHtml } from './html-utils.js';
 import { requestJson, failureMessage } from './api.js';
 import { isClaimAction, renderClaimActions, runClaimAction } from './factory-claims.js';
 import { formatTokens, shortAge } from './format.js';
-import { cardKind, cardStatus, progressStrip } from './factory-overlay.js';
 import { MockupDrawer, isMockupPark } from './factory-mockup.js';
+import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups } from './factory-board-pipeline.js';
+import { renderNeedsYou } from './factory-board-needs.js';
+import { renderSidePanel } from './factory-board-side.js';
 import type {
   FactoryBoard,
   FactoryBoardUnit,
@@ -14,9 +16,14 @@ import type {
 } from '../shared/protocol.js';
 
 /**
- * The factory board (project/code-factory.md, item 7): the main-area view the
- * Factory overlay's "Open board" leads to. Six columns — intake, ready,
- * running, review, merging, done today — and a drawer per card: an escalated
+ * The factory board (project/code-factory.md, item 7; layout E in
+ * project/factory-page-redesign.md): the main-area view the Factory overlay's
+ * "Open board" leads to. **Needs you** first, each card with its decision
+ * inline (factory-board-needs.ts), hidden when nothing waits; then the
+ * **Pipeline**, a stage picker over the six columns — intake, ready, running,
+ * review, merging, done today — listing the selected stage's units as rows
+ * (factory-board-pipeline.ts); on the right a side panel with capacity, the
+ * morning report and the merge queue (factory-board-side.ts). A drawer per card: an escalated
  * review with its summary page (Approve / Request changes / Open diff), a
  * shaping question with its options and default, a triage card (accept /
  * backlog / dismiss), a running track's features, a merge entry with its
@@ -33,15 +40,6 @@ import type {
  * /api/factory/items/:id/answer and /api/factory/triage/:id. Its own (server
  * factory/board-routes.ts): board, report, summary, diff, release, merge retry.
  */
-
-const COLUMNS: { id: FactoryColumn; label: string }[] = [
-  { id: 'intake', label: 'Intake' },
-  { id: 'ready', label: 'Ready' },
-  { id: 'running', label: 'Running' },
-  { id: 'review', label: 'Review' },
-  { id: 'merging', label: 'Merging' },
-  { id: 'done', label: 'Done today' },
-];
 
 /** When this browser last opened the board: the morning report counts from here. */
 export const LAST_OPENED_KEY = 'factoryBoardLastOpened';
@@ -166,6 +164,8 @@ export class FactoryBoardView {
   private error: string | null = null;
   private visible = false;
   private drawer: Drawer | null = null;
+  /** The Pipeline's selected stage; kept across visits in this page, not stored. */
+  private stage: FactoryColumn = DEFAULT_STAGE;
   private summaries = new Map<string, string>();
   private summariesLoading = new Set<string>();
   private diffs = new Map<string, { stat: string; patch: string; truncated: boolean }>();
@@ -352,7 +352,9 @@ export class FactoryBoardView {
   private async onAction(el: HTMLElement): Promise<void> {
     const kind = el.dataset.fb;
     const drawer = this.drawer;
-    const unit = drawer?.kind === 'unit' ? this.unit(drawer.key) : undefined;
+    // A Needs you card's inline decision acts on its own unit, whatever the drawer shows.
+    const needKey = el.closest<HTMLElement>('[data-need]')?.dataset.need;
+    const unit = needKey ? this.unit(needKey) : drawer?.kind === 'unit' ? this.unit(drawer.key) : undefined;
     const featureId = unit?.featureIds[0];
     if (kind?.startsWith('mockup-')) {
       this.captureDrafts();
@@ -375,6 +377,11 @@ export class FactoryBoardView {
         return this.render();
       case 'refresh':
         return this.load();
+      case 'stage': {
+        const stage = el.dataset.stage as FactoryColumn | undefined;
+        if (stage && STAGES.some((s) => s.id === stage)) this.stage = stage;
+        return this.render();
+      }
       case 'view':
         if (drawer?.kind === 'unit') {
           drawer.view = (el.dataset.view as 'main' | 'summary' | 'diff' | 'changes' | 'cancel') ?? 'main';
@@ -427,6 +434,20 @@ export class FactoryBoardView {
               this.drafts.delete(`choice:${unit.key}:${q.id}`);
               this.drafts.delete(`other:${unit.key}:${q.id}`);
             }
+          }
+        );
+      }
+      case 'answer-option': {
+        // Needs you: one question, answered by clicking an option.
+        const answer = el.dataset.value;
+        const q = unit?.detail.questions[0];
+        if (!unit || !featureId || !q || answer === undefined) return;
+        return this.act(
+          'Answered: shaping goes on',
+          () => this.post(`/api/factory/items/${featureId}/answer`, { cwd: unit.projectCwd, answer }),
+          () => {
+            this.drafts.delete(`choice:${unit.key}:${q.id}`);
+            this.drafts.delete(`other:${unit.key}:${q.id}`);
           }
         );
       }
@@ -599,63 +620,22 @@ export class FactoryBoardView {
     if (this.error && !this.data) return html`<div class="fb-empty fb-error">${this.error}</div>`;
     if (!this.data) return html`<div class="fb-empty">Loading the factory…</div>`;
     const d = this.data;
-    const unitMergeIds = new Set(d.units.map((u) => u.mergeId).filter(Boolean));
-    // Entries with no unit on the board: a session's Land, or a unit already gone.
-    const looseMerges = d.merges.filter((m) => !unitMergeIds.has(m.id));
-    return html`
-      ${this.report ? this.renderReport(this.report) : ''}
-      ${this.notice && !this.drawer ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
-      <div class="fb-scroll"><div class="fb-columns">
-        ${COLUMNS.map((col) => {
-          const units = d.units.filter((u) => u.column === col.id);
-          const merges = looseMerges.filter((m) => (col.id === 'done' ? m.status === 'merged' : col.id === 'merging' && m.status !== 'merged'));
-          const you = units.filter((u) => u.needsYou).length;
-          const count =
-            col.id === 'review' && units.length > 0 ? `agent ${units.length - you} · you ${you}` : String(units.length + merges.length);
-          return html`<section class="fb-col" data-column="${col.id}">
-            <h3>${col.label} <em>${count}</em></h3>
-            ${units.map((u) => this.renderCard(u))}
-            ${merges.map((m) => this.renderMergeCard(m))}
-          </section>`;
-        })}
-      </div></div>`;
-  }
-
-  private renderCard(u: FactoryBoardUnit): SafeHtml {
-    const open = this.drawer?.kind === 'unit' && this.drawer.key === u.key;
-    return html`<button type="button" class="fb-card ${cardKind(u)}${u.stalled ? ' stalled' : ''}${open ? ' open' : ''}" data-unit-key="${u.key}">
-      <span class="fb-card-top"><span class="fo-id">${u.isTrack ? 'Track' : u.unitId}</span><span class="fb-proj">${u.projectName}</span></span>
-      <span class="fb-title">${u.title}</span>
-      ${progressStrip(u, 'fo-prog wide')}
-      <span class="fb-sub">${cardStatus(u)}</span>
-      ${u.tokens > 0 && html`<span class="fb-tokens">${formatTokens(u.tokens)} tokens</span>`}
-    </button>`;
-  }
-
-  private renderMergeCard(m: FactoryMergeSummary): SafeHtml {
-    return html`<button type="button" class="fb-card merging${m.status === 'parked' ? ' you' : ''}" data-merge-card="${m.id}">
-      <span class="fb-card-top"><span class="fo-id">${m.kind === 'session-land' ? 'Land' : 'merge'}</span><span class="fb-proj">${m.projectName}</span></span>
-      <span class="fb-title">${m.title}</span>
-      <span class="fb-sub">${m.status}${m.detail ? ` · ${m.detail}` : ''}</span>
-    </button>`;
-  }
-
-  private renderReport(r: FactoryReport): SafeHtml {
-    return html`<section class="fb-report" aria-label="Since you last looked">
-      <div class="fb-report-head"><h3>Since you last looked <span class="fb-path">${shortAge(r.since)} ago</span></h3>
-        <button type="button" class="fb-x" data-fb="dismiss-report" aria-label="Dismiss the report">×</button></div>
-      <div class="fb-report-grid">
-        <div><h4>Landed (${r.landed.length})</h4>${r.landed.length > 0
-          ? html`<ul>${r.landed.map((m) => html`<li>${m.title} <span class="fb-path">${m.projectName}${m.mergeSha ? ` · ${m.mergeSha.slice(0, 7)}` : ''}</span></li>`)}</ul>`
-          : html`<p class="fb-path">Nothing merged.</p>`}</div>
-        <div><h4>Stalls (${r.stalls.length})</h4>${r.stalls.length > 0
-          ? html`<ul>${r.stalls.map((u) => html`<li><button type="button" class="fb-link" data-unit-key="${u.key}">${u.title}</button> <span class="fb-path">${u.stalled}</span></li>`)}</ul>`
-          : html`<p class="fb-path">Nothing stuck.</p>`}</div>
-        <div><h4>Tokens · ${formatTokens(r.totalTokens)}</h4>${r.tokens.length > 0
-          ? html`<ul>${r.tokens.slice(0, 8).map((t) => html`<li>${t.title} <span class="fb-path">${t.projectName} · ${formatTokens(t.tokens)}</span></li>`)}</ul>`
-          : html`<p class="fb-path">No factory runs.</p>`}</div>
+    const groups = stageGroups(d);
+    const selected = groups.find((g) => g.id === this.stage) ?? groups[0];
+    const openKey = this.drawer?.kind === 'unit' ? this.drawer.key : null;
+    const openMerge = this.drawer?.kind === 'merge' ? this.drawer.id : null;
+    return html`<div class="fb-layout">
+      <div class="fb-main">
+        ${this.notice && !this.drawer ? html`<div class="fb-notice${this.notice.error ? ' error' : ''}">${this.notice.text}</div>` : ''}
+        ${renderNeedsYou(d.units, this.busy, openKey)}
+        <section class="fb-pipeline" aria-label="Pipeline">
+          <h3>Pipeline</h3>
+          ${renderStagePicker(groups, selected.id)}
+          ${renderStageRows(selected, openKey, openMerge)}
+        </section>
       </div>
-    </section>`;
+      ${renderSidePanel(d, this.report)}
+    </div>`;
   }
 
   // --- Drawers -------------------------------------------------------------

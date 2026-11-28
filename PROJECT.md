@@ -24,7 +24,7 @@ status: active
 - [x] `f-k4w9zd` P2 Drop any file into a session — web drop/paste uploads any type (20 MB), keeps its name under <dataDir>/uploads, pastes every path → project/file-uploads.md
 - [x] `f-slr9eh` P2 Click a file path in the terminal to open it — server-checked links, served in place, the browser or device opens it → project/clickable-file-paths.md
 - [x] `f-2f96b5` P2 Pick or create a project folder in New Session — Tab-complete paths, search known projects, create folders anywhere under the user folder, `~/NodeProjects` default → project/new-session-folder-picker.md
-- [ ] P2 Revive running sessions after Build & restart — the old server records and parks them, the new one resumes them at boot → project/revive-after-build-restart.md
+- [ ] `f-o41i0b` P2 Revive running sessions after Build & restart — the old server records and parks them, the new one resumes them at boot → project/revive-after-build-restart.md
 
 ## Track: Session history actions
 - [x] `f-vo32tl` Resume and Fork buttons on session-history entries
@@ -155,7 +155,7 @@ status: active
 - [x] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
 
 ## Track: Factory page redesign
-- [ ] `f-5quljx` P1 Needs you and stage picker — decisions inline on cards, hidden when empty; six stage tabs with counts list the selected stage's units; side panel with capacity, report and merge queue → project/factory-page-redesign.md
+- [x] `f-5quljx` P1 Needs you and stage picker — decisions inline on cards, hidden when empty; six stage tabs with counts list the selected stage's units; side panel with capacity, report and merge queue → project/factory-page-redesign.md
 - [ ] `f-lrr7qp` P1 Docked detail pane — the drawer becomes a right-hand pane beside the board with stage dots and every current view (review, question, triage, mockup, merge, cancel, claims) → project/factory-page-redesign.md
 - [ ] `f-iabd7z` P2 Undo on decisions — Approve, Answer, Build it, Send back and triage apply at once and send after a 5 s Undo toast; flushed on leave → project/factory-page-redesign.md
 - [ ] `f-tco9ro` P2 Flow view — Board / Flow toggle; one lane per track with each unit at its stage, remembered per browser → project/factory-page-redesign.md

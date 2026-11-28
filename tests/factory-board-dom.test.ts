@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FactoryBoardView, LAST_OPENED_KEY, cancellable, joinAnswers, readAddResult, renderMarkdown } from '../src/client/factory-board.js';
+import { looseMerges, stageGroups } from '../src/client/factory-board-pipeline.js';
+import { needsYouUnits } from '../src/client/factory-board-needs.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
 
 /**
@@ -181,6 +183,10 @@ const click = async (selector: string, within: ParentNode = document) => {
   await flush();
 };
 const lastPost = () => calls.filter((c) => c.method === 'POST').pop();
+/** The selected stage's rows: a unit's key, or `merge:<id>` for a loose merge entry. */
+const rows = () =>
+  [...document.querySelectorAll<HTMLElement>('[data-stage-rows] > .fb-row')].map((r) => r.dataset.unitKey ?? `merge:${r.dataset.mergeCard}`);
+const need = (key: string) => [...document.querySelectorAll<HTMLElement>('[data-need]')].find((el) => el.dataset.need === key)!;
 
 async function open(key?: string) {
   await view.show(key);
@@ -205,21 +211,51 @@ beforeEach(() => {
 });
 
 describe('the board', () => {
-  it('takes the main area and lays the units out in six columns', async () => {
+  it('takes the main area and opens the Pipeline at Running', async () => {
     await open();
     expect(host.takeMainArea).toHaveBeenCalled();
     expect(document.getElementById('factory-board-view')!.classList.contains('hidden')).toBe(false);
-    const column = (id: string) => [...document.querySelectorAll<HTMLElement>(`[data-column="${id}"] [data-unit-key]`)].map((c) => c.dataset.unitKey);
-    expect(column('intake')).toEqual(['f-intake', 'f-triage', 'f-ask']);
-    expect(column('ready')).toEqual(['f-ready']);
-    expect(column('running')).toEqual(['track:History search', 'f-cap']);
-    expect(column('review')).toEqual(['f-agent', 'f-esc']);
-    expect(column('merging')).toEqual(['f-merge']);
-    expect(column('done')).toEqual(['f-done']);
-    expect(document.querySelector('[data-column="review"] h3')!.textContent).toContain('agent 1 · you 1');
-    // A session's Land has no unit: its own card in Merging.
-    expect(document.querySelector('[data-column="merging"] [data-merge-card="mq-2"]')).not.toBeNull();
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('running');
+    expect(rows()).toEqual(['track:History search', 'f-cap']);
     expect(document.getElementById('factory-board-status')!.textContent).toContain('dispatcher on · 2/3 seats');
+  });
+
+  it("lists each stage's units as rows when its tab is clicked, loose merges under Merging", async () => {
+    await open();
+    const expected: Record<string, string[]> = {
+      intake: ['f-intake', 'f-triage', 'f-ask'],
+      ready: ['f-ready'],
+      running: ['track:History search', 'f-cap'],
+      review: ['f-agent', 'f-esc'],
+      // A session's Land has no unit: its own row in Merging.
+      merging: ['f-merge', 'merge:mq-2'],
+      done: ['f-done'],
+    };
+    for (const [stage, keys] of Object.entries(expected)) {
+      await click(`[data-fb="stage"][data-stage="${stage}"]`);
+      expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe(stage);
+      expect(rows()).toEqual(keys);
+    }
+    const tab = (id: string) => document.querySelector(`[data-fb="stage"][data-stage="${id}"]`)!;
+    expect(tab('review').textContent).toContain('agent 1 · you 1');
+    expect(tab('merging').querySelector('em')!.textContent).toBe('2');
+    // Amber: a stage holding a unit that waits for you.
+    expect(['intake', 'ready', 'running', 'review', 'merging', 'done'].filter((id) => tab(id).classList.contains('you'))).toEqual([
+      'intake',
+      'running',
+      'review',
+      'merging',
+    ]);
+  });
+
+  it('opens a unit from its row, and says when a stage is empty', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: UNITS.filter((u) => u.column !== 'ready') };
+    await open();
+    await click('[data-stage-rows] [data-unit-key="f-cap"]');
+    expect(drawer().classList.contains('hidden')).toBe(false);
+    expect(drawer().textContent).toContain('fix ran 2 times without settling it');
+    await click('[data-fb="stage"][data-stage="ready"]');
+    expect(document.querySelector('[data-stage-rows]')!.textContent).toContain('Nothing in Ready.');
   });
 
   it('fetches again on a pushed summary only while on screen, and Back leaves', async () => {
@@ -234,6 +270,140 @@ describe('the board', () => {
     view.onSummary();
     await flush();
     expect(boards()).toBe(before + 1);
+  });
+});
+
+describe('Needs you', () => {
+  const mockupUnit = unit('f-mock', { column: 'intake', status: 'parked', step: 'mockup', needsYou: true, reason: 'mockup: waiting for your approval' });
+
+  it('lists every unit that waits for you, each with its decision inline', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: [...UNITS, mockupUnit] };
+    await open();
+    const cards = [...document.querySelectorAll<HTMLElement>('.fb-needs [data-need]')].map((c) => [c.dataset.need, c.dataset.needKind]);
+    expect(cards).toEqual([
+      ['f-triage', 'triage'],
+      ['f-ask', 'question'],
+      ['f-esc', 'review'],
+      ['f-cap', 'other'],
+      ['f-merge', 'other'],
+      ['f-mock', 'mockup'],
+    ]);
+    expect(document.querySelector('.fb-needs h3')!.textContent).toContain('6');
+    const buttons = (key: string) => [...need(key).querySelectorAll('.fb-acts button')].map((b) => b.textContent!.trim());
+    expect(buttons('f-triage')).toEqual(['Accept', 'Backlog', 'Dismiss']);
+    expect(buttons('f-ask')).toEqual(['yes', 'no', 'Other…']);
+    expect(need('f-ask').querySelector('[data-value="no"]')!.className).toBe('btn-primary');
+    expect(need('f-ask').textContent).toContain('Keep the old title?');
+    expect(buttons('f-esc')).toEqual(['Approve', 'Open']);
+    expect(buttons('f-mock')).toEqual(['Build it', 'Open']);
+    expect(buttons('f-cap')).toEqual(['Open']);
+  });
+
+  it('is hidden when nothing waits for you, with no placeholder', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: UNITS.filter((u) => !u.needsYou) };
+    await open();
+    expect(document.querySelector('.fb-needs')).toBeNull();
+    expect(document.querySelector('.fb-pipeline')).not.toBeNull();
+    expect(document.getElementById('factory-board-body')!.textContent).not.toContain('Needs you');
+  });
+
+  it('approves a review inline, with no drawer open', async () => {
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-esc/release', method: 'POST', body: { cwd: CWD, outcome: 'approved' } });
+    expect(drawer().classList.contains('hidden')).toBe(true);
+    expect(document.querySelector('.fb-main > .fb-notice')!.textContent).toBe('Approved: it goes to the merge queue');
+  });
+
+  it("acts on the card's unit even while the drawer shows another", async () => {
+    await open('f-cap');
+    await click('[data-fb="triage"][data-action="backlog"]', need('f-triage'));
+    expect(lastPost()).toEqual({ url: '/api/factory/triage/f-triage', method: 'POST', body: { cwd: CWD, action: 'backlog' } });
+  });
+
+  it('answers a single question by its option', async () => {
+    await open();
+    await click('[data-fb="answer-option"][data-value="yes"]', need('f-ask'));
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-ask/answer', method: 'POST', body: { cwd: CWD, answer: 'yes' } });
+  });
+
+  it('sends several questions, or Other, to the drawer', async () => {
+    const two = unit('f-two', {
+      column: 'intake',
+      status: 'parked',
+      needsYou: true,
+      step: 'shape',
+      detail: {
+        questions: [
+          { id: 'a', question: 'Q1?', options: ['x'], default: null },
+          { id: 'b', question: 'Q2?', options: ['y'], default: null },
+        ],
+      } as FactoryBoardUnit['detail'],
+    });
+    responses['/api/factory/board'] = { ...BOARD, units: [two, ...UNITS] };
+    await open();
+    expect(need('f-two').textContent).toContain('2 questions');
+    expect(need('f-two').querySelector('[data-fb="answer-option"]')).toBeNull();
+    await click('[data-unit-key="f-two"].btn-secondary', need('f-two'));
+    expect(drawer().querySelectorAll('fieldset.fb-question')).toHaveLength(2);
+    await click('[data-unit-key="f-ask"].btn-secondary', need('f-ask'));
+    expect(drawer().querySelector('input[value="__other"]')).not.toBeNull();
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([]);
+  });
+
+  it('builds a mockup inline: the release route, approved', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: [mockupUnit] };
+    await open();
+    await click('[data-fb="mockup-approve"]', need('f-mock'));
+    expect(lastPost()).toEqual({ url: '/api/factory/items/f-mock/release', method: 'POST', body: { cwd: CWD, outcome: 'approved' } });
+  });
+});
+
+describe('the side panel', () => {
+  it('shows capacity and the merge queue, and opens an entry from it', async () => {
+    await open();
+    const side = document.querySelector('.fb-side')!;
+    expect(side.querySelector('.fb-capacity')!.textContent).toContain('2 of 3 busy');
+    expect(side.querySelectorAll('.fb-seats i.busy')).toHaveLength(2);
+    expect(side.querySelector('.fb-capacity')!.textContent).toContain('1.9M');
+    const queue = [...side.querySelectorAll<HTMLElement>('.fb-queue [data-merge-card]')].map((b) => b.dataset.mergeCard);
+    expect(queue).toEqual(['mq-1', 'mq-2']);
+    await click('.fb-queue [data-merge-card="mq-1"]');
+    expect(drawer().textContent).toContain('The resolver could not settle the conflict');
+  });
+
+  it('says why dispatch is paused and which projects plan usage caps', async () => {
+    responses['/api/factory/board'] = { ...BOARD, dispatch: { ...BOARD.dispatch, paused: 'spending cap reached', capped: { [CWD]: 'weekly limit at 95%' } } };
+    await open();
+    const cap = document.querySelector('.fb-capacity')!.textContent!;
+    expect(cap).toContain('paused');
+    expect(cap).toContain('spending cap reached');
+    expect(cap).toContain('weekly limit at 95%');
+  });
+});
+
+describe('stage grouping', () => {
+  it('groups units by column and loose merges under Merging until merged, then Done', () => {
+    const merged: FactoryMergeSummary = { ...land, id: 'mq-3', status: 'merged' };
+    const groups = stageGroups({ units: UNITS, merges: [merge, land, merged] });
+    const by = Object.fromEntries(groups.map((g) => [g.id, { units: g.units.map((u) => u.key), merges: g.merges.map((m) => m.id), you: g.you }]));
+    expect(groups.map((g) => g.id)).toEqual(['intake', 'ready', 'running', 'review', 'merging', 'done']);
+    // mq-1 belongs to f-merge: listed with its unit, never twice.
+    expect(by.merging).toEqual({ units: ['f-merge'], merges: ['mq-2'], you: 1 });
+    expect(by.done).toEqual({ units: ['f-done'], merges: ['mq-3'], you: 0 });
+    expect(by.intake.you).toBe(2);
+    expect(by.ready.you).toBe(0);
+    expect(looseMerges({ units: UNITS, merges: [merge, land] }).map((m) => m.id)).toEqual(['mq-2']);
+  });
+
+  it('counts a parked loose merge as waiting for you', () => {
+    const groups = stageGroups({ units: [], merges: [{ ...land, status: 'parked' }] });
+    expect(groups.find((g) => g.id === 'merging')!.you).toBe(1);
+  });
+
+  it('lists only units that need you and are not done', () => {
+    expect(needsYouUnits(UNITS).map((u) => u.key)).toEqual(['f-triage', 'f-ask', 'f-esc', 'f-cap', 'f-merge']);
+    expect(needsYouUnits([unit('x', { needsYou: true, column: 'done' })])).toEqual([]);
   });
 });
 
