@@ -175,7 +175,25 @@ describe('the mockup drawer', () => {
 
   it('Approve releases it as approved', async () => {
     await openUnit();
-    drawer().querySelector<HTMLElement>('[data-fb="mockup-approve"]')!.click();
+    const approve = drawer().querySelector<HTMLButtonElement>('[data-fb="mockup-approve"]')!;
+    expect(approve.disabled).toBe(false);
+    approve.click();
+    await flush();
+    expect(posts()).toEqual([{ url: `/api/factory/items/${ID}/release`, method: 'POST', body: { cwd: CWD, outcome: 'approved' } }]);
+  });
+
+  it('Approve is disabled only while the item is not waiting on its mockup', async () => {
+    info = { ...INFO, waiting: false };
+    await openUnit();
+    expect(drawer().querySelector<HTMLButtonElement>('[data-fb="mockup-approve"]')!.disabled).toBe(true);
+  });
+
+  it('at the revision cap Approve is enabled and releases the mockup as it stands', async () => {
+    info = { ...INFO, revisions: 3, waiting: true };
+    await openUnit();
+    const approve = drawer().querySelector<HTMLButtonElement>('[data-fb="mockup-approve"]')!;
+    expect(approve.disabled).toBe(false);
+    approve.click();
     await flush();
     expect(posts()).toEqual([{ url: `/api/factory/items/${ID}/release`, method: 'POST', body: { cwd: CWD, outcome: 'approved' } }]);
   });
