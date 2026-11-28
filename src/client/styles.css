@@ -4687,7 +4687,16 @@ body {
 
 .factory-board-view { position: relative; }
 .fb-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-.fb-body { padding-bottom: 20px; }
+/* Layout E (project/factory-page-redesign.md): the board on the left, a right-hand column holding
+   the side panel, or the detail pane docked in its place; each scrolls on its own. */
+.fb-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.factory-board-view.fb-pane-open .fb-split { grid-template-columns: minmax(0, 1fr) min(440px, 45%); }
+/* An item parked at its mockup (factory-mockup.ts): room for the page, which is the app's own replica. */
+.factory-board-view.fb-pane-wide .fb-split { grid-template-columns: minmax(0, 1fr) min(920px, 62%); }
+.fb-body { min-width: 0; min-height: 0; overflow-y: auto; padding: 6px 22px 20px; }
+.fb-right { min-width: 0; min-height: 0; overflow-y: auto; padding: 6px 16px 20px 0; }
+.factory-board-view.fb-pane-open .fb-right { padding: 0; border-left: 1px solid var(--border); background: var(--bg-secondary); }
+.fb-pane { padding: 14px 16px 20px; }
 .fb-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
 .fb-mono { font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
 .fb-empty { padding: 24px; color: var(--text-muted); }
@@ -4723,32 +4732,71 @@ body {
   color: var(--success);
 }
 .fb-notice.error { background: rgba(247, 118, 142, 0.1); color: var(--danger); }
-.fb-body > .fb-notice { margin: 8px 22px; }
-
-.fb-scroll { overflow-x: auto; }
-.fb-columns {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(150px, 1fr));
-  gap: 10px;
-  padding: 6px 22px 20px;
-  min-width: 960px;
-}
-.fb-col h3 {
+.fb-main > .fb-notice { margin: 0 0 10px; }
+.fb-main { min-width: 0; }
+.fb-main h3, .fb-panel h3 {
   display: flex;
-  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
   margin: 0 0 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--text-secondary);
 }
-.fb-col h3 em { font-style: normal; font-weight: 500; color: var(--text-muted); }
+.fb-main h3 em, .fb-panel h3 em { font-style: normal; font-weight: 500; color: var(--text-muted); }
 
-.fb-card {
-  display: block;
-  width: 100%;
+/* Needs you (factory-board-needs.ts): hidden when empty. */
+.fb-needs { margin-bottom: 18px; }
+.fb-needs > h3, .fb-needs > h3 em { color: var(--warning); }
+.fb-needs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.fb-need {
+  padding: 9px 11px 11px;
+  border: 1px solid #7a6034;
+  border-radius: 8px;
+  background: #2a2720;
+  font-size: 12.5px;
+}
+.fb-need.open { border-color: var(--accent); }
+.fb-need .fb-title { color: var(--text-primary); }
+.fb-need .fb-acts { margin-top: 10px; align-items: center; }
+.fb-need-q { flex-basis: 100%; font-weight: 600; font-size: 12.5px; }
+
+/* Pipeline (factory-board-pipeline.ts): stage tabs, the selected stage's rows. */
+.fb-stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.fb-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 9px;
   text-align: left;
-  margin-bottom: 8px;
-  padding: 8px 9px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.fb-stage:hover { border-color: var(--border); }
+.fb-stage.on { border-color: var(--accent); background: var(--bg-tertiary); }
+.fb-stage-head { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; font-weight: 700; }
+.fb-stage-head em { font-style: normal; font-weight: 600; color: var(--text-muted); }
+.fb-stage.you .fb-stage-head em { color: var(--warning); }
+.fb-stage-note { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-rows { display: flex; flex-direction: column; gap: 6px; }
+.fb-rows .fb-empty { padding: 12px 4px; }
+/* A Ready row with Start now beside it (factory-board-pipeline.ts). */
+.fb-row-line { display: flex; gap: 6px; align-items: stretch; }
+.fb-row-line .fb-row { flex: 1; min-width: 0; }
+.fb-start { flex-shrink: 0; white-space: nowrap; }
+.fb-phone .fb-start { min-height: 44px; }
+.fb-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -4757,10 +4805,159 @@ body {
   font-size: 12.5px;
   cursor: pointer;
 }
-.fb-card:hover { border-color: var(--border); }
-.fb-card.open { border-color: var(--accent); }
-.fb-card.you { border-color: #7a6034; background: #2a2720; }
-.fb-card.stalled .fb-sub { color: var(--warning); }
+.fb-row:hover { border-color: var(--border); }
+.fb-row.open { border-color: var(--accent); }
+.fb-row.you { border-color: #7a6034; background: #2a2720; }
+.fb-row.stalled .fb-sub { color: var(--warning); }
+.fb-row > .fo-id { margin-left: 0; flex-shrink: 0; }
+.fb-row-main { flex: 1; min-width: 0; }
+.fb-row-main .fb-title { margin: 0; }
+.fb-row-main .fb-sub { margin-top: 1px; }
+.fb-row-meta { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; max-width: 30%; }
+.fb-row-meta .fb-proj { max-width: 100%; }
+
+/* Board / Flow toggle in the header. */
+.fb-mode { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.fb-mode button { padding: 5px 12px; background: none; border: none; color: var(--text-secondary); font: inherit; font-size: 12.5px; cursor: pointer; }
+.fb-mode button + button { border-left: 1px solid var(--border); }
+.fb-mode button.on { background: var(--bg-tertiary); color: var(--text-primary); font-weight: 600; }
+
+/* Flow (factory-board-flow.ts): one lane per track, a tag per unit at its stage. */
+.fb-flow-scroll { overflow-x: auto; }
+.fb-flow-grid { display: flex; flex-direction: column; gap: 4px; min-width: 760px; }
+.fb-flow-row {
+  display: grid;
+  grid-template-columns: 150px repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  align-items: stretch;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.fb-flow-row.you { border-color: #7a6034; }
+.fb-flow-head { background: none; border-color: transparent; padding-top: 0; padding-bottom: 0; font-size: 11px; font-weight: 700; color: var(--text-secondary); }
+.fb-lane-name { display: flex; flex-direction: column; min-width: 0; font-size: 12.5px; }
+.fb-lane-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-lane-name .fb-proj { margin-left: 0; }
+.fb-lane-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; min-height: 26px; border-left: 1px dashed var(--border-subtle); padding-left: 6px; }
+.fb-tag {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 4px 7px;
+  text-align: left;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.fb-tag:hover { border-color: var(--border); }
+.fb-tag.open { border-color: var(--accent); }
+.fb-tag.you { border-color: #7a6034; background: #2a2720; }
+.fb-tag.stalled { color: var(--warning); }
+.fb-tag-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Side panel (factory-board-side.ts). */
+.fb-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fb-panel {
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.fb-panel h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
+.fb-panel ul { margin: 0; padding-left: 18px; }
+.fb-panel p { margin: 4px 0 0; }
+.fb-seats { display: flex; gap: 4px; margin-bottom: 8px; }
+.fb-seats i { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-tertiary); }
+.fb-seats i.busy { background: var(--success); }
+.fb-warn { color: var(--warning); }
+.fb-queue li { margin-bottom: 4px; }
+/* Narrow: one column that scrolls as a whole; an open pane comes first. */
+@media (max-width: 1000px) {
+  .fb-split,
+  .factory-board-view.fb-pane-open .fb-split,
+  .factory-board-view.fb-pane-wide .fb-split { grid-template-columns: minmax(0, 1fr); overflow-y: auto; align-content: start; }
+  .fb-body, .fb-right { overflow: visible; }
+  .fb-right { padding: 0 22px 20px; }
+  .factory-board-view.fb-pane-open .fb-right { order: -1; border-left: none; border-bottom: 1px solid var(--border); }
+}
+
+/* Stage dots at the top of the detail pane (factory-board-pane.ts). */
+.fb-dots { display: flex; list-style: none; margin: 0 0 10px; padding: 0 !important; }
+.fb-dots li { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; position: relative; font-size: 9.5px; color: var(--text-muted); }
+.fb-dots li + li::before { content: ''; position: absolute; top: 4px; right: 50%; width: 100%; height: 2px; background: var(--border-subtle); z-index: 0; }
+.fb-dots li.done::before, .fb-dots li.now::before, .fb-dots li.you::before { background: var(--accent); }
+.fb-dots i { position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-tertiary); border: 2px solid var(--border); box-sizing: border-box; }
+.fb-dots li.done i { background: var(--accent); border-color: var(--accent); }
+.fb-dots li.now i { background: var(--bg-secondary); border-color: var(--accent); }
+.fb-dots li.now span { color: var(--accent); font-weight: 700; }
+.fb-dots li.you i { background: var(--warning); border-color: var(--warning); }
+.fb-dots li.you span { color: var(--warning); font-weight: 700; }
+.fb-dots span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* Undo toasts (factory-decisions.ts): the bar runs out with the 5 s window (UNDO_MS). */
+.fb-toasts {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 50;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(460px, calc(100% - 24px));
+  pointer-events: none;
+}
+.fb-toast {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px 11px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px;
+  pointer-events: auto;
+}
+.fb-toast span { flex: 1; min-width: 0; }
+.fb-undo { background: none; border: none; padding: 2px 4px; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+.fb-toast-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent); transform-origin: left; animation: fb-undo-window 5s linear forwards; }
+@keyframes fb-undo-window { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .fb-toast-bar { animation: none; }
+}
+
+/* Add work: a modal over the board (it is not a unit, so it never docks). */
+.fb-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.5);
+}
+.fb-modal-box {
+  width: min(560px, 100%);
+  padding: 14px 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
 .fb-card-top { display: flex; gap: 6px; align-items: baseline; }
 .fb-card-top .fo-id { margin-left: 0; }
 .fb-proj { margin-left: auto; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4768,40 +4965,15 @@ body {
 .fb-sub { display: block; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
 .fb-tokens { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
 
-.fb-report {
-  margin: 8px 22px 14px;
-  padding: 10px 14px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-}
 .fb-report-head { display: flex; align-items: center; }
-.fb-report-head h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.fb-report-head h3 { margin: 0; }
 .fb-report-head .fb-x { margin-left: auto; }
-.fb-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-.fb-report h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text-secondary); }
-.fb-report ul { margin: 0; padding-left: 18px; font-size: 12.5px; }
-.fb-report p { margin: 0; }
 .fb-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 
-.fb-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  width: min(440px, 100%);
-  overflow-y: auto;
-  padding: 14px 16px 20px;
-  background: var(--bg-secondary);
-  border-left: 1px solid var(--border);
-  box-shadow: -16px 0 36px rgba(0, 0, 0, 0.45);
-}
-.fb-drawer.hidden { display: none; }
-.fb-drawer h3 { margin: 4px 0 10px; font-size: 16px; line-height: 1.25; }
-.fb-drawer h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-secondary); }
-.fb-drawer ul { margin: 0; padding-left: 18px; font-size: 13px; }
-.fb-drawer p { margin: 0 0 8px; font-size: 13px; }
+.fb-pane h3, .fb-modal-box h3 { margin: 4px 0 10px; font-size: 16px; line-height: 1.25; }
+.fb-pane h4, .fb-modal-box h4 { margin: 14px 0 6px; font-size: 12px; color: var(--text-secondary); }
+.fb-pane ul, .fb-modal-box ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.fb-pane p, .fb-modal-box p { margin: 0 0 8px; font-size: 13px; }
 .fb-x { float: right; background: none; border: none; color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer; }
 .fb-verdict { margin: 8px 0; padding: 8px 10px; border: 1px solid #7a6034; border-radius: 8px; background: #2a2720; font-size: 13px; }
 .fb-verdict b { color: var(--warning); }
@@ -4835,8 +5007,6 @@ body {
 .fb-label { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; font-size: 12.5px; color: var(--text-secondary); }
 .fb-check { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; font-size: 12.5px; cursor: pointer; }
 .fb-check input { accent-color: var(--accent); }
-/* An item parked at its mockup (factory-mockup.ts): room for the page, which is the app's own replica. */
-.fb-drawer.fb-wide { width: min(920px, 100%); }
 .fb-mockup-frame { display: block; width: 100%; height: 62vh; margin: 8px 0 0; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 .fb-acts a.btn-secondary { text-decoration: none; display: inline-flex; align-items: center; }
 .fb-input, .fb-textarea {
@@ -4853,9 +5023,106 @@ body {
 
 @media (max-width: 640px) {
   .factory-toast { max-width: calc(100% - 24px); top: auto; bottom: 14px; }
-  .fb-columns { padding: 6px 12px 16px; }
-  .fb-report { margin: 8px 12px 12px; }
+  .fb-body { padding: 6px 12px 16px; }
+  .fb-right { padding: 0 12px 16px; }
+  .fb-stages { display: flex; overflow-x: auto; }
+  .fb-stage { flex: 0 0 auto; min-width: 104px; }
+  .fb-need .fb-acts button { min-height: 44px; }
 }
+
+/* The phone layout (factory-board-phone.ts). Keyed on .fb-phone, which the board sets from the
+   same 640px media query, so the CSS and the markup it renders never disagree. */
+.fb-phone-tabs { display: flex; flex-shrink: 0; border-top: 1px solid var(--border); background: var(--bg-secondary); }
+.fb-phone-tab {
+  flex: 1;
+  min-height: 52px;
+  background: none;
+  border: none;
+  border-top: 2px solid transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fb-phone-tab.on { color: var(--text-primary); border-top-color: var(--accent); }
+.fb-phone-tab em { font-style: normal; color: var(--warning); }
+.factory-board-view.fb-phone .project-log-header { padding: 12px 14px; }
+.factory-board-view.fb-phone .fb-mode,
+.factory-board-view.fb-phone [data-fb="refresh"] { display: none; }
+.factory-board-view.fb-phone .fb-split { grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.factory-board-view.fb-phone .fb-body { overflow-y: auto; padding: 10px 12px 16px; }
+.factory-board-view.fb-phone .fb-toasts { bottom: 64px; }
+.fb-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.fb-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  text-align: left;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+}
+button.fb-tile { cursor: pointer; }
+.fb-tile span { font-size: 11px; color: var(--text-muted); }
+.fb-tile b { font-size: 20px; line-height: 1.2; }
+.fb-tile em { font-style: normal; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-tile.warn b, .fb-tile.you b { color: var(--warning); }
+.fb-tile.danger b { color: var(--danger); }
+.fb-preview { margin-top: 4px; }
+.fb-wide-btn { width: 100%; min-height: 44px; margin-top: 8px; }
+.fb-phone-stages { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; padding-bottom: 2px; }
+.fb-phone-stage {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fb-phone-stage em { font-style: normal; font-weight: 500; color: var(--text-muted); }
+.fb-phone-stage.on { border-color: var(--accent); background: var(--bg-tertiary); }
+.fb-phone-stage.you em { color: var(--warning); font-weight: 700; }
+.fb-done > section { margin-bottom: 16px; }
+.fb-done .fb-panel { margin-top: 4px; }
+/* The detail pane is a bottom sheet over a dimmed board; its main actions stick to its bottom. */
+.factory-board-view.fb-phone.fb-pane-open .fb-split::after { content: ''; position: absolute; inset: 0; z-index: 34; background: rgba(0, 0, 0, 0.45); }
+.factory-board-view.fb-phone.fb-pane-open .fb-right {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 35;
+  max-height: 85%;
+  overflow-y: auto;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.5);
+}
+.factory-board-view.fb-phone .fb-pane { padding-bottom: 0; }
+.factory-board-view.fb-phone .fb-pane .fb-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 14px -16px 0;
+  padding: 10px 16px 14px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-subtle);
+}
+.factory-board-view.fb-phone .fb-pane .fb-sticky button { flex: 1 1 auto; min-height: 44px; }
+/* Add work is full-screen. */
+.factory-board-view.fb-phone .fb-modal { padding: 0; z-index: 45; }
+.factory-board-view.fb-phone .fb-modal-box { width: 100%; min-height: 100%; border: none; border-radius: 0; box-shadow: none; }
 
 /* Settings: the placement radios only mean something while the panel is on. */
 .setting-sub {
