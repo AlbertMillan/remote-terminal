@@ -165,7 +165,6 @@ status: active
 - [x] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
 - [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer
 - [ ] `f-7zspo2` Fast test suite has load-sensitive failures
-- [ ] `f-16g6yo` Find where the Undo-decision for mockup approve lives
 
 ## Track: Factory page redesign
 - [x] `f-5quljx` P1 Needs you and stage picker — decisions inline on cards, hidden when empty; six stage tabs with counts list the selected stage's units; side panel with capacity, report and merge queue → project/factory-page-redesign.md
