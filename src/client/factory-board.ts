@@ -6,6 +6,17 @@ import { MockupDrawer } from './factory-mockup.js';
 import { DEFAULT_STAGE, STAGES, renderStagePicker, renderStageRows, stageGroups } from './factory-board-pipeline.js';
 import { renderNeedsYou } from './factory-board-needs.js';
 import { renderSidePanel } from './factory-board-side.js';
+import {
+  DecisionQueue,
+  UNDO_MS,
+  asAnswered,
+  asApproved,
+  asSentBack,
+  asTriaged,
+  type Decision,
+  type DecisionClock,
+  type DecisionResult,
+} from './factory-decisions.js';
 import { paneShowsMockup, renderMarkdown, renderPane, type PaneSelection, type UnitView } from './factory-board-pane.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryColumn, FactoryQuestion, FactoryReport } from '../shared/protocol.js';
 
@@ -110,8 +121,22 @@ export function readAddResult(data: Record<string, unknown>): AddResult {
   return { features };
 }
 
+export interface FactoryBoardOptions {
+  /** How long a decision's Undo toast stays before it is sent (factory-decisions.ts). */
+  undoMs?: number;
+  /** Its timers; the tests pass their own. */
+  clock?: DecisionClock;
+}
+
 export class FactoryBoardView {
+  /** The board as GET /api/factory/board last answered. */
+  private served: FactoryBoard | null = null;
+  /** What the page shows: `served` with the decisions not yet reflected in it applied. */
   private data: FactoryBoard | null = null;
+  /** Approve, Answer, Build it, Send back and triage: applied now, sent after Undo's window. */
+  private readonly decisions: DecisionQueue;
+  /** The toasts' ids last drawn, so a render doesn't restart their countdown. */
+  private drawnToasts = '';
   private error: string | null = null;
   private visible = false;
   /** The unit or merge entry the docked detail pane shows; null shows the side panel. */
@@ -153,7 +178,22 @@ export class FactoryBoardView {
     markdown: renderMarkdown,
   });
 
-  constructor(private readonly host: FactoryBoardHost) {}
+  constructor(
+    private readonly host: FactoryBoardHost,
+    options: FactoryBoardOptions = {}
+  ) {
+    this.decisions = new DecisionQueue(
+      {
+        onChange: () => {
+          this.refreshView();
+          this.render();
+        },
+        onSent: (decision, result) => this.onDecisionSent(decision, result),
+      },
+      options.undoMs ?? UNDO_MS,
+      options.clock
+    );
+  }
 
   isVisible(): boolean {
     return this.visible;
@@ -162,6 +202,8 @@ export class FactoryBoardView {
   attach(): void {
     const root = document.getElementById('factory-board-view');
     root?.addEventListener('click', (event) => void this.onClick(event));
+    // Leaving the page sends what still waits for its Undo window; keepalive lets it outlive the page.
+    window.addEventListener('pagehide', () => void this.decisions.flush(true));
     root?.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
       // The modal first: it sits over the pane.
@@ -190,6 +232,8 @@ export class FactoryBoardView {
 
   hide(): void {
     if (!this.visible) return;
+    // Decisions waiting for their Undo window go out now: leaving the board must not lose them.
+    void this.decisions.flush();
     this.visible = false;
     this.pane = null;
     this.adding = false;
@@ -209,9 +253,13 @@ export class FactoryBoardView {
       return this.loading;
     }
     this.loading = (async () => {
+      // Decisions that land after this point are not in this answer: they stay applied.
+      const mark = this.decisions.mark();
       const res = await requestJson<FactoryBoard>('/api/factory/board');
       if (res.ok) {
-        this.data = res.data;
+        this.served = res.data;
+        this.decisions.settle(mark);
+        this.refreshView();
         this.error = null;
       } else {
         this.error = failureMessage(res, 'Could not load the factory board');
@@ -281,12 +329,58 @@ export class FactoryBoardView {
     if (res.ok) await this.load();
   }
 
-  private post(url: string, body?: object) {
+  private post(url: string, body?: object, keepalive = false) {
     return requestJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body ?? {}),
+      ...(keepalive ? { keepalive } : {}),
     });
+  }
+
+  // --- Decisions (factory-decisions.ts) -------------------------------------
+
+  private refreshView(): void {
+    this.data = this.served ? { ...this.served, units: this.decisions.overlay(this.served.units) } : null;
+  }
+
+  /** Apply a decision now; its POST goes out when the Undo toast expires. */
+  private decide(unit: FactoryBoardUnit, label: string, apply: Decision['apply'], url: string, body: object, onLanded?: () => void): void {
+    this.notice = null;
+    this.decisions.add({ unitKey: unit.key, label, apply, onLanded, send: (keepalive) => this.post(url, body, keepalive) });
+  }
+
+  private onDecisionSent(decision: Decision, result: DecisionResult): void {
+    if (result.ok) {
+      decision.onLanded?.();
+      if (this.visible) void this.load();
+      return;
+    }
+    // Refused: the queue dropped it, so the unit shows as the server has it again.
+    this.notice = { text: failureMessage(result, `Could not send "${decision.label}"`), error: true };
+    this.render();
+    if (this.visible) void this.load();
+  }
+
+  /** One toast per decision still in its Undo window. */
+  private renderToasts(): void {
+    const el = document.getElementById('factory-board-toasts');
+    if (!el) return;
+    const pending = this.decisions.pending();
+    const ids = pending.map((p) => p.id).join(',');
+    // Redrawn only when the set changes, or each render would restart the countdown bar.
+    if (ids === this.drawnToasts) return;
+    this.drawnToasts = ids;
+    setHtml(
+      el,
+      html`${pending.map(
+        (p) => html`<div class="fb-toast" data-decision="${String(p.id)}" role="status">
+          <span>${p.decision.label}</span>
+          <button type="button" class="fb-undo" data-fb="undo" data-decision="${String(p.id)}">Undo</button>
+          <i class="fb-toast-bar"></i>
+        </div>`
+      )}`
+    );
   }
 
   private async onClick(event: Event): Promise<void> {
@@ -314,6 +408,14 @@ export class FactoryBoardView {
     const needKey = el.closest<HTMLElement>('[data-need]')?.dataset.need;
     const unit = needKey ? this.unit(needKey) : pane?.kind === 'unit' ? this.unit(pane.key) : undefined;
     const featureId = unit?.featureIds[0];
+    if (kind === 'mockup-approve') {
+      // Build it: a decision like Approve, with Undo (the comment stays an immediate send).
+      if (!unit || !featureId) return;
+      return this.decide(unit, 'Mockup approved: it moves to Running to be built', asApproved, `/api/factory/items/${featureId}/release`, {
+        cwd: unit.projectCwd,
+        outcome: 'approved',
+      });
+    }
     if (kind?.startsWith('mockup-')) {
       this.captureDrafts();
       return this.mockup.onAction(kind, unit);
@@ -351,11 +453,16 @@ export class FactoryBoardView {
           if (pane.view === 'diff' && unit) void this.loadDiff(unit);
         }
         return this.render();
+      case 'undo': {
+        if (this.decisions.undo(Number(el.dataset.decision))) this.notice = { text: 'Undone: nothing was sent', error: false };
+        return this.render();
+      }
       case 'approve':
         if (!unit || !featureId) return;
-        return this.act('Approved: it goes to the merge queue', () =>
-          this.post(`/api/factory/items/${featureId}/release`, { cwd: unit.projectCwd, outcome: 'approved' })
-        );
+        return this.decide(unit, 'Approved: it moves to Merging', asApproved, `/api/factory/items/${featureId}/release`, {
+          cwd: unit.projectCwd,
+          outcome: 'approved',
+        });
       case 'send-changes': {
         if (!unit || !featureId) return;
         this.captureDrafts();
@@ -364,13 +471,15 @@ export class FactoryBoardView {
           this.notice = { text: 'Say what to change first.', error: true };
           return this.render();
         }
-        return this.act(
-          'Sent back with your changes',
-          () => this.post(`/api/factory/items/${featureId}/release`, { cwd: unit.projectCwd, outcome: 'changes', note }),
-          () => {
-            this.drafts.delete(`changes:${unit.key}`);
-            if (this.pane?.kind === 'unit') this.pane.view = 'main';
-          }
+        // Back to the unit's main view now; the note stays a draft until the send lands, so Undo keeps it.
+        if (this.pane?.kind === 'unit') this.pane.view = 'main';
+        return this.decide(
+          unit,
+          'Sent back: it moves to Running for the fix step',
+          asSentBack,
+          `/api/factory/items/${featureId}/release`,
+          { cwd: unit.projectCwd, outcome: 'changes', note },
+          () => this.drafts.delete(`changes:${unit.key}`)
         );
       }
       case 'release':
@@ -388,9 +497,12 @@ export class FactoryBoardView {
           this.notice = { text: 'Answer every question first.', error: true };
           return this.render();
         }
-        return this.act(
-          'Answered: shaping goes on',
-          () => this.post(`/api/factory/items/${featureId}/answer`, { cwd: unit.projectCwd, answer }),
+        return this.decide(
+          unit,
+          'Answered: shaping goes on in Intake',
+          asAnswered,
+          `/api/factory/items/${featureId}/answer`,
+          { cwd: unit.projectCwd, answer },
           () => {
             for (const q of questions) {
               this.drafts.delete(`choice:${unit.key}:${q.id}`);
@@ -404,9 +516,12 @@ export class FactoryBoardView {
         const answer = el.dataset.value;
         const q = unit?.detail.questions[0];
         if (!unit || !featureId || !q || answer === undefined) return;
-        return this.act(
-          'Answered: shaping goes on',
-          () => this.post(`/api/factory/items/${featureId}/answer`, { cwd: unit.projectCwd, answer }),
+        return this.decide(
+          unit,
+          'Answered: shaping goes on in Intake',
+          asAnswered,
+          `/api/factory/items/${featureId}/answer`,
+          { cwd: unit.projectCwd, answer },
           () => {
             this.drafts.delete(`choice:${unit.key}:${q.id}`);
             this.drafts.delete(`other:${unit.key}:${q.id}`);
@@ -416,8 +531,11 @@ export class FactoryBoardView {
       case 'triage': {
         if (!unit || !featureId) return;
         const verb = el.dataset.action as 'accept' | 'backlog' | 'dismiss';
-        const label = verb === 'accept' ? 'Accepted into the factory' : verb === 'backlog' ? 'Moved to the backlog' : 'Dismissed';
-        return this.act(label, () => this.post(`/api/factory/triage/${featureId}`, { cwd: unit.projectCwd, action: verb }));
+        if (verb !== 'accept' && verb !== 'backlog' && verb !== 'dismiss') return;
+        const label = verb === 'accept' ? 'Accepted: it moves to Intake for shaping' : verb === 'backlog' ? 'Moved to the backlog' : 'Dismissed';
+        // Backlog and dismiss take it off the board: its pane has nothing left to show.
+        if (verb !== 'accept' && this.pane?.kind === 'unit' && this.pane.key === unit.key) this.pane = null;
+        return this.decide(unit, label, (u) => asTriaged(u, verb), `/api/factory/triage/${featureId}`, { cwd: unit.projectCwd, action: verb });
       }
       case 'cancel-unit':
         if (!unit || !featureId) return;
@@ -536,6 +654,7 @@ export class FactoryBoardView {
     if (body) setHtml(body, this.renderBody());
     this.renderRight();
     this.renderAddModal();
+    this.renderToasts();
 
     if (focusDraft) {
       // Matched by dataset, not a selector: the key holds a project path.

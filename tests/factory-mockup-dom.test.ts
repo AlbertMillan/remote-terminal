@@ -123,7 +123,8 @@ beforeEach(() => {
       return new Response(JSON.stringify(data), { status: 200 });
     })
   );
-  view = new FactoryBoardView({ takeMainArea: vi.fn(), returnToMain: vi.fn(), syncOverlay: vi.fn() });
+  // No Undo window here: Approve (Build it) sends at once; its deferral is tested in factory-board-dom.
+  view = new FactoryBoardView({ takeMainArea: vi.fn(), returnToMain: vi.fn(), syncOverlay: vi.fn() }, { undoMs: 0 });
   view.attach();
 });
 

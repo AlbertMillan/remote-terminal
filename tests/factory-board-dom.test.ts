@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FactoryBoardView, LAST_OPENED_KEY, cancellable, joinAnswers, readAddResult, renderMarkdown } from '../src/client/factory-board.js';
 import { looseMerges, stageGroups } from '../src/client/factory-board-pipeline.js';
 import { needsYouUnits } from '../src/client/factory-board-needs.js';
+import { UNDO_MS } from '../src/client/factory-decisions.js';
+import { FakeClock } from './helpers/fake-clock.js';
 import type { FactoryBoard, FactoryBoardUnit, FactoryMergeSummary, FactoryReport } from '../src/shared/protocol.js';
 
 /**
@@ -27,6 +29,7 @@ const DOM = `
         </div>
       </div>
       <div id="factory-add" class="hidden"></div>
+      <div id="factory-board-toasts"></div>
     </div>
   </main>`;
 
@@ -216,7 +219,8 @@ beforeEach(() => {
     })
   );
   host = { takeMainArea: vi.fn(), returnToMain: vi.fn(), syncOverlay: vi.fn() };
-  view = new FactoryBoardView(host);
+  // No Undo window for the route tests: a decision sends at once. 'Undo on decisions' uses a real one.
+  view = new FactoryBoardView(host, { undoMs: 0 });
   view.attach();
 });
 
@@ -322,7 +326,6 @@ describe('Needs you', () => {
     await click('[data-fb="approve"]', need('f-esc'));
     expect(lastPost()).toEqual({ url: '/api/factory/items/f-esc/release', method: 'POST', body: { cwd: CWD, outcome: 'approved' } });
     expect(drawer().classList.contains('hidden')).toBe(true);
-    expect(document.querySelector('.fb-main > .fb-notice')!.textContent).toBe('Approved: it goes to the merge queue');
   });
 
   it("acts on the card's unit even while the drawer shows another", async () => {
@@ -366,6 +369,144 @@ describe('Needs you', () => {
     await open();
     await click('[data-fb="mockup-approve"]', need('f-mock'));
     expect(lastPost()).toEqual({ url: '/api/factory/items/f-mock/release', method: 'POST', body: { cwd: CWD, outcome: 'approved' } });
+  });
+});
+
+describe('Undo on decisions', () => {
+  // The real 5 s window on a fake clock: time moves only when a test lets the toasts expire.
+  let clock: FakeClock;
+  const expire = async () => {
+    clock.advance(UNDO_MS);
+    await flush();
+    await flush();
+  };
+  const posts = () => calls.filter((c) => c.method === 'POST');
+  const toasts = () => [...document.querySelectorAll('#factory-board-toasts .fb-toast span')].map((s) => s.textContent);
+  const count = (stage: string) => document.querySelector(`[data-fb="stage"][data-stage="${stage}"] em`)!.textContent;
+  const mockupUnit = unit('f-mock', { column: 'intake', status: 'parked', step: 'mockup', needsYou: true, reason: 'mockup: waiting for your approval' });
+  const approveEsc = { url: '/api/factory/items/f-esc/release', method: 'POST', body: { cwd: CWD, outcome: 'approved' } };
+
+  beforeEach(() => {
+    // A fresh root: the suite's default view (no Undo window) must not handle these clicks too.
+    document.body.innerHTML = DOM;
+    clock = new FakeClock();
+    view = new FactoryBoardView(host, { clock });
+    view.attach();
+  });
+
+  it('Approve resolves the card at once and the Review count drops; Undo restores it and sends nothing', async () => {
+    await open();
+    expect(count('review')).toBe('2');
+    await click('[data-fb="approve"]', need('f-esc'));
+    expect(need('f-esc')).toBeUndefined();
+    expect(count('review')).toBe('1');
+    expect(count('merging')).toBe('3');
+    expect(toasts()).toEqual(['Approved: it moves to Merging']);
+    expect(posts()).toEqual([]);
+    await click('#factory-board-toasts [data-fb="undo"]');
+    expect(need('f-esc')).toBeDefined();
+    expect(count('review')).toBe('2');
+    expect(toasts()).toEqual([]);
+    expect(document.querySelector('.fb-main > .fb-notice')!.textContent).toBe('Undone: nothing was sent');
+    await expire();
+    expect(posts()).toEqual([]);
+  });
+
+  it('sends when the toast expires, keeping the unit resolved across a pushed reload meanwhile', async () => {
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    view.onSummary();
+    await flush();
+    await flush();
+    // The pushed board still has it waiting for you: the pending decision wins.
+    expect(need('f-esc')).toBeUndefined();
+    await expire();
+    await flush();
+    expect(posts()).toEqual([approveEsc]);
+    expect(toasts()).toEqual([]);
+  });
+
+  it('leaving the board sends what waits at once', async () => {
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    expect(posts()).toEqual([]);
+    await click('[data-fb="back"]');
+    expect(host.returnToMain).toHaveBeenCalled();
+    expect(posts()).toEqual([approveEsc]);
+  });
+
+  it('pagehide sends what waits, with keepalive so the request outlives the page', async () => {
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    window.dispatchEvent(new Event('pagehide'));
+    await flush();
+    expect(posts()).toEqual([approveEsc]);
+    const init = vi.mocked(fetch).mock.calls.find(([url]) => url === approveEsc.url)![1] as RequestInit;
+    expect(init.keepalive).toBe(true);
+  });
+
+  it('Answer, Build it and triage Accept wait the same way; Send back moves the unit to Running', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: [...UNITS, mockupUnit] };
+    await open();
+    expect(count('running')).toBe('2');
+    await click('[data-fb="answer-option"][data-value="yes"]', need('f-ask'));
+    await click('[data-fb="triage"][data-action="accept"]', need('f-triage'));
+    await click('[data-fb="mockup-approve"]', need('f-mock'));
+    await click('[data-unit-key="f-esc"].btn-secondary', need('f-esc'));
+    await click('[data-view="changes"]', drawer());
+    drawer().querySelector<HTMLTextAreaElement>('textarea')!.value = 'Allow tag wildcards';
+    await click('[data-fb="send-changes"]', drawer());
+    expect(posts()).toEqual([]);
+    expect(toasts()).toEqual([
+      'Answered: shaping goes on in Intake',
+      'Accepted: it moves to Intake for shaping',
+      'Mockup approved: it moves to Running to be built',
+      'Sent back: it moves to Running for the fix step',
+    ]);
+    expect(count('running')).toBe('4');
+    expect(dots()).toEqual(['done', 'done', 'now', 'todo', 'todo', 'todo']);
+    expect(['f-ask', 'f-triage', 'f-mock', 'f-esc'].map((k) => need(k))).toEqual([undefined, undefined, undefined, undefined]);
+    await expire();
+    await flush();
+    expect(posts().map((p) => [p.url, p.body])).toEqual([
+      ['/api/factory/items/f-ask/answer', { cwd: CWD, answer: 'yes' }],
+      ['/api/factory/triage/f-triage', { cwd: CWD, action: 'accept' }],
+      ['/api/factory/items/f-mock/release', { cwd: CWD, outcome: 'approved' }],
+      ['/api/factory/items/f-esc/release', { cwd: CWD, outcome: 'changes', note: 'Allow tag wildcards' }],
+    ]);
+  });
+
+  it('keeps a sent-back note as a draft until it lands, so Undo gives it back', async () => {
+    await open('f-esc');
+    await click('[data-view="changes"]', drawer());
+    drawer().querySelector<HTMLTextAreaElement>('textarea')!.value = 'Allow tag wildcards';
+    await click('[data-fb="send-changes"]', drawer());
+    await click('#factory-board-toasts [data-fb="undo"]');
+    await click('[data-view="changes"]', drawer());
+    expect(drawer().querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('Allow tag wildcards');
+  });
+
+  it('hides Needs you after the last decision', async () => {
+    responses['/api/factory/board'] = { ...BOARD, units: UNITS.filter((u) => !u.needsYou || u.key === 'f-esc') };
+    await open();
+    expect(document.querySelector('.fb-needs')).not.toBeNull();
+    await click('[data-fb="approve"]', need('f-esc'));
+    expect(document.querySelector('.fb-needs')).toBeNull();
+  });
+
+  it('a refused send brings the unit back and says why', async () => {
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      calls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (String(url).endsWith('/release')) return new Response(JSON.stringify({ error: 'f-esc is not parked' }), { status: 409 });
+      return new Response(JSON.stringify(respond(String(url))), { status: 200 });
+    });
+    await open();
+    await click('[data-fb="approve"]', need('f-esc'));
+    await expire();
+    await flush();
+    await flush();
+    expect(need('f-esc')).toBeDefined();
+    expect(document.querySelector('.fb-main > .fb-notice.error')!.textContent).toBe('f-esc is not parked');
   });
 });
 
@@ -477,6 +618,9 @@ describe('drawers', () => {
   it('triages: accept, backlog, dismiss', async () => {
     await open('f-triage');
     for (const action of ['accept', 'backlog', 'dismiss']) {
+      // Each from a fresh pane: Backlog and Dismiss take the unit off the page, and close its pane.
+      view.hide();
+      await open('f-triage');
       await click(`[data-fb="triage"][data-action="${action}"]`, drawer());
       expect(lastPost()).toEqual({ url: '/api/factory/triage/f-triage', method: 'POST', body: { cwd: CWD, action } });
     }

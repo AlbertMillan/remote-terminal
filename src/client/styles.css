@@ -4851,6 +4851,41 @@ body {
 .fb-dots li.you span { color: var(--warning); font-weight: 700; }
 .fb-dots span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
+/* Undo toasts (factory-decisions.ts): the bar runs out with the 5 s window (UNDO_MS). */
+.fb-toasts {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 50;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(460px, calc(100% - 24px));
+  pointer-events: none;
+}
+.fb-toast {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px 11px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px;
+  pointer-events: auto;
+}
+.fb-toast span { flex: 1; min-width: 0; }
+.fb-undo { background: none; border: none; padding: 2px 4px; color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+.fb-toast-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent); transform-origin: left; animation: fb-undo-window 5s linear forwards; }
+@keyframes fb-undo-window { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .fb-toast-bar { animation: none; }
+}
+
 /* Add work: a modal over the board (it is not a unit, so it never docks). */
 .fb-modal {
   position: absolute;
