@@ -164,6 +164,8 @@ export class FactoryBoardView {
   private adding = false;
   /** The Pipeline's selected stage; kept across visits in this page, not stored. */
   private stage: FactoryColumn = DEFAULT_STAGE;
+  /** A unit the board was opened on: its stage is selected once the board data holds it. */
+  private selectStageOf: string | null = null;
   /** Board (the Pipeline's stage picker) or Flow (lanes per track); remembered per browser. */
   private mode: ViewMode = readViewMode(readStorage(VIEW_MODE_KEY));
   /** On a phone: the tab bar's tab (factory-board-phone.ts). You first on every visit. */
@@ -251,8 +253,11 @@ export class FactoryBoardView {
     this.host.takeMainArea();
     document.getElementById('factory-board-view')?.classList.remove('hidden');
     this.host.syncOverlay();
-    if (unitKey) this.pane = { kind: 'unit', key: unitKey, view: 'main' };
-    else if (add) this.openAdd();
+    if (unitKey) {
+      this.pane = { kind: 'unit', key: unitKey, view: 'main' };
+      this.selectStageOf = unitKey;
+      this.syncStageToUnit();
+    } else if (add) this.openAdd();
     this.render();
     const loads: Promise<void>[] = [this.load()];
     if (!wasVisible) loads.push(this.loadReport());
@@ -265,6 +270,7 @@ export class FactoryBoardView {
     void this.decisions.flush();
     this.visible = false;
     this.pane = null;
+    this.selectStageOf = null;
     this.adding = false;
     this.notice = null;
     document.getElementById('factory-board-view')?.classList.add('hidden');
@@ -289,6 +295,7 @@ export class FactoryBoardView {
         this.served = res.data;
         this.decisions.settle(mark);
         this.refreshView();
+        this.syncStageToUnit();
         this.error = null;
       } else {
         this.error = failureMessage(res, 'Could not load the factory board');
@@ -368,6 +375,20 @@ export class FactoryBoardView {
   }
 
   // --- Decisions (factory-decisions.ts) -------------------------------------
+
+  /**
+   * Opening the board on a unit selects the stage that lists it (the picker keeps its
+   * last stage otherwise, and the unit's row is not shown). Waits for board data, which
+   * the first render may precede; fires once, so picking another stage afterwards sticks.
+   * The phone's Flow stage follows `stage` (phoneStage), and Flow lists every stage.
+   */
+  private syncStageToUnit(): void {
+    if (!this.selectStageOf || !this.data) return;
+    const unit = this.unit(this.selectStageOf);
+    if (!unit) return;
+    this.selectStageOf = null;
+    if (STAGES.some((s) => s.id === unit.column)) this.stage = unit.column;
+  }
 
   private refreshView(): void {
     this.data = this.served ? { ...this.served, units: this.decisions.overlay(this.served.units) } : null;

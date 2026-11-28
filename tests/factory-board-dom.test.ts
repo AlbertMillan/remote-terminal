@@ -234,6 +234,34 @@ beforeEach(() => {
 });
 
 describe('the board', () => {
+  it("selects the opened unit's stage, whichever stage was picked last, and lists its row", async () => {
+    await open();
+    await click('[data-fb="stage"][data-stage="done"]');
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('done');
+    // Already on screen: opening another unit moves the picker to its stage.
+    await open('f-esc');
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('review');
+    expect(rows()).toContain('f-esc');
+    expect(document.querySelector('[data-stage-rows="review"] .fb-row.open')!.getAttribute('data-unit-key')).toBe('f-esc');
+    // Once: picking another stage afterwards sticks, even through a pushed reload.
+    await click('[data-fb="stage"][data-stage="intake"]');
+    await view.load();
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('intake');
+    // A fresh visit on a unit in another stage.
+    view.hide();
+    await open('f-ready');
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('ready');
+    expect(rows()).toEqual(['f-ready']);
+  });
+
+  it('waits for the board data when the unit is not known yet, then selects its stage', async () => {
+    const pending = view.show('f-merge');
+    await pending;
+    await flush();
+    expect(document.querySelector('.fb-stage.on')!.getAttribute('data-stage')).toBe('merging');
+    expect(rows()).toContain('f-merge');
+  });
+
   it('takes the main area and opens the Pipeline at Running', async () => {
     await open();
     expect(host.takeMainArea).toHaveBeenCalled();
