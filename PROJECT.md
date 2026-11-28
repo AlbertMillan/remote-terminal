@@ -155,7 +155,7 @@ status: active
 - [x] `f-n0d6ik` P3 Retire the old pipeline — stage switch, step-back retry, `decision-format.ts` prose parsing, separate gates (phase 2) → project/code-factory.md
 ## Track: Inbox
 - [ ] `f-d92rs5` happy-dom logs iframe-loading errors in factory DOM tests
-- [ ] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
+- [x] `f-c0rdf6` Opening the board on a unit doesn't select that unit's stage
 - [ ] `f-qvmbmh` Unreachable mockup-approve handler in MockupDrawer
 - [ ] `f-7zspo2` Fast test suite has load-sensitive failures
 - [ ] `f-16g6yo` Find where the Undo-decision for mockup approve lives
